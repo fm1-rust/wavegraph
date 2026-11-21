@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 libm = { version = "0.2.16", default-features = false, optional = true }
-micromath = { version = "2.1", default-features = false }
+micromath = { version = "2.2", default-features = false }
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 

@@ -276,7 +276,7 @@ impl Voice {
         } else {
             0.0
         };
-        let base_oct = crate::dsp::cutoff_octaves(p.cutoff_hz * 1.6);
+        let base_oct = micromath::F32Ext::log2(p.cutoff_hz * 1.6);
         for sample in out {
             self.pitch += (self.target - self.pitch) * glide;
             let inc = midi_to_hz(self.pitch + p.tuning_st) / self.sr;

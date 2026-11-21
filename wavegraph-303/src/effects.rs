@@ -319,7 +319,7 @@ fn tap_indices(cursor: usize, delay: f32, len: usize) -> (usize, usize, f32) {
     if pos < 0.0 {
         pos += len_f;
         if pos < 0.0 {
-            pos -= crate::dsp::floor(pos / len_f) * len_f;
+            pos -= micromath::F32Ext::floor(pos / len_f) * len_f;
         }
     }
     let i = pos as usize;
