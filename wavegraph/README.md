@@ -45,6 +45,23 @@ decoded while the first plays. At a block boundary, `Patch::replace` validates
 its object layouts and buffer requirements and switches the schedule. The
 instances retain their state.
 
+## Awaiting a program change
+
+Enable the `async` feature and split a `wavegraph::control::EditQueue` between
+the editor and the render host. The editor calls `control.commit(&next).await`
+with a predecoded program. At a block boundary, the host calls
+`host.begin_block(|plan| patch.replace(plan, buses.len()))` and keeps the
+returned revision with the block. When the output accepts it, the host calls
+`host.submitted(revision, first_frame)`. The editor receives that revision and
+frame, or the error from a rejected replacement. A missed block leaves the
+edit pending. Frame numbers come from the host's render timeline.
+
+The queue holds one edit in caller-owned storage. The render callback stays
+synchronous. Only the slot and waiter are accessed inside a critical section.
+Choose a backend and task waker that fit the audio deadline. The FM-1 supplies
+its own backend. For desktop tests, `critical-section/std` uses a process-wide mutex.
+The [held-note test](tests/control.rs) exercises a route change during playback.
+
 ## Platform DSP
 
 `dsp::Software` provides gain and saturating mix for `f32` and signed 24-bit

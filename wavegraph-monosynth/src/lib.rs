@@ -121,7 +121,8 @@ pub enum Message {
 
 /// One phase-continuous oscillator with a message inlet and a mono signal
 /// outlet. The initial waveform is a sine and the voice starts silent.
-#[derive(Debug)]
+/// A clone starts at the same phase and shares the immutable tuning table.
+#[derive(Clone, Debug)]
 pub struct Monosynth<'a> {
     tuning: &'a Tuning,
     waveform: Waveform,

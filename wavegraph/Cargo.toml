@@ -9,14 +9,21 @@ keywords = ["audio", "dsp", "no-alloc", "puredata"]
 edition = "2024"
 rust-version = "1.85"
 
+[features]
+async = ["dep:critical-section"]
+
 [dependencies]
 arrayvec = { version = "0.7.6", default-features = false }
+critical-section = { version = "1.2", optional = true }
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
 [dev-dependencies]
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-monosynth = { version = "0.1", path = "../wavegraph-monosynth" }
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
 
 [lints]
 workspace = true
