@@ -108,11 +108,11 @@ impl DrumFx {
         let crush = BitCrusher::settings(settings.crush_bits, settings.crush_rate);
         let last = block.len().saturating_sub(1);
         for (i, y) in block.iter_mut().enumerate() {
-            if let Some((at, depth)) = self.trigger {
-                if i == at || i == last {
-                    self.envelope = depth;
-                    self.trigger = None;
-                }
+            if let Some((at, depth)) = self.trigger
+                && (i == at || i == last)
+            {
+                self.envelope = depth;
+                self.trigger = None;
             }
             self.envelope -= self.envelope * decay;
             // The drum filter's four-frame phase restarts at each block.

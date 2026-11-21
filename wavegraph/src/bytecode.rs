@@ -8,8 +8,8 @@
 //! instruction stream.
 
 use crate::{Event, Port, Process, ProcessContext, dsp::Dsp};
-use arrayvec::ArrayVec;
 use core::fmt;
+use heapless::Vec;
 
 pub use wavegraph_core::bytecode::{DecodeError, Op, VERSION};
 
@@ -39,7 +39,7 @@ pub enum Error {
 /// signal inlets and outlets per object independently.
 #[derive(Debug)]
 pub struct Program<'code, const OPS: usize, const PORTS: usize = 8> {
-    ops: ArrayVec<Op<'code>, OPS>,
+    ops: Vec<Op<'code>, OPS>,
     buses: usize,
 }
 
@@ -53,7 +53,7 @@ impl<'code, const OPS: usize, const PORTS: usize> Program<'code, OPS, PORTS> {
         let Some((&VERSION, mut code)) = code.split_first() else {
             return Err(Error::Version);
         };
-        let mut ops = ArrayVec::new();
+        let mut ops = Vec::new();
         let mut buses: usize = 0;
         let mut called = [false; 256];
         while !code.is_empty() {
@@ -94,7 +94,7 @@ impl<'code, const OPS: usize, const PORTS: usize> Program<'code, OPS, PORTS> {
             if buses > 256 {
                 return Err(Error::Capacity);
             }
-            ops.try_push(op).map_err(|_| Error::Capacity)?;
+            ops.push(op).map_err(|_| Error::Capacity)?;
         }
         Ok(Self { ops, buses })
     }
@@ -211,12 +211,12 @@ impl<'run, M, S, const PORTS: usize> Patch<'run, '_, M, S, PORTS> {
                     inputs,
                     outputs,
                 } => {
-                    let inputs: ArrayVec<_, PORTS> = inputs
+                    let inputs: Vec<_, PORTS> = inputs
                         .iter()
                         .map(|&bus| ready[usize::from(bus)].as_slice())
                         .collect();
                     let count = usize::from(outputs);
-                    let mut outputs: ArrayVec<_, PORTS> = free[..count]
+                    let mut outputs: Vec<_, PORTS> = free[..count]
                         .iter_mut()
                         .map(|bus| bus.as_mut_slice())
                         .collect();

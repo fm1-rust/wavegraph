@@ -1,0 +1,26 @@
+[package]
+name = "wavegraph-fm1"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "A playable WaveGraph monosynth and oscilloscope for the M-VAVE FM-1"
+
+[dependencies]
+heapless.workspace = true
+wavegraph = { path = "../wavegraph", features = ["async"] }
+wavegraph-monosynth = { path = "../wavegraph-monosynth" }
+wavegraph-sample.workspace = true
+
+[target.'cfg(target_os = "none")'.dependencies]
+embedded-graphics-core = "0.4"
+fm1-audio = "0.1"
+fm1-controls = "0.1.1"
+fm1-graphics = { version = "0.1", features = ["async-display"] }
+fm1-rticx = { version = "0.1.1", features = ["audio", "async-display"] }
+micromath = "2.2"
+static_cell = "2.1.1"
+
+[lints]
+workspace = true

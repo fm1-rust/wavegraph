@@ -1,0 +1,373 @@
+//! RTICX tasks for the FM-1 panel, audio DMA, scope capture and display.
+#![allow(
+    missing_docs,
+    reason = "RTICX generates public task traits and initializers."
+)]
+
+use crate::{capture::Trace, instrument::Voice};
+use fm1_audio::MasterLevel;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct Settings {
+    voice: Voice,
+    master: MasterLevel,
+    oscillator_tap: bool,
+}
+
+impl Settings {
+    const INITIAL: Self = Self {
+        voice: Voice::INITIAL,
+        master: MasterLevel::MIN,
+        oscillator_tap: false,
+    };
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct Labels {
+    pub(super) voice: Voice,
+    pub(super) half_gain: bool,
+    pub(super) oscillator_tap: bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct Frame {
+    pub(super) trace: Trace,
+    pub(super) labels: Labels,
+}
+
+#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
+mod app {
+    use super::{Frame, Labels, Settings};
+    use crate::{
+        capture::{Capture, FLAT},
+        instrument::{HeldNotes, Instrument, Note, Programs, Voice},
+        screen::Screen,
+    };
+    use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
+    use fm1_controls::{Button, Encoder, Leds, PianoKey, Scan, TouchControls};
+    use fm1_rticx::{
+        bsp::{
+            Board,
+            display::{DisplayPort, SpiClock, on_spi1_interrupt},
+            enter_download_mode,
+            time::{Timers, cycles, ticks},
+        },
+        rticx::asynchronous::{
+            channel::{Receiver, Sender},
+            make_channel,
+        },
+        time::{Clock, ExtU32, Timebase, Timer5},
+    };
+    use static_cell::{ConstStaticCell, StaticCell};
+    use wavegraph::{
+        Process,
+        control::{Controller, EditQueue, Host},
+    };
+    use wavegraph_monosynth::{Message, Monosynth, Tuning};
+
+    const SCANS: usize = 8;
+    type PanelFrame = (Scan, Option<Note>);
+    static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
+
+    pub struct ScopeBlock {
+        samples: [i32; OUTPUT_FRAMES],
+        labels: Labels,
+        gap: bool,
+    }
+
+    #[shared]
+    struct Shared {
+        settings: Settings,
+        leds: Leds,
+        frame: Frame,
+        late: bool,
+    }
+
+    #[init]
+    fn init() -> (Shared, TaskInits) {
+        let board = Board::take().expect("CPU0 board");
+        let timer = Clock::start(board.timers.with_panel_scan_rate());
+        let clock = timer.clock();
+        static SYNTH: StaticCell<Monosynth> = StaticCell::new();
+        static PROGRAMS: StaticCell<Programs> = StaticCell::new();
+        type Nodes = [&'static mut dyn Process<Message, I24>; 1];
+        static NODES: StaticCell<Nodes> = StaticCell::new();
+        let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
+        let nodes = NODES.init_with(|| [SYNTH.init_with(|| Monosynth::new(&TUNING))]);
+        let instrument = programs.bind(nodes).expect("monosynth ports");
+
+        static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
+        let (editor, host) = EDITS.take().split();
+        let (scans, input) = make_channel!(PanelFrame, SCANS);
+        let (tap, blocks) = make_channel!(ScopeBlock, 2);
+        let leds = Leds::default();
+        (
+            Shared {
+                settings: Settings::INITIAL,
+                leds,
+                frame: Frame {
+                    trace: FLAT,
+                    labels: Labels {
+                        voice: Voice::INITIAL,
+                        half_gain: false,
+                        oscillator_tap: false,
+                    },
+                },
+                late: false,
+            },
+            TaskInits {
+                audio: Audio {
+                    output: Output::start(board.audio).expect("audio clock"),
+                    instrument,
+                    host,
+                    buses: [[I24::default(); OUTPUT_FRAMES]; 2],
+                    first_frame: 0,
+                    tap,
+                    gap: false,
+                    stats: Stats::default(),
+                },
+                panel: Panel {
+                    timer,
+                    controls: board.panel.into_touch_controls(),
+                    held: HeldNotes::default(),
+                    scans,
+                    leds,
+                    octave_since: None,
+                },
+                input: Input {
+                    input,
+                    editor,
+                    settings: Settings::INITIAL,
+                    half_gain: false,
+                },
+                observe: Observe {
+                    blocks,
+                    capture: Capture::new(),
+                    previous: None,
+                },
+                draw: Draw {
+                    port: Some(board.display),
+                    clock,
+                },
+            },
+        )
+    }
+
+    #[post_init]
+    fn start() {
+        Input::spawn(()).expect("one input task");
+        Observe::spawn(()).expect("one scope task");
+        Draw::spawn(()).expect("one display task");
+    }
+
+    #[task(binds = TIMER5, priority = 3, shared = [leds])]
+    struct Panel {
+        timer: Timer5,
+        controls: TouchControls,
+        held: HeldNotes<{ PianoKey::COUNT as usize }>,
+        scans: Sender<'static, PanelFrame, SCANS>,
+        leds: Leds,
+        octave_since: Option<u32>,
+    }
+
+    impl RticTask for Panel {
+        fn exec(&mut self) {
+            self.timer.on_interrupt();
+            let Some((scan, touch)) = self.controls.scan(&self.leds) else {
+                return;
+            };
+            self.leds = self.shared().leds.lock(|leds| *leds);
+            // The recovery chord stays available even if an application task stalls.
+            if scan.is_down(Button::OctaveDown) && scan.is_down(Button::OctaveUp) {
+                let now = ticks();
+                if now.wrapping_sub(*self.octave_since.get_or_insert(now)) >= 2 * Timers::TICK_HZ {
+                    enter_download_mode();
+                }
+            } else {
+                self.octave_since = None;
+            }
+            for key in PianoKey::all() {
+                let number = 53 + key.index(); // The leftmost key is F3.
+                if scan.released(key) {
+                    self.held.release(number);
+                } else if scan.pressed(key) {
+                    if let Some(velocity) = touch.velocity(key) {
+                        self.held.press(Note { number, velocity });
+                    }
+                }
+            }
+            // Every sweep carries the current note, even after a full queue dropped an edge.
+            let _ = self.scans.try_send((scan, self.held.current()));
+        }
+    }
+
+    #[async_task(priority = 2, shared = [settings, leds])]
+    struct Input {
+        input: Receiver<'static, PanelFrame, SCANS>,
+        editor: Controller<'static, bool>,
+        settings: Settings,
+        half_gain: bool,
+    }
+
+    impl RticAsyncTask for Input {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            while let Ok((scan, note)) = self.input.recv().await {
+                let before = self.settings;
+                let voice = &mut self.settings.voice;
+                voice.note = note;
+                voice.turn_preset(scan.encoder_delta(Encoder::Presets));
+                voice.transpose = voice
+                    .transpose
+                    .saturating_add(scan.encoder_delta(Encoder::Select))
+                    .clamp(-12, 12);
+                if scan.pressed(Button::Sel) {
+                    self.settings.oscillator_tap = !self.settings.oscillator_tap;
+                }
+                if let Some(master) = scan.master() {
+                    self.settings.master = master;
+                }
+                if before != self.settings {
+                    let settings = self.settings;
+                    self.shared().settings.lock(|current| *current = settings);
+                }
+                let route_changed = scan.pressed(Button::Fx);
+                if route_changed && self.editor.commit(!self.half_gain).await.is_ok() {
+                    self.half_gain = !self.half_gain;
+                }
+                if route_changed || before.oscillator_tap != self.settings.oscillator_tap {
+                    let tap = self.settings.oscillator_tap;
+                    let half = self.half_gain;
+                    self.shared().leds.lock(|leds| {
+                        leds.set(Button::Fx, half);
+                        leds.set(Button::Sel, tap);
+                    });
+                }
+            }
+        }
+    }
+
+    #[task(binds = ALNK0, priority = 4, shared = [settings, late])]
+    struct Audio {
+        output: Output,
+        instrument: Instrument<'static>,
+        buses: [[I24; OUTPUT_FRAMES]; 2],
+        host: Host<'static, bool>,
+        first_frame: u64,
+        tap: Sender<'static, ScopeBlock, 2>,
+        gap: bool,
+        stats: Stats,
+    }
+
+    impl RticTask for Audio {
+        fn exec(&mut self) {
+            let started = cycles();
+            let settings = self.shared().settings.lock(|s| *s);
+            let mut revision = None;
+            let result = self.output.render(settings.master, |out| {
+                revision = Some(
+                    self.host
+                        .begin_block(|half| self.instrument.set_half_gain(half)),
+                );
+                let mono = self
+                    .instrument
+                    .render(settings.voice, &mut self.buses)
+                    .expect("fixed patch");
+                fm1_audio::mix_stereo(out, mono, mono);
+            });
+            let Some(revision) = revision else { return }; // No DMA half was ready.
+            if result == Refill::Written {
+                self.host.submitted(revision, self.first_frame);
+            }
+            self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
+            if result == Refill::Written && !self.tap.is_full() {
+                let block = ScopeBlock {
+                    samples: if settings.oscillator_tap {
+                        self.buses[0].map(I24::inner)
+                    } else {
+                        core::array::from_fn(|i| self.output.block()[i][0])
+                    },
+                    labels: Labels {
+                        voice: settings.voice,
+                        half_gain: self.instrument.half_gain,
+                        oscillator_tap: settings.oscillator_tap,
+                    },
+                    gap: self.gap,
+                };
+                self.gap = self.tap.try_send(block).is_err();
+            } else {
+                self.gap = true;
+            }
+            if self.stats.record(started, result) && self.stats.overruns == 1 {
+                self.shared().late.lock(|late| *late = true);
+            }
+        }
+    }
+
+    #[async_task(priority = 2, shared = [frame])]
+    struct Observe {
+        blocks: Receiver<'static, ScopeBlock, 2>,
+        capture: Capture,
+        previous: Option<Labels>,
+    }
+    impl RticAsyncTask for Observe {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            while let Ok(block) = self.blocks.recv().await {
+                let changed = self.previous.replace(block.labels) != Some(block.labels);
+                let silent = block.samples.iter().all(|&s| s == 0);
+                if let Some(trace) = self
+                    .capture
+                    .push(&block.samples, silent, changed || block.gap)
+                {
+                    self.shared().frame.lock(|frame| {
+                        *frame = Frame {
+                            trace,
+                            labels: block.labels,
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    #[task(binds = SPI1, priority = 1, init = generated)]
+    struct SpiDone;
+    impl RticTask for SpiDone {
+        fn exec(&mut self) {
+            on_spi1_interrupt();
+        }
+    }
+
+    #[async_task(priority = 1, shared = [frame, late])]
+    struct Draw {
+        port: Option<DisplayPort>,
+        clock: Clock,
+    }
+    impl RticAsyncTask for Draw {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            let port = self.port.take().expect("one LCD");
+            let Ok(mut lcd) = port.init_with_clock(SpiClock::Div1) else {
+                return;
+            };
+            let mut screen = Screen::new();
+            if screen.splash(&mut lcd, &mut self.clock).await.is_err() {
+                return;
+            }
+            // A failed display transfer ends only this task. Audio and panel IRQs keep running.
+            loop {
+                let frame = self.shared().frame.lock(|f| *f);
+                let late = self.shared().late.lock(|late| *late);
+                if screen
+                    .paint(&mut lcd, &mut self.clock, &frame, late)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                Clock::delay(30.millis()).await;
+            }
+        }
+    }
+}

@@ -1,0 +1,23 @@
+//! WaveGraph monosynth instrument for the FM-1.
+#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_os = "none", no_main)]
+
+#[cfg(not(target_os = "none"))]
+fn main() {
+    eprintln!("wavegraph-fm1 runs on the FM-1 target");
+}
+
+#[cfg(any(target_os = "none", test))]
+mod capture;
+#[cfg(target_os = "none")]
+mod firmware;
+#[cfg(any(target_os = "none", test))]
+mod instrument;
+#[cfg(target_os = "none")]
+mod screen;
+
+#[cfg(target_os = "none")]
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
+    fm1_rticx::bsp::enter_download_mode()
+}
