@@ -826,6 +826,7 @@ dependencies = [
 name = "wavegraph-monosynth"
 version = "0.1.0"
 dependencies = [
+ "micromath",
  "wavegraph-core",
  "wavegraph-sample",
 ]

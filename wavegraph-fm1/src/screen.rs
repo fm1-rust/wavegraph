@@ -132,6 +132,7 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         frame: &Frame,
+        cutoff_hz: u16,
         late: bool,
     ) -> Result<(), Error> {
         let trace = frame.trace.map(|y| y + TOP as u8);
@@ -146,9 +147,12 @@ impl Screen {
             .paint(lcd, clock, &frame.trace, self.strip)
             .await?;
         let labels = frame.labels;
-        self.text.text(0, 0, b"MONOSYNTH", palette::GREEN);
+        self.text.text(0, 0, b"CUT", palette::MUTED);
+        self.text
+            .number(4, 0, 5, u32::from(cutoff_hz), palette::GREEN);
+        self.text.text(9, 0, b"HZ", palette::MUTED);
         self.text.text(
-            11,
+            12,
             0,
             if labels.half_gain { b"HALF" } else { b"DRY " },
             palette::MUTED,
@@ -156,11 +160,7 @@ impl Screen {
         self.text.text(
             17,
             0,
-            if labels.oscillator_tap {
-                b"OSC"
-            } else {
-                b"DAC"
-            },
+            if labels.voice_tap { b"VCF" } else { b"DAC" },
             palette::MUTED,
         );
         self.text.text(0, 14, labels.voice.label(), palette::GREEN);

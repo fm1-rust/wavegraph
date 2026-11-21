@@ -1,10 +1,15 @@
 # wavegraph-monosynth
 
-A monophonic oscillator for WaveGraph. It has one message inlet for notes,
-velocity and waveform changes, and one mono signal outlet. Sine, triangle,
+A monophonic synthesizer for WaveGraph. It has one message inlet for notes,
+velocity, waveform and filter cutoff, and one mono signal outlet. Sine, triangle,
 sawtooth and square share a continuous 32-bit phase accumulator. Events take
 effect at their frame offset. Note-off silences the currently selected note
 and the phase keeps advancing.
+
+Send `Message::CutoffHz(1_000)` to set the cutoff to 1 kHz. A sine wave at
+that frequency drops by about 3 dB. The [SH-101]-inspired filter uses four
+cascaded poles with resonance fixed at zero. It starts fully open and smooths
+cutoff changes. Velocity and the note gate act on the filtered signal.
 
 The oscillator and its output level come from the [FM-1 waveform example][voice].
 Full velocity peaks at about −24 dBFS. Sawtooth and square have sharp edges
@@ -33,5 +38,6 @@ license) under both licenses above, without additional terms or conditions.
 
 [voice]: https://github.com/fm1-rust/fm1-rust/blob/a4a770c8743cee972cfbfb5478145e5198be4550/fm1-rticx/examples/rticx-waveform/voice.rs
 [engine]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph#rendering-a-compiled-patch
+[SH-101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
 [apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-APACHE
 [mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-MIT

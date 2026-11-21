@@ -16,6 +16,15 @@ const PRESETS: [(Waveform, &[u8]); 4] = [
     (Waveform::Square, b"SQUARE  "),
 ];
 
+const MAX_CUTOFF_STEP: u8 = 66;
+// Two semitones per detent, rounded to the nearest Hz from 20 kHz down.
+const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
+    10, 11, 12, 14, 16, 17, 20, 22, 25, 28, 31, 35, 39, 44, 49, 55, 62, 70, 78, 88, 98, 110, 124,
+    139, 156, 175, 197, 221, 248, 278, 313, 351, 394, 442, 496, 557, 625, 702, 787, 884, 992, 1114,
+    1250, 1403, 1575, 1768, 1984, 2227, 2500, 2806, 3150, 3536, 3969, 4454, 5000, 5612, 6300, 7071,
+    7937, 8909, 10000, 11225, 12599, 14142, 15874, 17818, 20000,
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Note {
     pub(super) number: u8,
@@ -44,6 +53,7 @@ impl<const KEYS: usize> HeldNotes<KEYS> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Voice {
     preset: u8,
+    cutoff_step: u8,
     pub(super) note: Option<Note>,
     pub(super) transpose: i8,
 }
@@ -51,12 +61,24 @@ pub(super) struct Voice {
 impl Voice {
     pub(super) const INITIAL: Self = Self {
         preset: 0,
+        cutoff_step: MAX_CUTOFF_STEP - 12, // 5 kHz
         note: None,
         transpose: 0,
     };
 
     pub(super) fn turn_preset(&mut self, detents: i8) {
         self.preset = self.preset.wrapping_add_signed(detents) % 4;
+    }
+
+    pub(super) fn turn_cutoff(&mut self, detents: i8) {
+        self.cutoff_step = self
+            .cutoff_step
+            .saturating_add_signed(detents)
+            .min(MAX_CUTOFF_STEP);
+    }
+
+    pub(super) fn cutoff_hz(self) -> u16 {
+        CUTOFF_HZ[usize::from(self.cutoff_step)]
     }
 
     pub(super) fn label(self) -> &'static [u8] {
@@ -87,7 +109,7 @@ impl Voice {
         }
     }
 
-    fn events(self, previous: Option<Self>) -> Vec<Event<Message>, 2> {
+    fn events(self, previous: Option<Self>) -> Vec<Event<Message>, 3> {
         let mut events = Vec::new();
         let mut send = |message| {
             events
@@ -96,10 +118,13 @@ impl Voice {
                     port: 0,
                     message,
                 })
-                .expect("at most one waveform change and one note change");
+                .expect("at most one waveform, cutoff and note change");
         };
         if previous.is_none_or(|old| old.preset != self.preset) {
             send(Message::Waveform(PRESETS[usize::from(self.preset)].0));
+        }
+        if previous.is_none_or(|old| old.cutoff_step != self.cutoff_step) {
+            send(Message::CutoffHz(self.cutoff_hz()));
         }
         let before = previous.and_then(Self::sounding);
         let next = self.sounding();
@@ -209,9 +234,49 @@ mod tests {
     }
 
     #[test]
+    fn cutoff_detents_clamp_and_share_an_event_frame_with_preset_and_note() {
+        let mut voice = Voice::INITIAL;
+        assert_eq!(voice.cutoff_hz(), 5000);
+        voice.turn_cutoff(-6);
+        voice.turn_preset(2);
+        voice.note = Some(Note {
+            number: 69,
+            velocity: 80,
+        });
+        let at_start = |message| Event {
+            frame: 0,
+            port: 0,
+            message,
+        };
+        assert_eq!(
+            voice.events(Some(Voice::INITIAL)).as_slice(),
+            [
+                at_start(Message::Waveform(Waveform::Sawtooth)),
+                at_start(Message::CutoffHz(2500)),
+                at_start(Message::NoteOn {
+                    note: 69,
+                    velocity: 80
+                }),
+            ]
+        );
+        let held = voice;
+        voice.turn_cutoff(i8::MIN);
+        assert_eq!(
+            voice.events(Some(held)).as_slice(),
+            [at_start(Message::CutoffHz(10))]
+        );
+        voice.turn_cutoff(i8::MAX);
+        assert_eq!(voice.cutoff_hz(), 20000);
+        let open = voice;
+        voice.turn_cutoff(1);
+        assert!(voice.events(Some(open)).is_empty());
+    }
+
+    #[test]
     fn plays_at_strike_velocity_and_releases_the_transposed_note() -> Result<(), Error> {
         let programs = Programs::decode()?;
-        let tuning = Tuning::new(44_100, 1).expect("audio sample clock");
+        // The initial 5 kHz cutoff is above Nyquist here, giving a square with exact levels.
+        let tuning = Tuning::new(8_000, 1).expect("audio sample clock");
         let mut synth = Monosynth::new(&tuning);
         let mut nodes: [&mut dyn Process<Message, I24>; 1] = [&mut synth];
         let mut instrument = programs.bind(&mut nodes)?;

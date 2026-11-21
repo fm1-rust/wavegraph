@@ -11,14 +11,14 @@ use fm1_audio::MasterLevel;
 pub struct Settings {
     voice: Voice,
     master: MasterLevel,
-    oscillator_tap: bool,
+    voice_tap: bool,
 }
 
 impl Settings {
     const INITIAL: Self = Self {
         voice: Voice::INITIAL,
         master: MasterLevel::MIN,
-        oscillator_tap: false,
+        voice_tap: false,
     };
 }
 
@@ -26,7 +26,7 @@ impl Settings {
 pub(super) struct Labels {
     pub(super) voice: Voice,
     pub(super) half_gain: bool,
-    pub(super) oscillator_tap: bool,
+    pub(super) voice_tap: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -110,7 +110,7 @@ mod app {
                     labels: Labels {
                         voice: Voice::INITIAL,
                         half_gain: false,
-                        oscillator_tap: false,
+                        voice_tap: false,
                     },
                 },
                 late: false,
@@ -217,12 +217,13 @@ mod app {
                 let voice = &mut self.settings.voice;
                 voice.note = note;
                 voice.turn_preset(scan.encoder_delta(Encoder::Presets));
+                voice.turn_cutoff(scan.encoder_delta(Encoder::Knob1));
                 voice.transpose = voice
                     .transpose
                     .saturating_add(scan.encoder_delta(Encoder::Select))
                     .clamp(-12, 12);
                 if scan.pressed(Button::Sel) {
-                    self.settings.oscillator_tap = !self.settings.oscillator_tap;
+                    self.settings.voice_tap = !self.settings.voice_tap;
                 }
                 if let Some(master) = scan.master() {
                     self.settings.master = master;
@@ -235,8 +236,8 @@ mod app {
                 if route_changed && self.editor.commit(!self.half_gain).await.is_ok() {
                     self.half_gain = !self.half_gain;
                 }
-                if route_changed || before.oscillator_tap != self.settings.oscillator_tap {
-                    let tap = self.settings.oscillator_tap;
+                if route_changed || before.voice_tap != self.settings.voice_tap {
+                    let tap = self.settings.voice_tap;
                     let half = self.half_gain;
                     self.shared().leds.lock(|leds| {
                         leds.set(Button::Fx, half);
@@ -282,7 +283,7 @@ mod app {
             self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
             if result == Refill::Written && !self.tap.is_full() {
                 let block = ScopeBlock {
-                    samples: if settings.oscillator_tap {
+                    samples: if settings.voice_tap {
                         self.buses[0].map(I24::inner)
                     } else {
                         core::array::from_fn(|i| self.output.block()[i][0])
@@ -290,7 +291,7 @@ mod app {
                     labels: Labels {
                         voice: settings.voice,
                         half_gain: self.instrument.half_gain,
-                        oscillator_tap: settings.oscillator_tap,
+                        voice_tap: settings.voice_tap,
                     },
                     gap: self.gap,
                 };
@@ -339,7 +340,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, late])]
+    #[async_task(priority = 1, shared = [frame, late, settings])]
     struct Draw {
         port: Option<DisplayPort>,
         clock: Clock,
@@ -359,8 +360,10 @@ mod app {
             loop {
                 let frame = self.shared().frame.lock(|f| *f);
                 let late = self.shared().late.lock(|late| *late);
+                // Keep the knob readout live while the scope waits for a zero crossing.
+                let cutoff_hz = self.shared().settings.lock(|s| s.voice.cutoff_hz());
                 if screen
-                    .paint(&mut lcd, &mut self.clock, &frame, late)
+                    .paint(&mut lcd, &mut self.clock, &frame, cutoff_hz, late)
                     .await
                     .is_err()
                 {
