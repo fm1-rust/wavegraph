@@ -27,6 +27,30 @@ fn at(frame: usize, message: Message) -> Event<Message> {
 }
 
 #[test]
+fn a_lookahead_voice_starts_at_the_live_phase_and_advances_independently() {
+    let tuning = Tuning::new(1760, 1).expect("four frames per A4 cycle");
+    let mut live = Monosynth::new(&tuning);
+    render::<1>(
+        &mut live,
+        &[at(
+            0,
+            Message::NoteOn {
+                note: 69,
+                velocity: 8,
+            },
+        )],
+    );
+    let mut lookahead = live.clone();
+    assert_eq!(render::<2>(&mut lookahead, &[]), [32767, 0]);
+    assert_eq!(render::<2>(&mut live, &[]), [32767, 0]);
+    assert_eq!(
+        render::<1>(&mut lookahead, &[at(0, Message::NoteOff(69))]),
+        [0]
+    );
+    assert_eq!(render::<1>(&mut live, &[]), [-32767]);
+}
+
+#[test]
 fn all_presets_match_the_original_waveform_at_quarter_cycles() {
     let tuning = Tuning::new(3520, 2).expect("four frames per A4 cycle");
     for (wave, expected) in [

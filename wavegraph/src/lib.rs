@@ -5,4 +5,6 @@
 pub use wavegraph_core::{Event, Op, Port, Process, ProcessContext};
 
 pub mod bytecode;
+#[cfg(feature = "async")]
+pub mod control;
 pub mod dsp;
