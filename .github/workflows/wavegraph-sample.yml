@@ -1,0 +1,33 @@
+name: wavegraph-sample
+
+on:
+  pull_request:
+    paths: &wavegraph-sample-paths
+      - 'wavegraph-sample/**'
+      - Cargo.toml
+      - Cargo.lock
+      - '.cargo/**'
+      - .github/workflows/wavegraph-sample.yml
+  push:
+    branches: [main]
+    paths: *wavegraph-sample-paths
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --no-self-update
+      - run: cargo +stable test -p wavegraph-sample --no-default-features --locked
+      - run: cargo +stable test -p wavegraph-sample --all-features --locked

@@ -1,0 +1,22 @@
+# Adapted from RustAudio's dasp_sample for the WaveGraph workspace.
+[package]
+name = "wavegraph-sample"
+version = "0.0.0"
+authors = [
+    "mitchmindtree <mitchell.nordine@gmail.com>"
+]
+edition = "2018"
+description = "PCM audio sample types, traits and conversions, vendored from dasp_sample"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/fm1-rust/wavegraph"
+readme = "README.md"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "dsp", "pcm", "sample"]
+
+[features]
+std = []
+
+# Keep upstream's PCM conversion expressions and bounds checks verbatim.
+[lints.clippy]
+manual_range_contains = "allow"
+precedence = "allow"

@@ -1,0 +1,3 @@
+[type.rust.extend-identifiers]
+# Upstream's macro implements multiple From conversions.
+impl_froms = "impl_froms"

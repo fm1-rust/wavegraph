@@ -14,7 +14,7 @@ mono signals. The host owns the patch cords, schedule and buffers.
 Patches select their message and sample types. For example, a message enum
 can represent bangs, numbers, symbols and lists. Signal samples default to
 `f32`, with 1.0 representing nominal full scale. A processor can use
-`dasp_sample::Sample` for format-generic arithmetic. The integration test
+`wavegraph_sample::Sample` for format-generic arithmetic. The integration test
 runs the same pair of connected objects with `f32` and signed 24-bit PCM and
 stores messages in a fixed-capacity `heapless::Vec`. [Patch example][patch]
 

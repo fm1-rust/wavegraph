@@ -4,6 +4,7 @@ on:
   pull_request:
     paths: &wavegraph-paths
       - 'wavegraph/**'
+      - 'wavegraph-sample/**'
       - Cargo.toml
       - Cargo.lock
       - '.cargo/**'
