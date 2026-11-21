@@ -1,0 +1,56 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - 'wavegraph/v*'
+      - 'wavegraph-sample/v*'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.created
+    runs-on: ubuntu-latest
+    outputs:
+      package: ${{ steps.verify.outputs.package }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # same runtime as v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify the tagged workspace package
+        id: verify
+        shell: bash
+        run: |
+          package=$(cargo metadata --no-deps --format-version 1 |
+            jq -er --arg tag "$GITHUB_REF_NAME" '
+              first(.packages[] | select("\(.name)/v\(.version)" == $tag) | .name)
+                // error("no workspace package matches tag \($tag)")
+            ')
+          cargo test --locked --all-features --package "$package"
+          cargo publish --dry-run --locked --registry crates-io --package "$package"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # same runtime as v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@dc10531605597d48d51c6d1005a2b3861698940b # same runtime as v1.0.6
+
+      - name: Publish the tagged package
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          PACKAGE: ${{ needs.verify.outputs.package }}
+        run: cargo publish --locked --no-verify --registry crates-io --package "$PACKAGE"
