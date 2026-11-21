@@ -80,51 +80,9 @@ pub(crate) fn decay_exp(x: f32) -> f32 {
     half * half
 }
 
-// A cutoff error here modulates every ladder pole. Compute the octave
-// once per block using ln(m) = 2 atanh((m - 1)/(m + 1)). Normalizing the
-// mantissa around one bounds the series argument to about ±0.172.
-pub(crate) fn cutoff_octaves(x: f32) -> f32 {
-    if x <= 0.0 {
-        return if x == 0.0 {
-            f32::NEG_INFINITY
-        } else {
-            f32::NAN
-        };
-    }
-    if !x.is_finite() {
-        return x;
-    }
-    let (x, bias) = if x < f32::MIN_POSITIVE {
-        (x * 8_388_608.0, 150.0)
-    } else {
-        (x, 127.0)
-    };
-    let bits = x.to_bits();
-    let mut octave = f32::from(((bits >> 23) & 255) as i16) - bias;
-    let mut m = f32::from_bits((bits & 0x007f_ffff) | 0x3f80_0000);
-    if m > core::f32::consts::SQRT_2 {
-        m *= 0.5;
-        octave += 1.0;
-    }
-    let s = (m - 1.0) / (m + 1.0);
-    let z = s * s;
-    let p = 1.0 + z * (1.0 / 3.0 + z * (1.0 / 5.0 + z * (1.0 / 7.0 + z / 9.0)));
-    octave + (2.0 * core::f32::consts::LOG2_E) * s * p
-}
-
-// Beyond 2^23 every finite f32 is already integral. Passing exceptional
-// values through also preserves NaNs in the effects' block-end recovery.
-pub(crate) fn floor(x: f32) -> f32 {
-    if x.abs() < 8_388_608.0 && x != 0.0 {
-        micromath::F32Ext::floor(x)
-    } else {
-        x
-    }
-}
-
 // CHOMPI's parabola approximation, with phase measured in turns.
 pub(crate) fn fast_sin(mut phase: f32) -> f32 {
-    phase -= floor(phase);
+    phase -= micromath::F32Ext::floor(phase);
     let t = if phase < 0.5 {
         2.0 * phase
     } else {
@@ -171,7 +129,7 @@ impl BitCrusher {
         if self.remaining == 0 {
             self.remaining = settings.hold;
             self.held = if let Some(levels) = settings.levels {
-                floor(sample.clamp(-1.0, 1.0) * levels + 0.5) / levels
+                micromath::F32Ext::floor(sample.clamp(-1.0, 1.0) * levels + 0.5) / levels
             } else {
                 sample
             };
@@ -184,7 +142,8 @@ impl BitCrusher {
 
 #[cfg(test)]
 mod tests {
-    use super::{cutoff_octaves, filter_tan, tau_to_coef};
+    use super::{filter_tan, tau_to_coef};
+    use micromath::F32Ext;
 
     #[test]
     fn envelope_time_constants() {
@@ -205,10 +164,10 @@ mod tests {
     fn cutoff_in_octaves() {
         for i in 1..=32_000u16 {
             let x = f32::from(i);
-            assert!((cutoff_octaves(x) - x.log2()).abs() < 2e-6);
+            assert!((F32Ext::log2(x) - x.log2()).abs() < 2e-6);
         }
-        assert_eq!(cutoff_octaves(f32::from_bits(1)), -149.0);
-        assert_eq!(cutoff_octaves(0.0), f32::NEG_INFINITY);
+        assert_eq!(F32Ext::log2(f32::from_bits(1)), -149.0);
+        assert_eq!(F32Ext::log2(0.0), f32::NEG_INFINITY);
     }
 
     #[test]
