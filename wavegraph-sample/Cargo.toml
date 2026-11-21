@@ -15,7 +15,7 @@ readme = "README.md"
 categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "dsp", "no-alloc", "pcm", "sample"]
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 
 [features]
 std = []

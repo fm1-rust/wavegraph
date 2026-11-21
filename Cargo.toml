@@ -4,16 +4,23 @@ members = [
     "wavegraph",
     "wavegraph-303",
     "wavegraph-core",
+    "wavegraph-fm1",
     "wavegraph-monosynth",
     "wavegraph-sample"
 ]
 
 [workspace.package]
+rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
 
 [workspace.dependencies]
+heapless = { version = "0.9.4", default-features = false }
 wavegraph-core = { version = "0.1", path = "wavegraph-core" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
+
+[patch.crates-io]
+# Share the workspace PCM type with the FM-1 audio mixer.
+wavegraph-sample = { path = "wavegraph-sample" }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"
@@ -42,3 +49,10 @@ trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_lifetimes = "warn"
 unused_qualifications = "warn"
+
+[profile.firmware]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+lto = true
+panic = "abort"
