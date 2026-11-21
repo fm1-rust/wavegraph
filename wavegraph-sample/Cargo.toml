@@ -1,17 +1,18 @@
-# Adapted from RustAudio's dasp_sample for the WaveGraph workspace.
 [package]
-name = "wavegraph-sample"
+name = "wavegraph-sample" # Forked from RustAudio's `dasp_sample`
 version = "0.0.0"
 authors = [
+    "WaveGraph Developers",
     "mitchmindtree <mitchell.nordine@gmail.com>"
 ]
-edition = "2018"
 description = "PCM audio sample types, traits and conversions, vendored from dasp_sample"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/fm1-rust/wavegraph"
 readme = "README.md"
 categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "dsp", "pcm", "sample"]
+edition = "2024"
+rust-version = "1.85"
 
 [features]
 std = []
