@@ -1,6 +1,6 @@
 //! Check pitch, waveform levels and note handling at exact frame offsets.
 use wavegraph_core::{Event, Process, ProcessContext};
-use wavegraph_monosynth::{Message, Monosynth, Tuning, Waveform};
+use wavegraph_monosynth::{Adsr, Message, Monosynth, Tuning, Waveform};
 use wavegraph_sample::I24;
 
 fn render<const FRAMES: usize>(
@@ -168,4 +168,126 @@ fn note_changes_respect_offsets_and_releases_belong_to_the_current_note() {
         ),
     ];
     assert_eq!(render::<4>(&mut voice, &events), [0, 32767, 65534, 0]);
+}
+
+#[test]
+fn vca_follows_the_gate_across_legato_notes_and_releases_from_sustain() {
+    let tuning = Tuning::new(2_000, 2).expect("one frame per millisecond");
+    let mut voice = Monosynth::new(&tuning);
+    let adsr = Adsr {
+        attack_us: 4_000,
+        decay_us: 4_000,
+        sustain_percent: 50,
+        release_us: 4_000,
+    };
+    let key = |note| Message::NoteOn { note, velocity: 8 };
+    let events = [
+        at(2, Message::VcaEnvelope(adsr)),
+        at(2, Message::Waveform(Waveform::Square)),
+        at(2, key(48)),
+        at(4, key(50)), // The second key and the older key-up leave the gate high.
+        at(5, Message::NoteOff(48)),
+        at(
+            12,
+            Message::NoteOn {
+                note: 50,
+                velocity: 0,
+            },
+        ),
+        at(13, Message::NoteOff(50)), // A repeated note-off cannot extend the release.
+    ];
+    assert_eq!(
+        render::<18>(&mut voice, &events).map(i32::abs),
+        [
+            0, 0, 8191, 16383, 24575, 32767, 25599, 20479, 17407, 16383, 16383, 16383, 9215, 4095,
+            1023, 0, 0, 0,
+        ]
+    );
+}
+
+#[test]
+fn vca_edits_retime_the_active_stage_and_a_new_gate_attacks_from_the_tail() {
+    let tuning = Tuning::new(1_000, 1).expect("one frame per millisecond");
+    let mut voice = Monosynth::new(&tuning);
+    let mut adsr = Adsr {
+        attack_us: 8_000,
+        decay_us: 4_000,
+        sustain_percent: 50,
+        release_us: 8_000,
+    };
+    let key = Message::NoteOn {
+        note: 48,
+        velocity: 8,
+    };
+    let first = [
+        at(0, Message::Waveform(Waveform::Square)),
+        at(0, Message::VcaEnvelope(adsr)),
+        at(0, key),
+    ];
+    assert_eq!(render::<2>(&mut voice, &first).map(i32::abs), [4095, 8191]);
+    adsr.attack_us = 4_000;
+    assert_eq!(
+        render::<5>(&mut voice, &[at(0, Message::VcaEnvelope(adsr))]).map(i32::abs),
+        [16383, 24575, 32767, 25599, 20479]
+    );
+    adsr.decay_us = 8_000;
+    assert_eq!(
+        render::<4>(&mut voice, &[at(0, Message::VcaEnvelope(adsr))]).map(i32::abs),
+        [18687, 17407, 16639, 16383]
+    );
+    adsr.sustain_percent = 25;
+    assert_eq!(
+        render::<4>(&mut voice, &[at(0, Message::VcaEnvelope(adsr))]).map(i32::abs),
+        [12799, 10239, 8703, 8191]
+    );
+    assert_eq!(
+        render::<2>(&mut voice, &[at(0, Message::NoteOff(48))]).map(i32::abs),
+        [6271, 4607]
+    );
+    adsr.release_us = 4_000;
+    let mut uninterrupted = voice.clone();
+    let edit = [at(0, Message::VcaEnvelope(adsr))];
+    assert_eq!(
+        render::<4>(&mut uninterrupted, &edit).map(i32::abs),
+        [2047, 511, 0, 0]
+    );
+    assert_eq!(render::<2>(&mut voice, &edit).map(i32::abs), [2047, 511]);
+    assert_eq!(
+        render::<4>(&mut voice, &[at(0, key)]).map(i32::abs),
+        [8575, 16639, 24703, 32767]
+    );
+}
+
+#[test]
+fn early_key_up_releases_from_the_partial_attack_at_the_device_clock() {
+    for (num, den, attack, release) in [(24_000_000, 544, 441, 176), (48_000, 1, 480, 192)] {
+        let tuning = Tuning::new(num, den).expect("audio clock");
+        let mut voice = Monosynth::new(&tuning);
+        let off = attack / 2;
+        let events = [
+            at(0, Message::Waveform(Waveform::Square)),
+            at(
+                0,
+                Message::VcaEnvelope(Adsr {
+                    attack_us: 10_000,
+                    release_us: 4_000,
+                    ..Adsr::GATE
+                }),
+            ),
+            at(
+                0,
+                Message::NoteOn {
+                    note: 48,
+                    velocity: 64,
+                },
+            ),
+            at(off, Message::NoteOff(48)),
+        ];
+        let samples = render::<512>(&mut voice, &events).map(i32::abs);
+        let peak = samples[off - 1];
+        assert!((130_000..=131_068).contains(&peak));
+        assert!(samples[off] < peak);
+        assert!(samples[off + release - 2] > 0);
+        assert!(samples[off + release - 1..].iter().all(|&s| s == 0));
+    }
 }

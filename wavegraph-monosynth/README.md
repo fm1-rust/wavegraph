@@ -1,15 +1,35 @@
 # wavegraph-monosynth
 
 A monophonic synthesizer for WaveGraph. It has one message inlet for notes,
-velocity, waveform and filter cutoff, and one mono signal outlet. Sine, triangle,
+velocity, waveform, filter cutoff and VCA envelope, and one mono signal outlet. Sine, triangle,
 sawtooth and square share a continuous 32-bit phase accumulator. Events take
-effect at their frame offset. Note-off silences the currently selected note
-and the phase keeps advancing.
+effect at their frame offset. The oscillator keeps advancing through note-off.
 
 Send `Message::CutoffHz(1_000)` to set the cutoff to 1 kHz. A sine wave at
 that frequency drops by about 3 dB. The [SH-101]-inspired filter uses four
 cascaded poles with resonance fixed at zero. It starts fully open and smooths
-cutoff changes. Velocity and the note gate act on the filtered signal.
+cutoff changes. The VCA scales the filtered signal by strike velocity and
+envelope gain.
+
+Use a VCA envelope message for a quick attack and a short tail.
+
+```rust
+use wavegraph_monosynth::{Adsr, Message};
+
+let envelope = Message::VcaEnvelope(Adsr {
+    attack_us: 8_000,
+    decay_us: 160_000,
+    sustain_percent: 70,
+    release_us: 125_000,
+});
+```
+
+Attack rises linearly to peak gain. Decay and release follow quadratic
+curves to sustain and silence. Overlapping notes share a gate. Releasing the
+current note starts the tail at its present level, and a fresh attack can
+start from that tail. Adjusting a time mid-stage rescales the remaining
+duration. Adjusting a held sustain level slews it over 4 ms. The default
+`Adsr::GATE` gives immediate attack and release at full sustain.
 
 The oscillator and its output level come from the [FM-1 waveform example][voice].
 Full velocity peaks at about −24 dBFS. Sawtooth and square have sharp edges

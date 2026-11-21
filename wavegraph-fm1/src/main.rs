@@ -11,6 +11,8 @@ fn main() {
 mod bass;
 #[cfg(any(target_os = "none", test))]
 mod capture;
+#[cfg(any(target_os = "none", test))]
+mod envelope;
 #[cfg(target_os = "none")]
 mod firmware;
 #[cfg(any(target_os = "none", test))]

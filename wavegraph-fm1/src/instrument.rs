@@ -1,6 +1,9 @@
 //! Two persistent instrument nodes feed a common mix and switchable gain stage.
 
-use crate::bass::{Controls, Knob};
+use crate::{
+    bass::{Controls, Knob},
+    envelope::EnvelopeControls,
+};
 use heapless::Vec;
 use wavegraph::{
     Event, Port, Process, ProcessContext,
@@ -173,51 +176,20 @@ impl Voice {
             [letter, octave, b' ']
         }
     }
-
-    fn mono_events(self, previous: Option<Self>) -> EventBatch {
-        let mut events = EventBatch::new();
-        if previous.is_none_or(|old| old.waveform != self.waveform) {
-            events
-                .push(at(MonoMessage::Waveform(
-                    MONO_WAVEFORMS[usize::from(self.waveform)].0,
-                )))
-                .expect("one waveform change");
-        }
-        if previous.is_none_or(|old| old.cutoff_step != self.cutoff_step) {
-            events
-                .push(at(MonoMessage::CutoffHz(self.cutoff_hz())))
-                .expect("one cutoff change");
-        }
-        let before = previous.and_then(Self::sounding);
-        let next = self.sounding();
-        if before != next || previous.is_some_and(|old| old.gate.phrase != self.gate.phrase) {
-            if let Some(Note { number, velocity }) = next {
-                events
-                    .push(at(MonoMessage::NoteOn {
-                        note: number,
-                        velocity,
-                    }))
-                    .expect("one note change");
-            } else if let Some(last) = before {
-                events
-                    .push(at(MonoMessage::NoteOff(last.number)))
-                    .expect("one note change");
-            }
-        }
-        events
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Parts {
     pub(super) voices: [Voice; 2],
     pub(super) bass: Controls,
+    pub(super) mono_envelope: EnvelopeControls,
 }
 
 impl Parts {
     pub(super) const INITIAL: Self = Self {
         voices: [Voice::INITIAL; 2],
         bass: Controls::INITIAL,
+        mono_envelope: EnvelopeControls::INITIAL,
     };
 
     pub(super) fn turn_knobs(&mut self, focus: Part, detents: [i8; 4]) {
@@ -229,6 +201,48 @@ impl Parts {
                 }
             }
         }
+    }
+
+    fn mono_events(self, previous: Option<Self>) -> EventBatch {
+        let mono = self.voices[Part::Mono as usize];
+        let old = previous.map(|parts| parts.voices[Part::Mono as usize]);
+        let mut events = EventBatch::new();
+        if old.is_none_or(|v| v.waveform != mono.waveform) {
+            events
+                .push(at(MonoMessage::Waveform(
+                    MONO_WAVEFORMS[usize::from(mono.waveform)].0,
+                )))
+                .expect("one waveform change");
+        }
+        if old.is_none_or(|v| v.cutoff_step != mono.cutoff_step) {
+            events
+                .push(at(MonoMessage::CutoffHz(mono.cutoff_hz())))
+                .expect("one cutoff change");
+        }
+        if previous.is_none_or(|p| p.mono_envelope != self.mono_envelope) {
+            events
+                .push(at(MonoMessage::VcaEnvelope(self.mono_envelope.adsr())))
+                .expect("one envelope change");
+        }
+        let before = old.and_then(Voice::sounding);
+        let next = mono.sounding();
+        let fresh = old.is_some_and(|v| v.gate.phrase != mono.gate.phrase);
+        // A release and new strike can both fall between two audio blocks.
+        // Deliver the gate edges in order; overlapping keys only change pitch.
+        if let Some(last) = before.filter(|_| next.is_none() || fresh) {
+            events
+                .push(at(MonoMessage::NoteOff(last.number)))
+                .expect("one note-off");
+        }
+        if let Some(note) = next.filter(|_| next != before || fresh) {
+            events
+                .push(at(MonoMessage::NoteOn {
+                    note: note.number,
+                    velocity: note.velocity,
+                }))
+                .expect("one note-on");
+        }
+        events
     }
 }
 
@@ -258,7 +272,7 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
     }
 }
 
-// One waveform, four numbered knobs and one note transition at the block boundary.
+// The 303 can send six events. The monosynth can send three controls and both gate edges.
 const MAX_EVENTS: usize = 6;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 
@@ -363,10 +377,8 @@ impl Instrument<'_> {
         parts: Parts,
         buses: &'b mut [[I24; N]; BUS_COUNT],
     ) -> Result<&'b [I24; N], Error> {
-        let [mono, bass] = parts.voices;
-        // The native monosynth starts fully open. Send its panel cutoff on the first block.
-        let mono_events =
-            mono.mono_events(self.previous.map(|old| old.voices[Part::Mono as usize]));
+        let bass = parts.voices[Part::Bass as usize];
+        let mono_events = parts.mono_events(self.previous);
         let old = self.previous.unwrap_or(Parts::INITIAL);
         let bass_events = parts
             .bass
@@ -431,58 +443,97 @@ mod tests {
     #[test]
     fn knob_one_preserves_both_cutoffs_and_sends_the_initial_monosynth_cutoff() {
         let mut parts = Parts::INITIAL;
-        let initial = parts.voices[Part::Mono as usize];
-        assert_eq!(initial.cutoff_hz(), 5000);
+        let initial = parts;
+        assert_eq!(initial.voices[0].cutoff_hz(), 5000);
         assert_eq!(
             initial.mono_events(None).as_slice(),
             &[
                 at(MonoMessage::Waveform(Waveform::Sine)),
                 at(MonoMessage::CutoffHz(5000)),
+                at(MonoMessage::VcaEnvelope(parts.mono_envelope.adsr())),
             ]
         );
         parts.turn_knobs(Part::Mono, [-6, 0, 0, 0]);
         assert_eq!(parts.bass, Controls::INITIAL);
         parts.turn_knobs(Part::Bass, [6, 0, 0, 0]);
         assert_eq!(parts.bass.readout().1, 1000);
+        parts.mono_envelope.turn([1, -1, 2, -2]);
         let mono = &mut parts.voices[Part::Mono as usize];
         assert_eq!(mono.cutoff_hz(), 2500);
         mono.turn_waveform(Part::Mono, 2);
         mono.gate.note = Some(note(69, 80));
         assert_eq!(
-            mono.mono_events(Some(initial)).as_slice(),
+            parts.mono_events(Some(initial)).as_slice(),
             &[
                 at(MonoMessage::Waveform(Waveform::Sawtooth)),
                 at(MonoMessage::CutoffHz(2500)),
+                at(MonoMessage::VcaEnvelope(parts.mono_envelope.adsr())),
                 at(MonoMessage::NoteOn {
                     note: 69,
                     velocity: 80
                 }),
             ]
         );
-        let held = *mono;
-        mono.turn_cutoff(i8::MIN);
+        let held = parts;
+        parts.voices[0].turn_cutoff(i8::MIN);
         assert_eq!(
-            mono.mono_events(Some(held)).as_slice(),
+            parts.mono_events(Some(held)).as_slice(),
             &[at(MonoMessage::CutoffHz(10))]
         );
-        mono.turn_cutoff(i8::MAX);
-        assert_eq!(mono.cutoff_hz(), 20000);
-        let open = *mono;
-        mono.turn_cutoff(1);
-        assert!(mono.mono_events(Some(open)).is_empty());
+        parts.voices[0].turn_cutoff(i8::MAX);
+        assert_eq!(parts.voices[0].cutoff_hz(), 20000);
+        let open = parts;
+        parts.voices[0].turn_cutoff(1);
+        assert!(parts.mono_events(Some(open)).is_empty());
         assert_eq!(parts.bass.readout().1, 1000);
+    }
+
+    #[test]
+    fn mono_retriggers_after_a_short_gap_and_plays_overlapping_keys_legato() {
+        let mut keys = Keyboard::<2>::default();
+        let mut parts = Parts::INITIAL;
+        keys.press(note(60, 80));
+        parts.voices[0].gate = keys.gates()[0];
+        let first = parts;
+        let play = |number| {
+            at(MonoMessage::NoteOn {
+                note: number,
+                velocity: 80,
+            })
+        };
+
+        // Both edges fit between DMA blocks, even at the same pitch and velocity.
+        keys.release(60);
+        keys.press(note(60, 80));
+        parts.voices[0].gate = keys.gates()[0];
+        assert_eq!(
+            parts.mono_events(Some(first)).as_slice(),
+            &[at(MonoMessage::NoteOff(60)), play(60)]
+        );
+
+        let repeated = parts;
+        keys.press(note(67, 80));
+        parts.voices[0].gate = keys.gates()[0];
+        assert_eq!(parts.mono_events(Some(repeated)).as_slice(), &[play(67)]);
+        let legato = parts;
+        keys.release(67);
+        parts.voices[0].gate = keys.gates()[0];
+        assert_eq!(parts.mono_events(Some(legato)).as_slice(), &[play(60)]);
     }
 
     #[test]
     fn plays_at_strike_velocity_and_releases_the_transposed_note() -> Result<(), Error> {
         // At this rate the 5 kHz default is above Nyquist, so the square keeps its exact levels.
         with_instrument(8_000, |instrument| {
-            let mut buses = [[I24::default(); 8]; BUS_COUNT];
+            let mut buses = [[I24::default(); 32]; BUS_COUNT];
             let mut parts = Parts::INITIAL;
+            parts
+                .mono_envelope
+                .turn([i8::MIN, i8::MIN, i8::MAX, i8::MIN]);
             assert_eq!(parts.voices[0].note_name(), *b"-- ");
             assert_eq!(
                 instrument.render(parts, &mut buses)?.map(I24::inner),
-                [0; 8]
+                [0; 32]
             );
             parts.voices[0].turn_waveform(Part::Mono, -1);
             assert_eq!(parts.voices[0].label(Part::Mono), b"SQUARE  ");
@@ -493,13 +544,14 @@ mod tests {
                 assert_eq!(mono.note_name(), *b"A5 ");
                 let block = instrument.render(parts, &mut buses)?.map(I24::inner);
                 let level = (32767 * i32::from(velocity)) >> 3;
-                assert!(block.iter().all(|sample| sample.abs() == level));
+                assert!(block[12..].iter().all(|sample| sample.abs() == level));
             }
-            parts.voices[0] = Voice::INITIAL;
-            assert_eq!(
-                instrument.render(parts, &mut buses)?.map(I24::inner),
-                [0; 8]
-            );
+            parts.voices[0].gate.note = None;
+            parts.voices[0].transpose = 0;
+            let release = instrument.render(parts, &mut buses)?.map(I24::inner);
+            assert!(release[0].abs() > release[14].abs());
+            assert_ne!(release[14], 0);
+            assert_eq!(release[15..], [0; 17]);
             Ok(())
         })
     }
@@ -557,6 +609,11 @@ mod tests {
             keys.release(69);
             sync(&mut parts, &keys);
             instrument.render(parts, &mut buses)?;
+            assert!(buses[Part::Mono.tap()].iter().any(|s| s.inner() != 0));
+            // The mono's 125 ms release continues while the 303 key is held.
+            for _ in 0..44 {
+                instrument.render(parts, &mut buses)?;
+            }
             assert_eq!(buses[Part::Mono.tap()].map(I24::inner), [0; 128]);
             assert!(buses[Part::Bass.tap()].iter().any(|s| s.inner() != 0));
             keys.focus.turn_preset(-1);

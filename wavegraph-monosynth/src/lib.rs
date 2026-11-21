@@ -2,8 +2,12 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod envelope;
 mod filter;
 
+pub use envelope::Adsr;
+
+use envelope::Envelope;
 use filter::LowPass;
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
@@ -119,6 +123,8 @@ pub enum Message {
     /// Set the four-pole low-pass cutoff in Hz. Zero selects 1 Hz.
     /// Values at or above Nyquist open the filter fully.
     CutoffHz(u16),
+    /// Set the post-filter amplitude envelope, including during a note or its release.
+    VcaEnvelope(Adsr),
     /// Play the given MIDI note. Velocity is clamped to 127. Zero releases
     /// the matching note. Note numbers outside 0..=127 are ignored.
     NoteOn {
@@ -131,14 +137,15 @@ pub enum Message {
     NoteOff(u8),
 }
 
-/// One phase-continuous oscillator and four-pole low-pass filter with a message
-/// inlet and a mono signal outlet. The voice starts silent with a sine waveform
-/// and a fully open filter. Cloning copies the oscillator phase and filter state.
+/// A phase-continuous oscillator, four-pole low-pass filter and VCA envelope
+/// with a message inlet and mono signal outlet. Starts silent with a sine wave,
+/// a fully open filter and [`Adsr::GATE`]. Cloning copies the complete voice state.
 #[derive(Clone, Debug)]
 pub struct Monosynth<'a> {
     tuning: &'a Tuning,
     waveform: Waveform,
     filter: LowPass,
+    envelope: Envelope,
     note: u8,
     velocity: u8,
     phase: u32,
@@ -153,6 +160,7 @@ impl<'a> Monosynth<'a> {
             tuning,
             waveform: Waveform::Sine,
             filter: LowPass::OPEN,
+            envelope: Envelope::GATE,
             note: 69,
             velocity: 0,
             phase: 0,
@@ -164,15 +172,17 @@ impl<'a> Monosynth<'a> {
         match message {
             Message::Waveform(shape) => self.waveform = shape,
             Message::CutoffHz(hz) => self.filter.set_cutoff(hz, self.tuning.sample_period),
+            Message::VcaEnvelope(adsr) => self.envelope.set(adsr, self.tuning.sample_period),
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
                 if self.note == note {
-                    self.velocity = 0;
+                    self.envelope.gate_off();
                 }
             }
             Message::NoteOn { note, velocity } => {
                 if let Some(&step) = self.tuning.steps.get(usize::from(note)) {
                     self.note = note;
                     self.step = step;
+                    self.envelope.gate_on();
                     self.velocity = if step == 0 { 0 } else { velocity.min(127) };
                 }
             }
@@ -181,7 +191,9 @@ impl<'a> Monosynth<'a> {
 
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "A signed 24-bit sample times a 7-bit velocity fits in i32."
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "The velocity product fits in i32. The scaled Q23 level fits exactly in f32 and envelope gain is in 0..=1."
     )]
     fn render<S: FromSample<i32>>(&mut self, output: &mut [S]) {
         for sample in output {
@@ -189,7 +201,7 @@ impl<'a> Monosynth<'a> {
             let oscillator = self.waveform.sample(self.phase) << 8;
             let filtered = self.filter.process(oscillator);
             let q23 = (filtered * i32::from(self.velocity)) >> 11;
-            *sample = S::from_sample_(q23 << 8);
+            *sample = S::from_sample_(((q23 as f32 * self.envelope.next()) as i32) << 8);
             self.phase = self.phase.wrapping_add(self.step);
         }
     }

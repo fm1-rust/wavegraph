@@ -7,6 +7,7 @@
 use crate::{
     bass::Controls,
     capture::Trace,
+    envelope::EnvelopeControls,
     instrument::{Part, Parts, Voice},
 };
 use fm1_audio::MasterLevel;
@@ -15,6 +16,7 @@ use fm1_audio::MasterLevel;
 pub struct Settings {
     parts: Parts,
     focus: Part,
+    env_mode: bool,
     master: MasterLevel,
     voice_tap: bool,
 }
@@ -23,6 +25,7 @@ impl Settings {
     const INITIAL: Self = Self {
         parts: Parts::INITIAL,
         focus: Part::Mono,
+        env_mode: false,
         master: MasterLevel::MIN,
         voice_tap: false,
     };
@@ -32,6 +35,7 @@ impl Settings {
             voice: self.parts.voices[self.focus as usize],
             focus: self.focus,
             bass: self.parts.bass,
+            envelope: self.env_mode.then_some(self.parts.mono_envelope),
             half_gain,
             voice_tap: self.voice_tap,
         }
@@ -43,6 +47,7 @@ pub(super) struct Labels {
     pub(super) voice: Voice,
     pub(super) focus: Part,
     pub(super) bass: Controls,
+    pub(super) envelope: Option<EnvelopeControls>,
     pub(super) half_gain: bool,
     pub(super) voice_tap: bool,
 }
@@ -243,24 +248,32 @@ mod app {
             while let Ok((scan, focus, gates)) = self.input.recv().await {
                 let before = self.settings;
                 self.settings.focus = focus;
+                if focus == Part::Bass {
+                    self.settings.env_mode = false;
+                } else if scan.pressed(Button::Env) {
+                    self.settings.env_mode = !self.settings.env_mode;
+                }
                 for (voice, gate) in self.settings.parts.voices.iter_mut().zip(gates) {
                     voice.gate = gate;
                 }
                 let voice = &mut self.settings.parts.voices[focus as usize];
                 voice.turn_waveform(focus, scan.encoder_delta(Encoder::Algorithm));
-                voice.transpose = voice
-                    .transpose
-                    .saturating_add(scan.encoder_delta(Encoder::Select))
-                    .clamp(-12, 12);
                 let knobs = [
                     Encoder::Knob1,
                     Encoder::Knob2,
                     Encoder::Knob3,
                     Encoder::Knob4,
-                ];
-                self.settings
-                    .parts
-                    .turn_knobs(focus, knobs.map(|encoder| scan.encoder_delta(encoder)));
+                ]
+                .map(|encoder| scan.encoder_delta(encoder));
+                if self.settings.env_mode {
+                    self.settings.parts.mono_envelope.turn(knobs);
+                } else {
+                    voice.transpose = voice
+                        .transpose
+                        .saturating_add(scan.encoder_delta(Encoder::Select))
+                        .clamp(-12, 12);
+                    self.settings.parts.turn_knobs(focus, knobs);
+                }
                 if scan.pressed(Button::Sel) {
                     self.settings.voice_tap = !self.settings.voice_tap;
                 }
@@ -275,10 +288,15 @@ mod app {
                 if route_changed && self.editor.commit(!self.half_gain).await.is_ok() {
                     self.half_gain = !self.half_gain;
                 }
-                if route_changed || before.voice_tap != self.settings.voice_tap {
+                if route_changed
+                    || before.voice_tap != self.settings.voice_tap
+                    || before.env_mode != self.settings.env_mode
+                {
+                    let env = self.settings.env_mode;
                     let tap = self.settings.voice_tap;
                     let half = self.half_gain;
                     self.shared().leds.lock(|leds| {
+                        leds.set(Button::Env, env);
                         leds.set(Button::Fx, half);
                         leds.set(Button::Sel, tap);
                     });
