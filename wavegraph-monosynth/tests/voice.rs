@@ -27,6 +27,68 @@ fn at(frame: usize, message: Message) -> Event<Message> {
 }
 
 #[test]
+fn cutoff_tracks_the_half_power_frequency_at_each_sample_rate() {
+    fn gain(tuning: &Tuning, note: u8, cutoff: u16) -> f64 {
+        let mut dry = Monosynth::new(tuning);
+        let mut filtered = dry.clone();
+        let note_on = at(
+            0,
+            Message::NoteOn {
+                note,
+                velocity: 127,
+            },
+        );
+        render::<2048>(&mut dry, &[note_on]);
+        render::<2048>(&mut filtered, &[note_on, at(0, Message::CutoffHz(cutoff))]);
+        let energy = |samples: [i32; 4096]| {
+            samples
+                .into_iter()
+                .map(|s| f64::from(s).powi(2))
+                .sum::<f64>()
+        };
+        (energy(render(&mut filtered, &[])) / energy(render(&mut dry, &[]))).sqrt()
+    }
+
+    for (num, den) in [(24_000_000, 544), (32_000, 1), (96_000, 1)] {
+        let tuning = Tuning::new(num, den).expect("audio clock");
+        // A4 at the cutoff, then well inside the passband.
+        assert!((0.69..0.72).contains(&gain(&tuning, 69, 440)));
+        assert!(gain(&tuning, 69, 5000) > 0.99);
+        // Doubling the frequency deep in the stopband costs about 24 dB.
+        let octave = gain(&tuning, 93, 110) / gain(&tuning, 81, 110);
+        assert!((0.05..0.09).contains(&octave));
+    }
+}
+
+#[test]
+fn cutoff_changes_on_its_frame_and_continues_across_blocks() {
+    let tuning = Tuning::new(48_000, 1).expect("audio clock");
+    let mut whole = Monosynth::new(&tuning);
+    let mut split = whole.clone();
+    let start = [
+        at(0, Message::Waveform(Waveform::Sawtooth)),
+        at(
+            0,
+            Message::NoteOn {
+                note: 69,
+                velocity: 120,
+            },
+        ),
+    ];
+    let cutoff = Message::CutoffHz(110);
+    let block = render::<256>(&mut whole, &[start[0], start[1], at(64, cutoff)]);
+    assert_eq!(block[..64], render::<64>(&mut split, &start));
+    let mut dry = split.clone();
+    assert_eq!(block[64..144], render::<80>(&mut split, &[at(0, cutoff)]));
+    assert_eq!(block[144..], render::<112>(&mut split, &[]));
+    assert_ne!(block[64..], render::<192>(&mut dry, &[]));
+    assert_eq!(
+        render::<16>(&mut split, &[at(0, Message::NoteOff(69))]),
+        [0; 16]
+    );
+}
+
+#[test]
 fn a_lookahead_voice_starts_at_the_live_phase_and_advances_independently() {
     let tuning = Tuning::new(1760, 1).expect("four frames per A4 cycle");
     let mut live = Monosynth::new(&tuning);

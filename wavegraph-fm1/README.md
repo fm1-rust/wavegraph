@@ -13,18 +13,22 @@ during the splash.
 | Piano keys | Play F3 to G5 at strike velocity. The newest held key sounds. |
 | PRESETS encoder | Cycle through sine, triangle, sawtooth and square. |
 | SELECT encoder | Transpose by semitones, up to one octave either way. |
+| Knob 1 | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. |
 | MASTER | Set output volume. |
 | PLAY/STOP | Unassigned (reserved for a future sequencer). |
 | FX | Switch between the dry patch and a half-gain stage. |
-| SEL button | Switch the scope between the oscillator (OSC) and the post-MASTER output (DAC). |
+| SEL button | Switch the scope between the filtered voice (VCF) and the post-MASTER output (DAC). |
 | Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
 
 Overlap two keys and release the newer one to hear the earlier note at its
 original velocity. Releasing the last key silences the voice. The footer shows
 the sounding pitch and its velocity (V).
 
+Select sawtooth, hold a key and turn Knob 1 counterclockwise to hear the
+upper harmonics fade. The header shows the cutoff in Hz, starting at 5000.
+
 While a note is sounding, press FX. The DAC trace shrinks to half its height.
-Press SEL to see the oscillator at the key's original level while the output
+Press SEL to see the filtered voice at the key's original level while the output
 continues at half gain.
 
 ## Audio and display
@@ -37,7 +41,8 @@ the first block using the new program is submitted to DMA.
 
 The scope captures 240 consecutive samples starting at a rising zero crossing.
 A two-block queue feeds an async observer. Missing blocks and routing changes
-start a fresh trace. The screen's labels travel with the samples. A red LATE
+start a fresh trace. The trace labels travel with the samples. The cutoff
+readout follows the knob even while the scope waits for a trigger. A red LATE
 indicator latches if audio service misses its timing budget.
 
 Both screens use [fm1-graphics] to draw a waveform on a 24-pixel grid. The

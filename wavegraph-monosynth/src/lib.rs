@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod filter;
+
+use filter::LowPass;
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
 
@@ -67,10 +70,13 @@ const SINE: [i16; 65] = [
     31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
 ];
 
-/// Equal-tempered phase increments for a device's sample clock. One table
-/// can be shared by all voices running at the same rate.
+/// Equal-tempered phase increments and sample period for a device's clock.
+/// One table can be shared by all voices running at the same rate.
 #[derive(Debug)]
-pub struct Tuning([u32; 128]);
+pub struct Tuning {
+    steps: [u32; 128],
+    sample_period: f32,
+}
 
 impl Tuning {
     /// Construct a table for `numerator / denominator` frames per second,
@@ -80,7 +86,7 @@ impl Tuning {
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "The rounded phase increment is positive and at most 2^31."
+        reason = "The phase increment is positive and at most 2^31. The nonzero u32 clock ratio fits in f32."
     )]
     pub const fn new(numerator: u32, denominator: u32) -> Option<Self> {
         if numerator == 0 || denominator == 0 {
@@ -98,7 +104,10 @@ impl Tuning {
             step *= 1.059_463_094_359_295_3;
             note = note.wrapping_add(1);
         }
-        Some(Self(steps))
+        Some(Self {
+            steps,
+            sample_period: (denominator as f64 / numerator as f64) as f32,
+        })
     }
 }
 
@@ -107,6 +116,9 @@ impl Tuning {
 pub enum Message {
     /// Select an oscillator shape while retaining its phase.
     Waveform(Waveform),
+    /// Set the four-pole low-pass cutoff in Hz. Zero selects 1 Hz.
+    /// Values at or above Nyquist open the filter fully.
+    CutoffHz(u16),
     /// Play the given MIDI note. Velocity is clamped to 127. Zero releases
     /// the matching note. Note numbers outside 0..=127 are ignored.
     NoteOn {
@@ -119,13 +131,14 @@ pub enum Message {
     NoteOff(u8),
 }
 
-/// One phase-continuous oscillator with a message inlet and a mono signal
-/// outlet. The initial waveform is a sine and the voice starts silent.
-/// A clone starts at the same phase and shares the immutable tuning table.
+/// One phase-continuous oscillator and four-pole low-pass filter with a message
+/// inlet and a mono signal outlet. The voice starts silent with a sine waveform
+/// and a fully open filter. Cloning copies the oscillator phase and filter state.
 #[derive(Clone, Debug)]
 pub struct Monosynth<'a> {
     tuning: &'a Tuning,
     waveform: Waveform,
+    filter: LowPass,
     note: u8,
     velocity: u8,
     phase: u32,
@@ -139,23 +152,25 @@ impl<'a> Monosynth<'a> {
         Self {
             tuning,
             waveform: Waveform::Sine,
+            filter: LowPass::OPEN,
             note: 69,
             velocity: 0,
             phase: 0,
-            step: tuning.0[69],
+            step: tuning.steps[69],
         }
     }
 
     fn apply(&mut self, message: Message) {
         match message {
             Message::Waveform(shape) => self.waveform = shape,
+            Message::CutoffHz(hz) => self.filter.set_cutoff(hz, self.tuning.sample_period),
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
                 if self.note == note {
                     self.velocity = 0;
                 }
             }
             Message::NoteOn { note, velocity } => {
-                if let Some(&step) = self.tuning.0.get(usize::from(note)) {
+                if let Some(&step) = self.tuning.steps.get(usize::from(note)) {
                     self.note = note;
                     self.step = step;
                     self.velocity = if step == 0 { 0 } else { velocity.min(127) };
@@ -166,12 +181,14 @@ impl<'a> Monosynth<'a> {
 
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "A Q15 waveform times a 7-bit velocity fits in i32."
+        reason = "A signed 24-bit sample times a 7-bit velocity fits in i32."
     )]
     fn render<S: FromSample<i32>>(&mut self, output: &mut [S]) {
         for sample in output {
             // Preserve the FM-1 demo's Q23 level (about -24 dBFS at full velocity).
-            let q23 = (self.waveform.sample(self.phase) * i32::from(self.velocity)) >> 3;
+            let oscillator = self.waveform.sample(self.phase) << 8;
+            let filtered = self.filter.process(oscillator);
+            let q23 = (filtered * i32::from(self.velocity)) >> 11;
             *sample = S::from_sample_(q23 << 8);
             self.phase = self.phase.wrapping_add(self.step);
         }
