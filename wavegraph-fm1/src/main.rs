@@ -1,4 +1,4 @@
-//! WaveGraph monosynth instrument for the FM-1.
+//! WaveGraph monosynth and 303 firmware for the FM-1.
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 
@@ -7,6 +7,8 @@ fn main() {
     eprintln!("wavegraph-fm1 runs on the FM-1 target");
 }
 
+#[cfg(any(target_os = "none", test))]
+mod bass;
 #[cfg(any(target_os = "none", test))]
 mod capture;
 #[cfg(target_os = "none")]

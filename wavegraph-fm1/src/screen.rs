@@ -3,6 +3,7 @@
 use crate::{
     capture::{FLAT, HEIGHT, Trace, WIDTH},
     firmware::Frame,
+    instrument::Part,
 };
 use embedded_graphics_core::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
@@ -26,6 +27,15 @@ const STYLE: WaveformStyle = WaveformStyle {
     grid_x: GRID,
     grid_y: GRID,
 };
+const SILVER: WaveformStyle = WaveformStyle {
+    background: Rgb565::new(24, 49, 24),
+    grid: Rgb565::new(21, 43, 21),
+    center: Rgb565::new(17, 35, 17),
+    trace: Rgb565::new(4, 8, 4),
+    grid_x: GRID,
+    grid_y: GRID,
+};
+const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
 const BOOT_STYLE: WaveformStyle = WaveformStyle {
     trace: Rgb565::new(3, 34, 8),
     ..STYLE
@@ -59,13 +69,13 @@ fn logo_y(tick: u32) -> i16 {
     from + (i32::from(to - from) * weight as i32 / duration.pow(3) as i32) as i16
 }
 
-fn paper(x: usize, y: usize) -> Rgb565 {
+fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
     if y == WIDTH / 2 {
-        STYLE.center
+        style.center
     } else if x.is_multiple_of(usize::from(GRID)) || y.is_multiple_of(usize::from(GRID)) {
-        STYLE.grid
+        style.grid
     } else {
-        STYLE.background
+        style.background
     }
 }
 
@@ -74,6 +84,7 @@ pub(super) struct Screen {
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
     beam: Beam,
+    page: Option<Part>,
 }
 
 impl Screen {
@@ -86,6 +97,7 @@ impl Screen {
             plot: PLOT.init_with(|| Waveform::new(0, 0).expect("panel-sized scope")),
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
+            page: None,
             beam: Beam {
                 old_head: None,
                 old_trace: FLAT,
@@ -122,8 +134,6 @@ impl Screen {
             Clock::delay(10.millis()).await;
         }
         Clock::delay(500.millis()).await;
-        // Changing the style invalidates the entire plot, including the logo.
-        self.plot.set_style(STYLE);
         Ok(())
     }
 
@@ -132,46 +142,79 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         frame: &Frame,
-        cutoff_hz: u16,
         late: bool,
     ) -> Result<(), Error> {
-        let trace = frame.trace.map(|y| y + TOP as u8);
-        self.plot.paint_async(lcd, &trace, clock).await?;
-        if self.beam.old_head.is_none() {
-            // The live trace is confined to rows 24..216, clear the two label rows once.
-            for y in [0, SIZE - 16] {
-                lcd.fill_rect(0, y, SIZE, 16, STYLE.background.into_storage())?;
+        let labels = frame.labels;
+        let bass = labels.focus == Part::Bass;
+        let (style, ink, muted, bright) = if bass {
+            (SILVER, OXIDE_RED, Rgb565::new(7, 15, 8), SILVER.trace)
+        } else {
+            (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
+        };
+        let changed_page = self.page != Some(labels.focus);
+        if changed_page {
+            self.plot.set_style(style);
+            *self.text = TextGrid::with_background(style.background);
+            self.beam.old_head = None;
+            self.page = Some(labels.focus);
+        }
+        // Leave the silver faceplate a second footer row for the last turned knob.
+        let trace = if bass {
+            frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
+        } else {
+            frame.trace
+        };
+        self.plot
+            .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
+            .await?;
+        if changed_page {
+            let footer = if bass { 32 } else { 16 };
+            for (y, height) in [(0, 16), (SIZE - footer, footer)] {
+                lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
         self.beam
-            .paint(lcd, clock, &frame.trace, self.strip)
+            .paint(lcd, clock, &trace, self.strip, style, labels.focus)
             .await?;
-        let labels = frame.labels;
-        self.text.text(0, 0, b"CUT", palette::MUTED);
-        self.text
-            .number(4, 0, 5, u32::from(cutoff_hz), palette::GREEN);
-        self.text.text(9, 0, b"HZ", palette::MUTED);
+        if bass {
+            self.text.text(0, 0, b"TB-303", ink);
+        } else {
+            self.text.text(0, 0, b"CUT", muted);
+            self.text
+                .number(4, 0, 5, u32::from(labels.voice.cutoff_hz()), ink);
+            self.text.text(9, 0, b"HZ", muted);
+        }
         self.text.text(
-            12,
+            if bass { 11 } else { 12 },
             0,
             if labels.half_gain { b"HALF" } else { b"DRY " },
-            palette::MUTED,
+            muted,
         );
-        self.text.text(
-            17,
-            0,
-            if labels.voice_tap { b"VCF" } else { b"DAC" },
-            palette::MUTED,
-        );
-        self.text.text(0, 14, labels.voice.label(), palette::GREEN);
-        self.text
-            .text(8, 14, labels.voice.note_name(), palette::WHITE);
-        if late {
-            self.text.text(11, 14, b"LATE", palette::RED);
+        let source = match (labels.voice_tap, labels.focus) {
+            (false, _) => b"DAC",
+            (true, Part::Mono) => b"VCF",
+            (true, Part::Bass) => b"SRC",
+        };
+        self.text.text(17, 0, source, muted);
+        if bass {
+            let (name, value, units) = labels.bass.readout();
+            self.text.text(0, 13, name, muted);
+            self.text.number(10, 13, 4, u32::from(value), ink);
+            self.text.text(15, 13, units, muted);
         }
-        self.text.text(16, 14, b"V", palette::MUTED);
-        let velocity = labels.voice.note.map_or(0, |note| u32::from(note.velocity));
-        self.text.number(17, 14, 3, velocity, palette::GREEN);
+        self.text.text(0, 14, labels.voice.label(labels.focus), ink);
+        self.text.text(8, 14, labels.voice.note_name(), bright);
+        if late {
+            self.text
+                .text(11, 14, b"LATE", if bass { OXIDE_RED } else { palette::RED });
+        }
+        self.text.text(16, 14, b"V", muted);
+        let velocity = labels
+            .voice
+            .gate
+            .note
+            .map_or(0, |note| u32::from(note.velocity));
+        self.text.number(17, 14, 3, velocity, ink);
         self.text.paint_async(lcd, clock).await
     }
 }
@@ -210,7 +253,7 @@ async fn move_logo(
                 } else if (a..=b).contains(&y) {
                     BOOT_STYLE.trace
                 } else {
-                    paper(x, y)
+                    paper(BOOT_STYLE, x, y)
                 };
                 pixels[dy * LOGO_W + dx] = color.to_be_bytes();
             }
@@ -243,7 +286,15 @@ fn age(head: usize, x: usize) -> usize {
 }
 
 // The brightest point leads. Its one-pixel halo disappears before the tail.
-fn phosphor(age: usize) -> (Rgb565, Option<Rgb565>) {
+fn phosphor(part: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
+    if part == Part::Bass {
+        return match age {
+            0..=3 => (Rgb565::new(24, 10, 3), Some(Rgb565::new(21, 34, 16))),
+            4..=9 => (OXIDE_RED, None),
+            10..TRAIL => (Rgb565::new(8, 9, 5), None),
+            _ => (SILVER.trace, None),
+        };
+    }
     match age {
         0..=3 => (Rgb565::new(26, 63, 23), Some(Rgb565::new(9, 40, 10))),
         4..=9 => (Rgb565::new(18, 61, 17), Some(Rgb565::new(5, 28, 7))),
@@ -260,6 +311,8 @@ impl Beam {
         clock: &mut Clock,
         trace: &Trace,
         scratch: &mut [[u8; 2]],
+        style: WaveformStyle,
+        part: Part,
     ) -> Result<(), Error> {
         let head = self.old_head.map_or(0, |x| (x + BAND) % WIDTH);
         let mut lcd = lcd.as_async(clock)?;
@@ -286,9 +339,9 @@ impl Beam {
             for dx in 0..BAND {
                 let x = x0 + dx;
                 let (a, b) = segment(trace, x);
-                let (ink, halo) = phosphor(age(head, x));
+                let (ink, halo) = phosphor(part, age(head, x));
                 for y in top..=bottom {
-                    let paper = paper(x, usize::from(TOP) + y);
+                    let paper = paper(style, x, usize::from(TOP) + y);
                     let color = if (a..=b).contains(&y) {
                         ink
                     } else if y + 1 == a || y == b + 1 {

@@ -4,27 +4,45 @@
     reason = "RTICX generates public task traits and initializers."
 )]
 
-use crate::{capture::Trace, instrument::Voice};
+use crate::{
+    bass::Controls,
+    capture::Trace,
+    instrument::{Part, Parts, Voice},
+};
 use fm1_audio::MasterLevel;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Settings {
-    voice: Voice,
+    parts: Parts,
+    focus: Part,
     master: MasterLevel,
     voice_tap: bool,
 }
 
 impl Settings {
     const INITIAL: Self = Self {
-        voice: Voice::INITIAL,
+        parts: Parts::INITIAL,
+        focus: Part::Mono,
         master: MasterLevel::MIN,
         voice_tap: false,
     };
+
+    fn labels(self, half_gain: bool) -> Labels {
+        Labels {
+            voice: self.parts.voices[self.focus as usize],
+            focus: self.focus,
+            bass: self.parts.bass,
+            half_gain,
+            voice_tap: self.voice_tap,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Labels {
     pub(super) voice: Voice,
+    pub(super) focus: Part,
+    pub(super) bass: Controls,
     pub(super) half_gain: bool,
     pub(super) voice_tap: bool,
 }
@@ -40,7 +58,7 @@ mod app {
     use super::{Frame, Labels, Settings};
     use crate::{
         capture::{Capture, FLAT},
-        instrument::{HeldNotes, Instrument, Note, Programs, Voice},
+        instrument::{BUS_COUNT, Gate, Instrument, Keyboard, Message, Node, Note, Part, Programs},
         screen::Screen,
     };
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
@@ -63,10 +81,11 @@ mod app {
         Process,
         control::{Controller, EditQueue, Host},
     };
-    use wavegraph_monosynth::{Message, Monosynth, Tuning};
+    use wavegraph_303::Tb303;
+    use wavegraph_monosynth::{Monosynth, Tuning};
 
     const SCANS: usize = 8;
-    type PanelFrame = (Scan, Option<Note>);
+    type PanelFrame = (Scan, Part, [Gate; 2]);
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
 
     pub struct ScopeBlock {
@@ -88,13 +107,19 @@ mod app {
         let board = Board::take().expect("CPU0 board");
         let timer = Clock::start(board.timers.with_panel_scan_rate());
         let clock = timer.clock();
-        static SYNTH: StaticCell<Monosynth> = StaticCell::new();
+        static PLAYERS: StaticCell<[Node; 2]> = StaticCell::new();
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 1];
+        type Nodes = [&'static mut dyn Process<Message, I24>; 2];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
-        let nodes = NODES.init_with(|| [SYNTH.init_with(|| Monosynth::new(&TUNING))]);
-        let instrument = programs.bind(nodes).expect("monosynth ports");
+        let [mono, bass] = PLAYERS.init_with(|| {
+            [
+                Node::Mono(Monosynth::new(&TUNING)),
+                Node::Bass(Tb303::new(FRAME_RATE.0 as f32 / FRAME_RATE.1 as f32)),
+            ]
+        });
+        let nodes = NODES.init_with(|| [mono, bass]);
+        let instrument = programs.bind(nodes).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
         let (editor, host) = EDITS.take().split();
@@ -107,11 +132,7 @@ mod app {
                 leds,
                 frame: Frame {
                     trace: FLAT,
-                    labels: Labels {
-                        voice: Voice::INITIAL,
-                        half_gain: false,
-                        voice_tap: false,
-                    },
+                    labels: Settings::INITIAL.labels(false),
                 },
                 late: false,
             },
@@ -120,7 +141,7 @@ mod app {
                     output: Output::start(board.audio).expect("audio clock"),
                     instrument,
                     host,
-                    buses: [[I24::default(); OUTPUT_FRAMES]; 2],
+                    buses: [[I24::default(); OUTPUT_FRAMES]; BUS_COUNT],
                     first_frame: 0,
                     tap,
                     gap: false,
@@ -129,7 +150,7 @@ mod app {
                 panel: Panel {
                     timer,
                     controls: board.panel.into_touch_controls(),
-                    held: HeldNotes::default(),
+                    keyboard: Keyboard::default(),
                     scans,
                     leds,
                     octave_since: None,
@@ -164,7 +185,7 @@ mod app {
     struct Panel {
         timer: Timer5,
         controls: TouchControls,
-        held: HeldNotes<{ PianoKey::COUNT as usize }>,
+        keyboard: Keyboard<{ PianoKey::COUNT as usize }>,
         scans: Sender<'static, PanelFrame, SCANS>,
         leds: Leds,
         octave_since: Option<u32>,
@@ -186,18 +207,25 @@ mod app {
             } else {
                 self.octave_since = None;
             }
-            for key in PianoKey::all() {
-                let number = 53 + key.index(); // The leftmost key is F3.
-                if scan.released(key) {
-                    self.held.release(number);
-                } else if scan.pressed(key) {
-                    if let Some(velocity) = touch.velocity(key) {
-                        self.held.press(Note { number, velocity });
-                    }
+            self.keyboard
+                .focus
+                .turn_preset(scan.encoder_delta(Encoder::Presets));
+            // Release first so a key swap in the same sweep can start a new phrase.
+            for key in PianoKey::all().filter(|&key| scan.released(key)) {
+                self.keyboard.release(53 + key.index());
+            }
+            for key in PianoKey::all().filter(|&key| scan.pressed(key)) {
+                if let Some(velocity) = touch.velocity(key) {
+                    self.keyboard.press(Note {
+                        number: 53 + key.index(),
+                        velocity,
+                    });
                 }
             }
-            // Every sweep carries the current note, even after a full queue dropped an edge.
-            let _ = self.scans.try_send((scan, self.held.current()));
+            // Absolute ownership and both gates survive a dropped scan, including note-offs.
+            let _ = self
+                .scans
+                .try_send((scan, self.keyboard.focus, self.keyboard.gates()));
         }
     }
 
@@ -212,16 +240,27 @@ mod app {
     impl RticAsyncTask for Input {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
-            while let Ok((scan, note)) = self.input.recv().await {
+            while let Ok((scan, focus, gates)) = self.input.recv().await {
                 let before = self.settings;
-                let voice = &mut self.settings.voice;
-                voice.note = note;
-                voice.turn_preset(scan.encoder_delta(Encoder::Presets));
-                voice.turn_cutoff(scan.encoder_delta(Encoder::Knob1));
+                self.settings.focus = focus;
+                for (voice, gate) in self.settings.parts.voices.iter_mut().zip(gates) {
+                    voice.gate = gate;
+                }
+                let voice = &mut self.settings.parts.voices[focus as usize];
+                voice.turn_waveform(focus, scan.encoder_delta(Encoder::Algorithm));
                 voice.transpose = voice
                     .transpose
                     .saturating_add(scan.encoder_delta(Encoder::Select))
                     .clamp(-12, 12);
+                let knobs = [
+                    Encoder::Knob1,
+                    Encoder::Knob2,
+                    Encoder::Knob3,
+                    Encoder::Knob4,
+                ];
+                self.settings
+                    .parts
+                    .turn_knobs(focus, knobs.map(|encoder| scan.encoder_delta(encoder)));
                 if scan.pressed(Button::Sel) {
                     self.settings.voice_tap = !self.settings.voice_tap;
                 }
@@ -252,7 +291,7 @@ mod app {
     struct Audio {
         output: Output,
         instrument: Instrument<'static>,
-        buses: [[I24; OUTPUT_FRAMES]; 2],
+        buses: [[I24; OUTPUT_FRAMES]; BUS_COUNT],
         host: Host<'static, bool>,
         first_frame: u64,
         tap: Sender<'static, ScopeBlock, 2>,
@@ -272,7 +311,7 @@ mod app {
                 );
                 let mono = self
                     .instrument
-                    .render(settings.voice, &mut self.buses)
+                    .render(settings.parts, &mut self.buses)
                     .expect("fixed patch");
                 fm1_audio::mix_stereo(out, mono, mono);
             });
@@ -284,15 +323,11 @@ mod app {
             if result == Refill::Written && !self.tap.is_full() {
                 let block = ScopeBlock {
                     samples: if settings.voice_tap {
-                        self.buses[0].map(I24::inner)
+                        self.buses[settings.focus.tap()].map(I24::inner)
                     } else {
                         core::array::from_fn(|i| self.output.block()[i][0])
                     },
-                    labels: Labels {
-                        voice: settings.voice,
-                        half_gain: self.instrument.half_gain,
-                        voice_tap: settings.voice_tap,
-                    },
+                    labels: settings.labels(self.instrument.half_gain),
                     gap: self.gap,
                 };
                 self.gap = self.tap.try_send(block).is_err();
@@ -317,15 +352,20 @@ mod app {
             while let Ok(block) = self.blocks.recv().await {
                 let changed = self.previous.replace(block.labels) != Some(block.labels);
                 let silent = block.samples.iter().all(|&s| s == 0);
-                if let Some(trace) = self
+                let trace = self
                     .capture
-                    .push(&block.samples, silent, changed || block.gap)
-                {
+                    .push(&block.samples, silent, changed || block.gap);
+                if changed || trace.is_some() {
                     self.shared().frame.lock(|frame| {
-                        *frame = Frame {
-                            trace,
-                            labels: block.labels,
+                        // Publish the new page even while waiting for its first trigger.
+                        if let Some(trace) = trace {
+                            frame.trace = trace;
+                        } else if frame.labels.focus != block.labels.focus
+                            || frame.labels.voice_tap != block.labels.voice_tap
+                        {
+                            frame.trace = FLAT;
                         }
+                        frame.labels = block.labels;
                     });
                 }
             }
@@ -340,7 +380,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, late, settings])]
+    #[async_task(priority = 1, shared = [frame, late])]
     struct Draw {
         port: Option<DisplayPort>,
         clock: Clock,
@@ -360,10 +400,8 @@ mod app {
             loop {
                 let frame = self.shared().frame.lock(|f| *f);
                 let late = self.shared().late.lock(|late| *late);
-                // Keep the knob readout live while the scope waits for a zero crossing.
-                let cutoff_hz = self.shared().settings.lock(|s| s.voice.cutoff_hz());
                 if screen
-                    .paint(&mut lcd, &mut self.clock, &frame, cutoff_hz, late)
+                    .paint(&mut lcd, &mut self.clock, &frame, late)
                     .await
                     .is_err()
                 {

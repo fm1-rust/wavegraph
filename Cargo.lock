@@ -818,6 +818,7 @@ dependencies = [
  "micromath",
  "static_cell",
  "wavegraph",
+ "wavegraph-303",
  "wavegraph-monosynth",
  "wavegraph-sample",
 ]
