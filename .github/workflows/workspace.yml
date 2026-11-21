@@ -23,6 +23,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --locked
 
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.85.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" nightly --profile minimal --no-self-update
+      - name: Resolve minimal dependency versions
+        run: |
+          rm Cargo.lock
+          cargo +nightly generate-lockfile -Z minimal-versions
+      - run: cargo build --workspace --all-features --locked
+
   clippy:
     runs-on: ubuntu-latest
     steps:
