@@ -8,5 +8,10 @@ repository = "https://github.com/fm1-rust/wavegraph"
 categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "puredata"]
 
+[dev-dependencies]
+# The published dasp_sample needs nightly without std. Exercise it in host tests.
+dasp_sample = "0.11"
+heapless = { version = "0.9.4", default-features = false }
+
 [lints]
 workspace = true
