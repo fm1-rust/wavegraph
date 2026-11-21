@@ -29,7 +29,9 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal --target thumbv7em-none-eabihf --no-self-update
-      - name: Run host tests
-        run: cargo +stable test -p wavegraph-303 --all-features --locked
+      - name: Test the native DSP
+        run: cargo +stable test -p wavegraph-303 --locked
+      - name: Compare with the mechanical translation
+        run: cargo +stable test -p wavegraph-303 --features raw --locked
       - name: Build the no_std library
         run: cargo +stable build -p wavegraph-303 --lib --release --no-default-features --target thumbv7em-none-eabihf --locked
