@@ -2,23 +2,63 @@
 
 [![Build status][ci-badge]][ci]
 
-WaveGraph is a `no_std` crate for building Pure Data-like audio patches.
-A patch object implements `Process` and declares its inlets and outlets in
-left-to-right order. A signal cord lends an upstream sample buffer to a
-downstream inlet. A message cord delivers a payload at a frame offset.
-Objects can process signals, messages, or both.
+WaveGraph runs compiled audio patches on caller-owned buffers without a heap.
+It re-exports `Event`, `Op`, `Port`, `Process`, and `ProcessContext` from
+[`wavegraph-core`][core]. Instrument crates depend on that interface directly.
+An application supplies instances and selects the sample format and DSP
+implementation.
 
-For example, a gain object can take a signal on inlet 0 and gain changes on
-inlet 1. A change at frame 97 affects sample 97. The same interface lets a
-sequencer send a note with accent and slide to a 303, or a mixer read several
-mono signals. The host owns the patch cords, schedule and buffers.
+## Rendering a compiled patch
 
-Patches select their message and sample types. For example, a message enum
-can represent bangs, numbers, symbols and lists. Signal samples default to
-`f32`, with 1.0 representing nominal full scale. A processor can use
-[`wavegraph_sample::Sample`][sample] for format-generic arithmetic. The
-[patch integration test][patch] runs the same pair of connected objects with
-`f32` and signed 24-bit PCM and stores messages in a fixed-capacity `heapless::Vec`.
+The following program plays the waveform monosynth through a half-gain stage.
+The note starts at frame 2. Its state carries over to the next block.
+
+```rust
+use wavegraph::{Event, bytecode::Program, dsp::Software};
+use wavegraph_monosynth::{Message, Monosynth, Tuning, Waveform};
+use wavegraph_sample::I24;
+
+const TUNING: Tuning = Tuning::new(24_000_000, 544).unwrap();
+let mut voice = Monosynth::new(&TUNING);
+let program = [
+    1,          // version
+    1, 0, 0, 1, // call object 0 with no signal inputs and one output (bus 0)
+    2, 0, 64,   // scale bus 0 by 64/128, producing bus 1
+];
+let mut objects: [&mut dyn wavegraph::Process<Message, I24>; 1] = [&mut voice];
+let schedule = Program::<2>::decode(&program).unwrap();
+let mut patch = schedule.bind(&mut objects).unwrap();
+let notes = [
+    Event { frame: 2, port: 0, message: Message::Waveform(Waveform::Square) },
+    Event { frame: 2, port: 0, message: Message::NoteOn { note: 69, velocity: 100 } },
+];
+let mut buses = [[I24::default(); 256]; 2];
+patch.render(&mut Software, &mut buses, &[&notes], |_, event| Err(event)).unwrap();
+assert_eq!(buses[1][1].inner(), 0);
+assert!(buses[1][2].inner() > 0);
+```
+
+The [bytecode module][bytecode] specifies the wire format. Load a plan outside
+the audio callback. Each call to `render` executes it once per block. Control
+events retain their frame offsets and ties retain their order. A second program can be
+decoded while the first plays. At a block boundary, `Patch::replace` validates
+its object layouts and buffer requirements and switches the schedule. The
+instances retain their state.
+
+## Platform DSP
+
+`dsp::Software` provides gain and saturating mix for `f32` and signed 24-bit
+PCM (`I24`). A board adapter can depend on `wavegraph-core` alone and implement
+`wavegraph_core::Dsp`. Pass it to
+`render` to select optimized block operations. Instruments can supply native
+processors through the same object table. The application owns the audio
+peripheral and its refill timing.
+
+For the FM-1, use the BSP's rational `FRAME_RATE` for tuning and render
+`BLOCK_FRAMES` at a time. Write `I24::inner()` into the left and right words
+of the stereo output block and submit it with `Stream::try_write`. Retain the
+rendered block on `WouldBlock` so a retry does not advance the synth twice.
+See the [FM-1 audio driver][fm1].
 
 ## License
 
@@ -26,6 +66,7 @@ Licensed under the [MIT License][mit].
 
 [ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
 [ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
-[sample]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-sample/src/lib.rs
-[patch]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/tests/patch.rs
+[core]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph-core
+[bytecode]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-core/src/bytecode.rs
+[fm1]: https://github.com/fm1-rust/fm1-rust/blob/main/fm1/src/audio.rs
 [mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE

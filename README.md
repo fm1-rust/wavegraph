@@ -1,21 +1,26 @@
 # WaveGraph
 
-WaveGraph is a Rust interface for building Pure Data-like audio patches on
-embedded systems. Patch objects process blocks of samples and exchange control
-messages at frame offsets within each block. The host connects the objects,
-supplies their buffers and determines their processing order.
+WaveGraph runs Pure Data-like audio patches on embedded systems. The engine
+interprets a compiled signal graph and processes frame-timed events using
+caller-owned buffers. Each instrument is a separate crate built on the same
+patch object interface.
 
 ## Crates
 
 | Crate | Description | crates.io | Documentation | Build status |
 | --- | --- | --- | --- | --- |
-| [`wavegraph`](wavegraph/) | Patch objects, signal ports and control messages | Unpublished | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
-| [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | Unpublished | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
+| [`wavegraph`](wavegraph/) | DSP and bytecode interpreter | [crates.io](https://crates.io/crates/wavegraph) | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-monosynth`](wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
 
-Both libraries support Rust 1.85 and build without `std` or a heap allocator.
+The libraries support Rust 1.85 and build without `std` or a heap allocator.
 To browse their API documentation locally, run `cargo doc --workspace --no-deps --open`.
 
 ## Patch example
+
+The [engine example](wavegraph/README.md#rendering-a-compiled-patch) runs the
+monosynth from bytecode at the FM-1 sample rate.
 
 The [patch integration test](wavegraph/tests/patch.rs) connects two gain objects.
 One cord carries audio samples and another carries gain changes. Both objects
@@ -28,7 +33,7 @@ cargo +stable test -p wavegraph --test patch --locked
 
 ## License
 
-The `wavegraph` crate is licensed under the [MIT License](wavegraph/LICENSE).
+The engine, core interface and monosynth crates are licensed under the [MIT License](wavegraph/LICENSE).
 `wavegraph-sample` vendors RustAudio's [`dasp_sample` implementation][upstream]
 and is licensed under either the [MIT License](wavegraph-sample/LICENSE-MIT) or
 the [Apache License, Version 2.0](wavegraph-sample/LICENSE-APACHE) at your option.

@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'wavegraph/v*'
+      - 'wavegraph-core/v*'
+      - 'wavegraph-monosynth/v*'
       - 'wavegraph-sample/v*'
 
 permissions:
