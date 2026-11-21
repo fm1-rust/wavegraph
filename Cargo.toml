@@ -2,8 +2,14 @@
 resolver = "3"
 members = [
     "wavegraph",
+    "wavegraph-core",
+    "wavegraph-monosynth",
     "wavegraph-sample"
 ]
+
+[workspace.dependencies]
+wavegraph-core = { version = "0.1", path = "wavegraph-core" }
+wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"
@@ -32,6 +38,3 @@ trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_lifetimes = "warn"
 unused_qualifications = "warn"
-
-[patch.crates-io]
-wavegraph-sample = { path = "wavegraph-sample/" }

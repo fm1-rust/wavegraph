@@ -9,9 +9,14 @@ keywords = ["audio", "dsp", "no-alloc", "puredata"]
 edition = "2024"
 rust-version = "1.85"
 
+[dependencies]
+arrayvec = { version = "0.7.6", default-features = false }
+wavegraph-core.workspace = true
+wavegraph-sample.workspace = true
+
 [dev-dependencies]
 heapless = { version = "0.9.4", default-features = false }
-sample = { package = "wavegraph-sample", version = "0.1", default-features = false }
+wavegraph-monosynth = { version = "0.1", path = "../wavegraph-monosynth" }
 
 [lints]
 workspace = true
