@@ -51,6 +51,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavegraph-303"
+version = "0.0.0"
+
+[[package]]
 name = "wavegraph-core"
 version = "0.1.0"
 

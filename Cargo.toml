@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "wavegraph",
+    "wavegraph-303",
     "wavegraph-core",
     "wavegraph-monosynth",
     "wavegraph-sample"
