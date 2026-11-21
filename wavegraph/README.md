@@ -79,11 +79,23 @@ See the [FM-1 audio driver][fm1].
 
 ## License
 
-Licensed under the [MIT License][mit].
+Licensed under either of
+
+- [Apache License, Version 2.0][apache]
+- [MIT License][mit]
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, you license any contribution you
+intentionally submit for inclusion in this work (as defined in the Apache-2.0
+license) under both licenses above, without additional terms or conditions.
 
 [ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
 [ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
 [core]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph-core
 [bytecode]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-core/src/bytecode.rs
 [fm1]: https://github.com/fm1-rust/fm1-rust/blob/main/fm1/src/audio.rs
-[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE
+[apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE-APACHE
+[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE-MIT

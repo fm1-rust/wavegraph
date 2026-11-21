@@ -32,17 +32,9 @@ and signed 24-bit PCM.
 cargo +stable test -p wavegraph --test patch --locked
 ```
 
-## License
-
-The engine, core interface and monosynth crates are licensed under the [MIT License](wavegraph/LICENSE).
-`wavegraph-sample` vendors RustAudio's [`dasp_sample` implementation][upstream]
-and is licensed under either the [MIT License](wavegraph-sample/LICENSE-MIT) or
-the [Apache License, Version 2.0](wavegraph-sample/LICENSE-APACHE) at your option.
-
 [wavegraph-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
 [wavegraph-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
 [303-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml/badge.svg?branch=main&event=push
 [303-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml
 [sample-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml/badge.svg?branch=main&event=push
 [sample-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml
-[upstream]: wavegraph-sample/README.md#upstream

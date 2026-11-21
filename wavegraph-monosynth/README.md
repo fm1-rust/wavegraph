@@ -14,8 +14,24 @@ The [engine example][engine] plays the synth from a compiled patch.
 
 ## License
 
-Licensed under the [MIT License][mit].
+Licensed under either of
+
+- [Apache License, Version 2.0][apache]
+- [MIT License][mit]
+
+at your option.
+
+The oscillator adapted from the [FM-1 waveform example][voice] carries the
+FM-1 Rust Developers' [MIT notice][mit]. Retain that notice with copies or
+substantial portions of the oscillator under either option.
+
+### Contribution
+
+Unless you explicitly state otherwise, you license any contribution you
+intentionally submit for inclusion in this work (as defined in the Apache-2.0
+license) under both licenses above, without additional terms or conditions.
 
 [voice]: https://github.com/fm1-rust/fm1-rust/blob/a4a770c8743cee972cfbfb5478145e5198be4550/fm1-rticx/examples/rticx-waveform/voice.rs
 [engine]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph#rendering-a-compiled-patch
-[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE
+[apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-APACHE
+[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-MIT
