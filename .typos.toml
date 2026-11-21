@@ -1,7 +1,3 @@
-[files]
-# Keep the imported chompi-x0x C++ sources identical to upstream.
-extend-exclude = ["wavegraph-303/src/**/*.h", "wavegraph-303/src/**/*.cpp"]
-
 [type.rust.extend-identifiers]
 # Upstream's macro implements multiple From conversions.
 impl_froms = "impl_froms"
