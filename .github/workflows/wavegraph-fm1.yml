@@ -5,6 +5,7 @@ on:
     paths: &firmware-paths
       - 'wavegraph-fm1/**'
       - 'wavegraph/**'
+      - 'wavegraph-303/**'
       - 'wavegraph-core/**'
       - 'wavegraph-monosynth/**'
       - 'wavegraph-sample/**'

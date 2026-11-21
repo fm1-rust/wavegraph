@@ -1,43 +1,43 @@
 # WaveGraph for the FM-1
 
-Play a four-waveform monosynth through the WaveGraph bytecode engine on the
-M-VAVE FM-1. The WaveGraph wordmark drops across a generated waveform, swings
-past its centerline, and settles there for half a second before the live scope
-appears. The synth starts silent with a sine wave selected. You can play
-during the splash.
+Play the [monosynth](../wavegraph-monosynth/) and [303 bass synth](../wavegraph-303/)
+together on the M-VAVE FM-1. The firmware starts on the green monosynth page
+with a sine selected and the cutoff at 5 kHz. Turn PRESETS one click in
+either direction for the silver TB-303 page. Both instruments are playable
+during the boot animation.
 
-![Emulator capture of the boot logo, followed by the live monosynth and scope](assets/monosynth.gif)
+| Monosynth | TB-303 |
+| --- | --- |
+| ![Boot logo and green monosynth scope](assets/monosynth.gif) | ![Emulator capture of the silver TB-303 page during play](assets/tb-303.png) |
 
 | Control | Action |
 | --- | --- |
-| Piano keys | Play F3 to G5 at strike velocity. The newest held key sounds. |
-| PRESETS encoder | Cycle through sine, triangle, sawtooth and square. |
-| SELECT encoder | Transpose by semitones, up to one octave either way. |
-| Knob 1 | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. |
-| MASTER | Set output volume. |
-| PLAY/STOP | Unassigned (reserved for a future sequencer). |
-| FX | Switch between the dry patch and a half-gain stage. |
-| SEL button | Switch the scope between the filtered voice (VCF) and the post-MASTER output (DAC). |
+| PRESETS encoder | Select the instrument for new key presses, panel edits and the display. |
+| Piano keys | Play F3 to G5. Each instrument sounds its most recently pressed key. |
+| ALGORITHM encoder | Monosynth cycles through sine, triangle, sawtooth and square. The 303 switches between saw and square. |
+| SELECT encoder | Transpose the selected instrument up or down by up to 12 semitones. |
+| Knob 1 on the monosynth | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
+| Knobs 1–4 on the 303 | Set cutoff, resonance, envelope modulation and decay. The silver panel shows the last knob's value. |
+| MASTER | Set the volume of the stereo mix. |
+| PLAY/STOP | Reserved for a future sequencer. |
+| FX | Switch the mix between dry and half gain. |
+| SEL button | Switch the scope between the selected voice before FX and MASTER (VCF on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
 | Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
 
-Overlap two keys and release the newer one to hear the earlier note at its
-original velocity. Releasing the last key silences the voice. The footer shows
-the sounding pitch and its velocity (V).
-
-Select sawtooth, hold a key and turn Knob 1 counterclockwise to hear the
-upper harmonics fade. The header shows the cutoff in Hz, starting at 5000.
-
-While a note is sounding, press FX. The DAC trace shrinks to half its height.
-Press SEL to see the filtered voice at the key's original level while the output
-continues at half gain.
+Hold a monosynth note, turn PRESETS, then play a different key for the 303.
+Both notes sound until you release their respective keys. Within each part,
+releasing the newest key recalls the previous key and its strike velocity.
+On the 303, strikes at velocity 96 and above trigger accent. Overlapping keys
+slide, and a fresh strike after release restarts the envelopes. Turn knob 1 on
+either page to adjust that instrument’s cutoff while both play.
 
 ## Audio and display
 
-A single [Monosynth](../wavegraph-monosynth/) supplies both stereo channels.
-The ALNK0 interrupt renders 128 frames at a time. The input task awaits FX
-edits through WaveGraph's `EditQueue`. The audio task changes the program
-between blocks, keeps the oscillator's phase, and acknowledges the edit when
-the first block using the new program is submitted to DMA.
+Every 128-frame ALNK0 block calls both persistent WaveGraph nodes. The graph
+trims the 303 to quarter gain, adds both voices, and sends the mix to both
+stereo channels. FX uses the async `EditQueue` to switch the gain stage
+between blocks. The edit is acknowledged when DMA accepts the first block
+using the new route.
 
 The scope captures 240 consecutive samples starting at a rising zero crossing.
 A two-block queue feeds an async observer. Missing blocks and routing changes
@@ -45,8 +45,9 @@ start a fresh trace. The trace labels travel with the samples. The cutoff
 readout follows the knob even while the scope waits for a trigger. A red LATE
 indicator latches if audio service misses its timing budget.
 
-Both screens use [fm1-graphics] to draw a waveform on a 24-pixel grid. The
-boot illustration combines two harmonics, with phase modulation. The logo
+The splash and instrument pages use [fm1-graphics] to draw a waveform on a
+24-pixel grid. The boot illustration combines two harmonics, with phase
+modulation. The logo
 slides over it in buffered RGB565 strips. During play, dirty tiles update the
 trace and a narrow phosphor sweep highlights it. Display DMA runs below audio
 and panel scanning. The 208 × 36 logo occupies 1,872 bytes in firmware.
