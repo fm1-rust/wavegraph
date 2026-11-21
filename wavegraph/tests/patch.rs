@@ -1,8 +1,8 @@
 //! A signal cord and a message cord connect two gain objects.
 use core::ops::Range;
 use heapless::Vec;
+use sample::{I24, Sample};
 use wavegraph::{Event, Port, Process, ProcessContext};
-use wavegraph_sample::{I24, Sample};
 
 struct Gain(f32);
 
