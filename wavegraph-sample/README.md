@@ -27,8 +27,19 @@ must also work without a global allocator.
 ## License
 
 Copyright (c) 2016 RustAudio Developers and (c) 2026 WaveGraph Developers.
-Licensed under either the [MIT License][mit] or the
-[Apache License, Version 2.0][apache] at your option.
+
+Licensed under either of
+
+- [Apache License, Version 2.0][apache]
+- [MIT License][mit]
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, you license any contribution you
+intentionally submit for inclusion in this work (as defined in the Apache-2.0
+license) under both licenses above, without additional terms or conditions.
 
 [ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml/badge.svg?branch=main&event=push
 [ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml
