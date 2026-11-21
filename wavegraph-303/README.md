@@ -1,7 +1,44 @@
 # wavegraph-303
 
-A heapless, `no_std` Rust implementation of the CHOMPI x0x bass voice and
-effects. `Voice::render_add` adds to a mono slice. `Drive::process` applies
+A heapless, `no_std` WaveGraph instrument based on the CHOMPI x0x bass voice.
+`Tb303` has one message inlet and one mono signal outlet. Notes carry accent
+and slide independently. A slide from an open gate preserves the envelopes,
+and a note-off releases only the current note. Notes and panel changes take
+effect immediately before their addressed frame, in delivery order.
+
+## Playing a patch
+
+This patch plays an accented note and then slides up a fifth at frame 53.
+It renders directly to the FM-1's signed 24-bit PCM format. An `f32` patch
+can use the same instrument and messages.
+
+```rust
+use wavegraph::{Event, Process, bytecode::Program, dsp::Software};
+use wavegraph_303::{Message, Tb303};
+use wavegraph_sample::I24;
+
+let mut bass = Tb303::new(24_000_000.0 / 544.0);
+let program = Program::<1>::decode(&[1, 1, 0, 0, 1])?; // Call object 0 -> bus 0.
+let mut objects: [&mut dyn Process<Message, I24>; 1] = [&mut bass];
+let mut patch = program.bind(&mut objects)?;
+let notes = [
+    Event { frame: 0, port: 0, message: Message::NoteOn { note: 36, accent: true, slide: false } },
+    Event { frame: 53, port: 0, message: Message::NoteOn { note: 43, accent: false, slide: true } },
+];
+let mut buses = [[I24::default(); 128]; 1];
+patch.render(&mut Software, &mut buses, &[&notes], |_, e| Err(e))?;
+# assert!(buses[0].iter().any(|s| s.inner() != 0));
+# Ok::<(), wavegraph::bytecode::Error>(())
+```
+
+Set `Tb303::params` before binding to customize the voice calibration. During
+playback, messages such as `Message::CutoffHz` and `Message::Resonance` change
+individual controls. The outlet carries the dry voice. Floating-point output
+preserves its headroom and PCM output saturates at the signed 24-bit limits.
+
+## Standalone voice and effects
+
+`Voice::render_add` adds to a mono slice. `Drive::process` applies
 CHOMPI's post-VCA, pedal-style overdrive in place, using only its own filter
 history. Each bassline can own a separate voice and drive.
 
@@ -33,8 +70,8 @@ updates its four cutoff coefficients every fourth frame, carrying that phase
 across blocks. A legato slide carries the envelopes across notes. Drive at
 or below 0.005 bypasses the signal and freezes its filter history.
 
-The default build depends only on `micromath`. It uses its floor for pitch
-and quantization and its exponential for envelope and filter coefficients.
+The default build uses `micromath`'s floor for pitch and quantization and its
+exponential for envelope and filter coefficients.
 Computing `1 - exp(-1/(τ·fs))` in that order preserves the upstream envelope
 rounding. The voice computes its sample-rate-only coefficients at construction.
 The filter uses a small logarithm series for the cutoff and a rational

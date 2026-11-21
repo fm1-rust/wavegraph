@@ -10,6 +10,7 @@ patch object interface.
 | Crate | Description | crates.io | Documentation | Build status |
 | --- | --- | --- | --- | --- |
 | [`wavegraph`](wavegraph/) | DSP and bytecode interpreter | [crates.io](https://crates.io/crates/wavegraph) | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-303`](wavegraph-303/) | Monophonic 303 bass synth with accent and slide | Unpublished | [Instrument guide](wavegraph-303/README.md) | [![Build status][303-build]][303-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-monosynth`](wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
@@ -40,6 +41,8 @@ the [Apache License, Version 2.0](wavegraph-sample/LICENSE-APACHE) at your optio
 
 [wavegraph-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
 [wavegraph-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
+[303-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml/badge.svg?branch=main&event=push
+[303-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml
 [sample-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml/badge.svg?branch=main&event=push
 [sample-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml
 [upstream]: wavegraph-sample/README.md#upstream

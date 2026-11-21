@@ -68,6 +68,9 @@ version = "0.0.0"
 dependencies = [
  "libm",
  "micromath",
+ "wavegraph",
+ "wavegraph-core",
+ "wavegraph-sample",
 ]
 
 [[package]]
