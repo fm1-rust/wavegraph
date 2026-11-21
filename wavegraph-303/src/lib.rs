@@ -7,6 +7,7 @@ mod drive;
 mod drum_fx;
 mod dsp;
 mod effects;
+mod instrument;
 mod reverb;
 mod voice;
 
@@ -14,6 +15,7 @@ pub use compressor::Compressor;
 pub use drive::Drive;
 pub use drum_fx::{DrumFx, DrumFxSettings};
 pub use effects::{Effects, EffectsSettings, LengthMismatch, StereoFrame};
+pub use instrument::{Message, Tb303, Waveform};
 pub use reverb::Reverb;
 pub use voice::{Voice, VoiceParams};
 

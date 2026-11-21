@@ -242,6 +242,15 @@ impl Voice {
 
     /// Add mono samples to the output, keeping oscillator and filter history between calls.
     pub fn render_add(&mut self, p: &VoiceParams, out: &mut [f32]) {
+        self.render_with(p, out, |dst, sample| *dst += sample);
+    }
+
+    pub(crate) fn render_with<S>(
+        &mut self,
+        p: &VoiceParams,
+        out: &mut [S],
+        mut write: impl FnMut(&mut S, f32),
+    ) {
         // The upstream scheduler updates panel coefficients once per call.
         let glide = if self.sliding {
             tau_to_coef(p.slide_s / 3.0, self.sr)
@@ -319,7 +328,7 @@ impl Voice {
                 self.post_lp += (y - self.post_lp) * post_hp;
                 y = 1.25 * (y - self.post_lp);
             }
-            *sample += y * self.aenv * self.acc_amp * 0.265;
+            write(sample, y * self.aenv * self.acc_amp * 0.265);
         }
     }
 
