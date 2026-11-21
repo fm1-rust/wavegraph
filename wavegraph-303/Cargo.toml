@@ -7,7 +7,11 @@ rust-version = "1.85"
 license = "MIT"
 
 [dependencies]
-libm = { version = "0.2.16", default-features = false }
+libm = { version = "0.2.16", default-features = false, optional = true }
+micromath = { version = "2.1", default-features = false }
+
+[features]
+raw = ["dep:libm"]
 
 [lints]
 workspace = true
