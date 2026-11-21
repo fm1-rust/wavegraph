@@ -83,6 +83,80 @@ fn live_edits_keep_oscillator_phase_and_reject_invalid_replacements() {
     assert_eq!(buses[1].map(I24::inner), [0, 8192]);
 }
 
+/// One sample of history makes it observable whether a bypassed effect ran.
+struct OneSampleDelay(I24);
+
+impl Process<Message, I24> for OneSampleDelay {
+    fn inlets(&self) -> &[Port] {
+        &[Port::Signal]
+    }
+
+    fn outlets(&self) -> &[Port] {
+        &[Port::Signal]
+    }
+
+    fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
+        for (out, &input) in cx.outputs[0].iter_mut().zip(cx.inputs[0]) {
+            *out = core::mem::replace(&mut self.0, input);
+        }
+    }
+}
+
+#[test]
+fn rebind_borrowed_nodes_while_a_note_is_held() -> Result<(), Error> {
+    let dry = Program::<1>::decode(VOICE)?;
+    let wet = Program::<2>::decode(&[
+        1, // version
+        1, 0, 0, 1, // voice -> bus 0
+        1, 1, 1, 1, 0, // delay(bus 0) -> bus 1
+    ])?;
+    // A three-frame block and a four-frame cycle expose a phase reset at an edit.
+    let tuning = Tuning::new(1760, 1).expect("clock");
+    let mut voice = Monosynth::new(&tuning);
+    let mut buses = [[I24::default(); 3]; 2];
+    {
+        let mut objects: [&mut dyn Process<Message, I24>; 1] = [&mut voice];
+        let mut patch = dry.bind(&mut objects)?;
+        let notes = [
+            at(0, Message::Waveform(Waveform::Sawtooth)),
+            at(
+                0,
+                Message::NoteOn {
+                    note: 69,
+                    velocity: 8,
+                },
+            ),
+        ];
+        patch.render(&mut Software, &mut buses, &[&notes], |_, e| Err(e))?;
+        assert_eq!(buses[0].map(I24::inner), [-32768, -16384, 0]);
+    }
+    {
+        // The voice outlived the first table. Construct the effect now.
+        let mut delay = OneSampleDelay(I24::default());
+        let mut objects: [&mut dyn Process<Message, I24>; 2] = [&mut voice, &mut delay];
+        let mut patch = wet.bind(&mut objects)?;
+        patch.render(&mut Software, &mut buses, &[], |_, e| Err(e))?;
+        assert_eq!(buses[0].map(I24::inner), [16384, -32768, -16384]);
+        assert_eq!(buses[1].map(I24::inner), [0, 16384, -32768]);
+
+        // Both objects stay bound during bypass. Only the voice advances.
+        patch.replace(&dry, buses.len())?;
+        patch.render(&mut Software, &mut buses, &[], |_, e| Err(e))?;
+        assert_eq!(buses[0].map(I24::inner), [0, 16384, -32768]);
+
+        patch.replace(&wet, buses.len())?;
+        patch.render(&mut Software, &mut buses, &[], |_, e| Err(e))?;
+        assert_eq!(buses[0].map(I24::inner), [-16384, 0, 16384]);
+        assert_eq!(buses[1].map(I24::inner), [-16384, -16384, 0]);
+    }
+    // The effect's storage is gone. The original note is still sounding.
+    let mut objects: [&mut dyn Process<Message, I24>; 1] = [&mut voice];
+    let mut patch = dry.bind(&mut objects)?;
+    patch.render(&mut Software, &mut buses, &[], |_, e| Err(e))?;
+    assert_eq!(buses[0].map(I24::inner), [-32768, -16384, 0]);
+    Ok(())
+}
+
 #[test]
 fn decode_checks_each_opcode_before_playback() {
     for (bytes, error) in [
