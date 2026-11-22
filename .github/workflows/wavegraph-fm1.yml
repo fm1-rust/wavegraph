@@ -36,4 +36,4 @@ jobs:
     with:
       script: wavegraph-fm1/build.sh
       artifact-name: wavegraph-fm1
-      artifact-path: target/pi32v2-none/firmware/wavegraph-fm1.fwsc
+      artifact-path: target/pi32v2-none/firmware/wavegraph-fm1.*
