@@ -35,7 +35,8 @@ impl Settings {
             voice: self.parts.voices[self.focus as usize],
             focus: self.focus,
             bass: self.parts.bass,
-            envelope: self.env_mode.then_some(self.parts.mono_envelope),
+            env_mode: self.env_mode,
+            mono_envelope: self.parts.mono_envelope,
             half_gain,
             voice_tap: self.voice_tap,
         }
@@ -47,7 +48,8 @@ pub(super) struct Labels {
     pub(super) voice: Voice,
     pub(super) focus: Part,
     pub(super) bass: Controls,
-    pub(super) envelope: Option<EnvelopeControls>,
+    pub(super) env_mode: bool,
+    pub(super) mono_envelope: EnvelopeControls,
     pub(super) half_gain: bool,
     pub(super) voice_tap: bool,
 }
@@ -248,9 +250,10 @@ mod app {
             while let Ok((scan, focus, gates)) = self.input.recv().await {
                 let before = self.settings;
                 self.settings.focus = focus;
-                if focus == Part::Bass {
+                if before.focus != focus {
                     self.settings.env_mode = false;
-                } else if scan.pressed(Button::Env) {
+                }
+                if scan.pressed(Button::Env) {
                     self.settings.env_mode = !self.settings.env_mode;
                 }
                 for (voice, gate) in self.settings.parts.voices.iter_mut().zip(gates) {
@@ -265,13 +268,12 @@ mod app {
                     Encoder::Knob4,
                 ]
                 .map(|encoder| scan.encoder_delta(encoder));
-                if self.settings.env_mode {
+                if self.settings.env_mode && focus == Part::Mono {
                     self.settings.parts.mono_envelope.turn(knobs);
                 } else {
-                    voice.transpose = voice
-                        .transpose
-                        .saturating_add(scan.encoder_delta(Encoder::Select))
-                        .clamp(-12, 12);
+                    self.settings
+                        .parts
+                        .turn_select(focus, scan.encoder_delta(Encoder::Select));
                     self.settings.parts.turn_knobs(focus, knobs);
                 }
                 if scan.pressed(Button::Sel) {

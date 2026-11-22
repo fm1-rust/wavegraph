@@ -35,6 +35,8 @@ fn patch_matches_the_voice_across_notes_panel_changes_and_release() {
         at(5, note(36, true, false)),
         at(29, Message::CutoffHz(850.0)),
         at(29, Message::Waveform(Waveform::Square)),
+        at(29, Message::AttackSeconds(0.012)),
+        at(29, Message::OverdriveDb(18.0)),
         at(53, note(43, false, true)),
         at(54, Message::NoteOff(36)),
         at(70, Message::NoteOff(43)),
@@ -51,6 +53,8 @@ fn patch_matches_the_voice_across_notes_panel_changes_and_release() {
     voice.render_add(&params, &mut expected[5..29]);
     params.cutoff_hz = 850.0;
     params.square = true;
+    params.attack_s = 0.012;
+    params.overdrive_db = 18.0;
     voice.render_add(&params, &mut expected[29..53]);
     voice.note_on(43, false, true);
     voice.render_add(&params, &mut expected[53..70]);
@@ -85,6 +89,10 @@ fn controls_while_stopped_apply_in_order_without_advancing_the_voice() {
         note(128, false, false),
         Message::CutoffHz(f32::NAN),
         Message::Resonance(2.0),
+        Message::AttackSeconds(-0.01),
+        Message::AttackSeconds(f32::NAN),
+        Message::OverdriveDb(-1.0),
+        Message::OverdriveDb(37.0),
     ]
     .map(|message| at(0, message));
     patch

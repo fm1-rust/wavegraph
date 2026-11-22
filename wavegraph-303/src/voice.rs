@@ -1,3 +1,4 @@
+use crate::Envelopes;
 use crate::dsp::{clamp, fast_exp2, fast_tanh, midi_to_hz, tau_to_coef};
 
 const STAGE_POLES: [f32; 4] = [0.128, 1.0382, 2.3254, 3.2356];
@@ -15,6 +16,10 @@ pub struct VoiceParams {
     pub env_oct: f32,
     /// Unaccented filter-envelope decay in seconds.
     pub decay_s: f32,
+    /// VCA attack time constant in seconds.
+    pub attack_s: f32,
+    /// Oscillator gain into the resonant filter, in dB above stock level (0 to 36).
+    pub overdrive_db: f32,
     /// Accent amount, from 0 to 1.
     pub accent: f32,
     /// Tuning offset in semitones.
@@ -44,6 +49,8 @@ impl Default for VoiceParams {
             resonance: 0.5,
             env_oct: 2.0,
             decay_s: 0.6,
+            attack_s: 0.0015,
+            overdrive_db: 0.0,
             accent: 0.5,
             tuning_st: 0.0,
             slide_s: 0.06,
@@ -78,19 +85,9 @@ pub struct Voice {
     target: f32,
     ladder: DiodeLadder,
     until_cutoff: u8,
-    attack: f32,
-    hold: f32,
-    release: f32,
-    accent_charge: f32,
-    accent_glide: f32,
-    fenv: f32,
-    aenv: f32,
-    acc_cap: f32,
-    acc_amp: f32,
+    waveform_slew: f32,
+    envelopes: Envelopes,
     post_lp: f32,
-    gate: bool,
-    amp_on: bool,
-    accent: bool,
     sliding: bool,
 }
 
@@ -116,19 +113,9 @@ impl Voice {
                 stage_drive: 0.0,
             },
             until_cutoff: 0,
-            attack: tau_to_coef(0.0015, sample_rate),
-            hold: tau_to_coef(1.34, sample_rate),
-            release: tau_to_coef(0.004, sample_rate),
-            accent_charge: tau_to_coef(0.012, sample_rate),
-            accent_glide: tau_to_coef(0.002, sample_rate),
-            fenv: 0.0,
-            aenv: 0.0,
-            acc_cap: 0.0,
-            acc_amp: 1.0,
+            waveform_slew: tau_to_coef(0.0015, sample_rate),
+            envelopes: Envelopes::new(sample_rate),
             post_lp: 0.0,
-            gate: false,
-            amp_on: false,
-            accent: false,
             sliding: false,
         }
     }
@@ -140,10 +127,7 @@ impl DiodeLadder {
         self.hp = 0.0;
     }
 
-    fn set_cutoff(&mut self, mut wc_hz: f32) {
-        // Kept below 16 kHz, so the resonant peak (~1.1 x) stays clear of
-        // the top of the audio band.
-        wc_hz = clamp(wc_hz, 5.0, 16000.0);
+    fn set_cutoff(&mut self, wc_hz: f32) {
         for (coeff, pole) in self.coeff.iter_mut().zip(STAGE_POLES) {
             let f = clamp(wc_hz * pole, 10.0, 0.45 * self.rate);
             let g = crate::dsp::filter_tan(core::f32::consts::PI * f / self.rate);
@@ -196,12 +180,8 @@ impl Voice {
         self.phase = 0.0;
         self.ladder.reset();
         self.until_cutoff = 0;
-        self.acc_cap = 0.0;
-        self.aenv = 0.0;
-        self.fenv = 0.0;
+        self.envelopes.reset();
         self.sliding = false;
-        self.accent = false;
-        self.gate = false;
     }
 
     /// Trigger a MIDI note. A slide from an open gate carries the envelopes across.
@@ -211,33 +191,28 @@ impl Voice {
     )]
     pub fn note_on(&mut self, note: i32, accent: bool, slide: bool) {
         self.target = note as f32;
-        self.accent = accent;
-        if slide && self.gate {
-            self.sliding = true;
-        } else {
+        self.sliding = slide && self.envelopes.gate;
+        if !self.sliding {
             self.pitch = self.target;
-            self.sliding = false;
-            self.fenv = 1.0;
-            self.amp_on = true;
         }
-        self.gate = true;
+        self.envelopes.note_on(accent, slide);
     }
 
     /// Release the gate.
     pub fn note_off(&mut self) {
-        self.gate = false;
+        self.envelopes.note_off();
     }
 
     /// Whether the gate is open.
     #[must_use]
     pub fn gate(&self) -> bool {
-        self.gate
+        self.envelopes.gate
     }
 
     /// Whether the upstream gate or envelope is active.
     #[must_use]
     pub fn sounding(&self) -> bool {
-        self.gate || self.aenv > 0.0001
+        self.envelopes.sounding()
     }
 
     /// Add mono samples to the output, keeping oscillator and filter history between calls.
@@ -257,78 +232,48 @@ impl Voice {
         } else {
             1.0
         };
-        let decay = if self.accent { 0.2 } else { p.decay_s };
-        let fdec = tau_to_coef(decay / 4.6, self.sr);
-        // Resonance slows the accent capacitor's drain, as on the 303.
-        let acc_drain = tau_to_coef(0.08 + 0.35 * p.resonance, self.sr);
+        let envelopes = self.envelopes.coefficients(p);
+        let input_gain =
+            p.ladder_in * fast_exp2(p.overdrive_db / (20.0 * core::f32::consts::LOG10_2));
         let k = p.max_loop_gain * p.resonance;
         self.ladder.stage_drive = p.stage_drive;
-        // Accent's level boost glides (~2 ms) rather than jumps: a slide
-        // between an accented and a plain note changes it mid-note, and a
-        // jump there is a click.
-        let amp_acc = if self.accent {
-            1.0 + 0.9 * p.accent
-        } else {
-            1.0
-        };
         let post_hp = if p.post_hp_hz > 0.0 {
             tau_to_coef(1.0 / (2.0 * core::f32::consts::PI * p.post_hp_hz), self.sr)
         } else {
             0.0
         };
-        let base_oct = micromath::F32Ext::log2(p.cutoff_hz * 1.6);
+        let base_oct = p.base_octaves();
         for sample in out {
             self.pitch += (self.target - self.pitch) * glide;
             let inc = midi_to_hz(self.pitch + p.tuning_st) / self.sr;
-            // Envelopes
-            self.fenv -= self.fenv * fdec;
-            if self.gate {
-                if self.amp_on {
-                    self.aenv += (1.05 - self.aenv) * self.attack;
-                    if self.aenv >= 1.0 {
-                        self.aenv = 1.0;
-                        self.amp_on = false;
-                    }
-                } else {
-                    self.aenv -= self.aenv * self.hold;
-                }
-            } else {
-                self.aenv -= self.aenv * self.release;
-            }
-            let acc_in = if self.accent { self.fenv } else { 0.0 };
-            self.acc_cap += (acc_in - self.acc_cap)
-                * (if acc_in > self.acc_cap {
-                    self.accent_charge
-                } else {
-                    acc_drain
-                });
+            self.envelopes.step(&envelopes);
             // Cutoff, at 2x the sample rate; the four stages' coefficients
             // are worked out every fourth sample (the envelope moves slowly).
             if self.until_cutoff == 0 {
                 self.until_cutoff = 3;
-                let oct = base_oct + p.env_oct * self.fenv + 3.0 * p.accent * self.acc_cap;
-                self.ladder.set_cutoff(fast_exp2(oct));
+                self.ladder
+                    .set_cutoff(self.envelopes.cutoff_hz(p, base_oct));
             } else {
                 self.until_cutoff = self.until_cutoff.saturating_sub(1);
             }
-            self.square_mix += ((if p.square { 1.0 } else { 0.0 }) - self.square_mix) * self.attack;
-            let x = self.osc(inc, self.square_mix, p.pulse_width);
+            self.square_mix +=
+                ((if p.square { 1.0 } else { 0.0 }) - self.square_mix) * self.waveform_slew;
+            let x = self.osc(inc, self.square_mix, p.pulse_width) * input_gain;
             // Hold the input for both filter steps and retain the upstream sum and gain.
             let mut y = 0.0;
             for _ in 0..2 {
-                y += self.ladder.process(x * p.ladder_in, k);
+                y += self.ladder.process(x, k);
             }
             y /= p.ladder_in;
             // Make up some of the level resonance takes (a ladder's gain at
             // low frequencies is 1 / (1 + k)); the rest of the bass loss is
             // the 303's own.
             y *= 0.4 * (1.0 + p.bass_makeup * k);
-            self.acc_amp += (amp_acc - self.acc_amp) * self.accent_glide;
             if post_hp > 0.0 {
                 self.post_lp += (y - self.post_lp) * post_hp;
                 y = 1.25 * (y - self.post_lp);
             }
-            write(sample, y * self.aenv * self.acc_amp * 0.265);
+            write(sample, self.envelopes.amplify(y) * 0.265);
         }
     }
 

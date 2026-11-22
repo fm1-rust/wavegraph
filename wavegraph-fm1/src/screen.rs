@@ -1,6 +1,7 @@
-//! The splash, live scopes and VCA editor share one dirty-tile waveform renderer.
+//! Scope and envelope pages for the FM-1 display.
 
 use crate::{
+    bass::{Bank, Controls, Knob, envelope as bass_env},
     capture::{FLAT, HEIGHT, Trace, WIDTH},
     envelope::EnvelopeControls,
     firmware::Frame,
@@ -41,6 +42,11 @@ const SILVER: WaveformStyle = WaveformStyle {
     grid_y: GRID,
 };
 const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
+const BASS_MUTED: Rgb565 = Rgb565::new(7, 15, 8);
+const LANE_INKS: [Rgb565; 3] = [SILVER.trace, OXIDE_RED, Rgb565::new(1, 18, 15)];
+const LANE_X: u16 = 42;
+type Lane = Waveform<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
+
 const BOOT_STYLE: WaveformStyle = WaveformStyle {
     trace: Rgb565::new(3, 34, 8),
     ..STYLE
@@ -88,10 +94,12 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 enum Page {
     Scope(Part),
     Envelope(EnvelopeControls),
+    BassEnvelope(Controls),
 }
 
 pub(super) struct Screen {
     plot: &'static mut Waveform<WIDTH, WIDTH>,
+    lanes: [&'static mut Lane; 3],
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
     beam: Beam,
@@ -101,11 +109,25 @@ pub(super) struct Screen {
 impl Screen {
     pub(super) fn new() -> Self {
         static PLOT: StaticCell<Waveform<WIDTH, WIDTH>> = StaticCell::new();
+        static LANES: [StaticCell<Lane>; 3] = [const { StaticCell::new() }; 3];
         static TEXT: StaticCell<TextGrid> = StaticCell::new();
         static STRIP: ConstStaticCell<[[u8; 2]; BAND * HEIGHT]> =
             ConstStaticCell::new([[0; 2]; BAND * HEIGHT]);
         Self {
             plot: PLOT.init_with(|| Waveform::new(0, 0).expect("panel-sized scope")),
+            lanes: core::array::from_fn(|i| {
+                LANES[i].init_with(|| {
+                    let mut lane =
+                        Waveform::new(LANE_X, [64, 112, 160][i]).expect("303 envelope lane");
+                    lane.set_style(WaveformStyle {
+                        trace: LANE_INKS[i],
+                        grid_y: 0,
+                        center: SILVER.grid,
+                        ..SILVER
+                    });
+                    lane
+                })
+            }),
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
             page: None,
@@ -191,6 +213,77 @@ impl Screen {
         self.text.paint_async(lcd, clock).await
     }
 
+    fn bass_panel(&mut self, controls: Controls) {
+        let (ink, muted) = (OXIDE_RED, BASS_MUTED);
+        self.text.text(0, 0, b"TB-303", ink);
+        let bank = controls.bank;
+        self.text.text(
+            7,
+            0,
+            match bank {
+                Bank::Filter => b"B1/2",
+                Bank::Voice => b"B2/2",
+            },
+            ink,
+        );
+        for (i, knob) in bank.knobs().into_iter().enumerate() {
+            // The right column has room for the full RESONANCE and OVERDRIVE labels.
+            let (x, width) = if i % 2 == 0 { (0, 7) } else { (9, 9) };
+            let y = 1 + i / 2;
+            let color = if knob == controls.last() { ink } else { muted };
+            self.text.text(x, y, [b"1234"[i]], ink);
+            self.text.text(x + 2, y, &knob.name()[..width], color);
+        }
+        let (name, value, units) = controls.readout();
+        self.text.text(0, 13, name, muted);
+        if controls.last() == Knob::Tuning {
+            self.text.signed_number(9, 13, 5, value, ink);
+        } else {
+            self.text.number(9, 13, 5, value.unsigned_abs(), ink);
+        }
+        self.text.text(15, 13, units, muted);
+    }
+
+    async fn paint_bass_envelope(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        controls: Controls,
+        late: bool,
+    ) -> Result<(), Error> {
+        let page = Page::BassEnvelope(controls);
+        let previous = self.page.replace(page);
+        if previous != Some(page) {
+            if !matches!(previous, Some(Page::BassEnvelope(_))) {
+                self.change_view(SILVER);
+                // The three lane plots occupy part of the full-size scope's pixel area.
+                self.plot.invalidate();
+                lcd.fill_rect(0, 0, SIZE, SIZE, SILVER.background.into_storage())?;
+                for lane in &mut self.lanes {
+                    lane.invalidate();
+                }
+                self.text.text(12, 0, b"ENV", OXIDE_RED);
+                for (i, x) in bass_env::STRIKES.into_iter().enumerate() {
+                    let label: &[u8] = if i == 0 { b"PLAIN" } else { b"A" };
+                    self.text
+                        .text((usize::from(LANE_X) + x) / 12, 3, label, BASS_MUTED);
+                }
+                for (i, label) in [b"VCF", b"ACC", b"VCA"].into_iter().enumerate() {
+                    self.text.text(0, 5 + i * 3, label, LANE_INKS[i]);
+                }
+                self.text.text(0, 14, b"PREVIEW    96 MS/DIV", BASS_MUTED);
+            }
+            for (lane, trace) in self.lanes.iter_mut().zip(&bass_env::traces(controls)) {
+                lane.paint_async(lcd, trace, clock).await?;
+            }
+            self.bass_panel(controls);
+        }
+        if late {
+            self.text.text(16, 0, b"LATE", OXIDE_RED);
+        }
+        self.text.paint_async(lcd, clock).await
+    }
+
     pub(super) async fn paint(
         &mut self,
         lcd: &mut Display,
@@ -199,12 +292,21 @@ impl Screen {
         late: bool,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        if let Some(controls) = labels.envelope {
-            return self.paint_envelope(lcd, clock, controls, late).await;
+        if labels.env_mode {
+            return match labels.focus {
+                Part::Bass => {
+                    self.paint_bass_envelope(lcd, clock, labels.bass, late)
+                        .await
+                }
+                Part::Mono => {
+                    self.paint_envelope(lcd, clock, labels.mono_envelope, late)
+                        .await
+                }
+            };
         }
         let bass = labels.focus == Part::Bass;
         let (style, ink, muted, bright) = if bass {
-            (SILVER, OXIDE_RED, Rgb565::new(7, 15, 8), SILVER.trace)
+            (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
         } else {
             (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
         };
@@ -213,9 +315,9 @@ impl Screen {
         if changed_page {
             self.change_view(style);
         }
-        // Leave the silver faceplate a second footer row for the last turned knob.
+        // Keep the silver trace and its halo between the knob legend and the readout.
         let trace = if bass {
-            frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
+            frame.trace.map(|y| (25 + u16::from(y) * 3 / 4) as u8)
         } else {
             frame.trace
         };
@@ -223,8 +325,8 @@ impl Screen {
             .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
             .await?;
         if changed_page {
-            let footer = if bass { 32 } else { 16 };
-            for (y, height) in [(0, 16), (SIZE - footer, footer)] {
+            let (header, footer) = if bass { (48, 32) } else { (16, 16) };
+            for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
@@ -232,7 +334,7 @@ impl Screen {
             .paint(lcd, clock, &trace, self.strip, style, labels.focus)
             .await?;
         if bass {
-            self.text.text(0, 0, b"TB-303", ink);
+            self.bass_panel(labels.bass);
         } else {
             self.text.text(0, 0, b"CUT", muted);
             self.text
@@ -240,7 +342,7 @@ impl Screen {
             self.text.text(9, 0, b"HZ", muted);
         }
         self.text.text(
-            if bass { 11 } else { 12 },
+            12,
             0,
             if labels.half_gain { b"HALF" } else { b"DRY " },
             muted,
@@ -251,12 +353,6 @@ impl Screen {
             (true, Part::Bass) => b"SRC",
         };
         self.text.text(17, 0, source, muted);
-        if bass {
-            let (name, value, units) = labels.bass.readout();
-            self.text.text(0, 13, name, muted);
-            self.text.number(10, 13, 4, u32::from(value), ink);
-            self.text.text(15, 13, units, muted);
-        }
         self.text.text(0, 14, labels.voice.label(labels.focus), ink);
         self.text.text(8, 14, labels.voice.note_name(), bright);
         if late {

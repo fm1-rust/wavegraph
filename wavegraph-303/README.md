@@ -33,10 +33,20 @@ patch.render(&mut Software, &mut buses, &[&notes], |_, e| Err(e))?;
 
 Set `Tb303::params` before binding to customize the voice calibration. During
 playback, messages such as `Message::CutoffHz` and `Message::Resonance` change
-individual controls. The outlet carries the dry voice. Floating-point output
-preserves its headroom and PCM output saturates at the signed 24-bit limits.
+individual controls. `AttackSeconds` sets the VCA attack time constant (1.5 ms
+by default). `OverdriveDb` ranges from stock level (0 dB) to +36 dB. It drives
+the oscillator signal into the resonant filter as in the [Devil Fish manual].
+Floating-point output preserves its headroom and PCM output saturates at the
+signed 24-bit limits.
+
+[Devil Fish manual]: https://www.firstpr.com.au/rwi/dfish/Devil-Fish-Manual.pdf
 
 ## Standalone voice and effects
+
+`Envelopes` runs the same filter, accent and VCA control signals as the voice.
+For a silent preview, send it gate events and call `advance(&params, frames)`
+to read the ladder cutoff in Hz, the accent contribution in octaves and the VCA
+gain. Consecutive accents keep the charge in the sweep between gate events.
 
 `Voice::render_add` adds to a mono slice. `Drive::process` applies
 CHOMPI's post-VCA, pedal-style overdrive in place, using only its own filter
@@ -67,7 +77,7 @@ their delay storage from the caller. `DrumFx` and `Compressor` work in place.
 Split blocks at note or control changes. Panel controls take effect at the
 start of each call. The voice advances the ladder twice per output frame and
 updates its four cutoff coefficients every fourth frame, carrying that phase
-across blocks. A legato slide carries the envelopes across notes. Drive at
+across blocks. A legato slide carries the envelopes across notes. The post-VCA `Drive` at
 or below 0.005 bypasses the signal and freezes its filter history.
 
 The default build uses `micromath`'s floor for pitch and quantization and its
