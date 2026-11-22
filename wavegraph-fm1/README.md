@@ -15,21 +15,43 @@ during the boot animation.
 | PRESETS encoder | Select the instrument for new key presses, panel edits and the display. |
 | Piano keys | Play F3 to G5. Each instrument sounds its most recently pressed key. |
 | ALGORITHM encoder | Monosynth cycles through sine, triangle, sawtooth and square. The 303 switches between saw and square. |
-| SELECT encoder | Transpose the selected instrument up or down by up to 12 semitones. |
-| Knob 1 on the monosynth | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
+| SELECT encoder (scope) | Transpose the selected instrument up or down by up to 12 semitones. |
+| Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
+| ENV on the monosynth | Toggle the VCA envelope editor. The button stays lit while the editor is open. |
+| Knobs 1–4 in ENV | Adjust attack, decay, sustain and release respectively. |
 | Knobs 1–4 on the 303 | Set cutoff, resonance, envelope modulation and decay. The silver panel shows the last knob's value. |
 | MASTER | Set the volume of the stereo mix. |
 | PLAY/STOP | Reserved for a future sequencer. |
 | FX | Switch the mix between dry and half gain. |
-| SEL button | Switch the scope between the selected voice before FX and MASTER (VCF on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
+| SEL button | Switch the scope between the selected voice before FX and MASTER (VCA on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
 | Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
 
 Hold a monosynth note, turn PRESETS, then play a different key for the 303.
-Both notes sound until you release their respective keys. Within each part,
+Each key controls its own voice and release tail. Within each part,
 releasing the newest key recalls the previous key and its strike velocity.
 On the 303, strikes at velocity 96 and above trigger accent. Overlapping keys
 slide, and a fresh strike after release restarts the envelopes. Turn knob 1 on
-either page to adjust that instrument’s cutoff while both play.
+either scope page to adjust that instrument’s cutoff while both play.
+
+## VCA envelope
+
+Hold a key and turn Knob 3 to hear the sustain level change. Release the key
+and turn Knob 4 to shorten or extend the tail. The graph and readouts also
+respond while the keyboard is idle. Press ENV again to return to the scope.
+Turning PRESETS to the 303 closes the editor and keeps the monosynth settings.
+
+| Knob | Parameter | Range | Initial value |
+| --- | --- | --- | --- |
+| 1 | Attack | 1.5 ms–4 s | 8 ms |
+| 2 | Decay | 2 ms–10 s | 160 ms |
+| 3 | Sustain | 0–100% | 70% |
+| 4 | Release | 2 ms–10 s | 125 ms |
+
+The time ranges follow the [Roland SH-101][sh101]. The editor scales each
+stage's width by knob position so you can see a short attack next to a long
+release. The flat section shows the level held until key-up.
+
+![FM-1 VCA envelope editor showing the curve and all four settings](assets/vca-envelope.png)
 
 ## Audio and display
 
@@ -76,6 +98,7 @@ the flashable image.
 The firmware source is available under the [Apache License, Version 2.0](LICENSE-APACHE)
 or the [MIT License](LICENSE-MIT).
 
+[sh101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash

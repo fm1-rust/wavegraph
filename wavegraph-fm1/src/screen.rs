@@ -1,7 +1,8 @@
-//! The boot illustration and live scope share one dirty-tile waveform renderer.
+//! The splash, live scopes and VCA editor share one dirty-tile waveform renderer.
 
 use crate::{
     capture::{FLAT, HEIGHT, Trace, WIDTH},
+    envelope::EnvelopeControls,
     firmware::Frame,
     instrument::Part,
 };
@@ -26,6 +27,10 @@ const STYLE: WaveformStyle = WaveformStyle {
     trace: Rgb565::new(9, 51, 11),
     grid_x: GRID,
     grid_y: GRID,
+};
+const ENV_STYLE: WaveformStyle = WaveformStyle {
+    trace: Rgb565::new(18, 63, 20),
+    ..STYLE
 };
 const SILVER: WaveformStyle = WaveformStyle {
     background: Rgb565::new(24, 49, 24),
@@ -79,12 +84,18 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Page {
+    Scope(Part),
+    Envelope(EnvelopeControls),
+}
+
 pub(super) struct Screen {
     plot: &'static mut Waveform<WIDTH, WIDTH>,
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
     beam: Beam,
-    page: Option<Part>,
+    page: Option<Page>,
 }
 
 impl Screen {
@@ -137,6 +148,49 @@ impl Screen {
         Ok(())
     }
 
+    fn change_view(&mut self, style: WaveformStyle) {
+        self.plot.set_style(style);
+        *self.text = TextGrid::with_background(style.background);
+        self.beam.old_head = None;
+    }
+
+    async fn paint_envelope(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        controls: EnvelopeControls,
+        late: bool,
+    ) -> Result<(), Error> {
+        let page = Page::Envelope(controls);
+        let previous = self.page.replace(page);
+        if previous != Some(page) {
+            let entering = !matches!(previous, Some(Page::Envelope(_)));
+            if entering {
+                self.change_view(ENV_STYLE);
+            }
+            self.plot.paint_async(lcd, &controls.trace(), clock).await?;
+            if entering {
+                // The curve's dirty tiles stay between the two label bands.
+                let background = ENV_STYLE.background.into_storage();
+                lcd.fill_rect(0, 0, SIZE, 16, background)?;
+                lcd.fill_rect(0, 192, SIZE, SIZE - 192, background)?;
+            }
+            self.text.text(0, 0, b"VCA ENVELOPE", palette::GREEN);
+            let adsr = controls.adsr();
+            env_time(self.text, 0, 12, b"A", adsr.attack_us);
+            env_time(self.text, 10, 12, b"D", adsr.decay_us);
+            self.text.text(0, 14, b"S", palette::WHITE);
+            self.text
+                .number(1, 14, 4, u32::from(adsr.sustain_percent), palette::GREEN);
+            self.text.text(5, 14, b"/100", palette::MUTED);
+            env_time(self.text, 10, 14, b"R", adsr.release_us);
+        }
+        if late {
+            self.text.text(16, 0, b"LATE", palette::RED);
+        }
+        self.text.paint_async(lcd, clock).await
+    }
+
     pub(super) async fn paint(
         &mut self,
         lcd: &mut Display,
@@ -145,18 +199,19 @@ impl Screen {
         late: bool,
     ) -> Result<(), Error> {
         let labels = frame.labels;
+        if let Some(controls) = labels.envelope {
+            return self.paint_envelope(lcd, clock, controls, late).await;
+        }
         let bass = labels.focus == Part::Bass;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, Rgb565::new(7, 15, 8), SILVER.trace)
         } else {
             (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
         };
-        let changed_page = self.page != Some(labels.focus);
+        let page = Page::Scope(labels.focus);
+        let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
-            self.plot.set_style(style);
-            *self.text = TextGrid::with_background(style.background);
-            self.beam.old_head = None;
-            self.page = Some(labels.focus);
+            self.change_view(style);
         }
         // Leave the silver faceplate a second footer row for the last turned knob.
         let trace = if bass {
@@ -192,7 +247,7 @@ impl Screen {
         );
         let source = match (labels.voice_tap, labels.focus) {
             (false, _) => b"DAC",
-            (true, Part::Mono) => b"VCF",
+            (true, Part::Mono) => b"VCA",
             (true, Part::Bass) => b"SRC",
         };
         self.text.text(17, 0, source, muted);
@@ -217,6 +272,19 @@ impl Screen {
         self.text.number(17, 14, 3, velocity, ink);
         self.text.paint_async(lcd, clock).await
     }
+}
+
+fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32) {
+    let (value, unit) = if us.is_multiple_of(1_000_000) {
+        (us / 1_000_000, b"S ")
+    } else if us.is_multiple_of(1000) {
+        (us / 1000, b"MS")
+    } else {
+        (us, b"US")
+    };
+    text.text(x, y, label, palette::WHITE);
+    text.number(x + 1, y, 5, value, palette::GREEN);
+    text.text(x + 6, y, unit, palette::MUTED);
 }
 
 // Reconstruct the graph paper and the connected trace under both sprite positions.
