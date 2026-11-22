@@ -17,7 +17,7 @@ wavegraph-monosynth = { path = "../wavegraph-monosynth" }
 wavegraph-sample.workspace = true
 
 [target.'cfg(target_os = "none")'.dependencies]
-embedded-graphics-core = "0.4"
+embedded-graphics = "0.8.2"
 fm1-audio = "0.1"
 fm1-controls = "0.1.1"
 fm1-graphics = { version = "0.1", features = ["async-display"] }

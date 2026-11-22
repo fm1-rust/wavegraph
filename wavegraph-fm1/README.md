@@ -120,12 +120,16 @@ readout follows the knob even while the scope waits for a trigger. A red LATE
 indicator latches if audio service misses its timing budget.
 
 The splash and instrument pages use [fm1-graphics] to draw a waveform on a
-24-pixel grid. The boot illustration combines two harmonics, with phase
-modulation. The logo
-slides over it in buffered RGB565 strips. During play, dirty tiles update the
-trace and a narrow phosphor sweep highlights it. Display DMA runs below audio
-and panel scanning. The 208 × 36 logo occupies 1,872 bytes in firmware.
-To change it, replace `assets/wavegraph.png` and run
+24-pixel grid. The boot illustration combines two harmonics with phase
+modulation. When the green WaveGraph title finishes bouncing, the pink FM-1
+lettering rises from the bottom. The firmware version appears beneath it,
+taken from the `wavegraph-fm1` Cargo package at build time.
+
+The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
+artwork. Both draw in buffered RGB565 strips. During play, dirty tiles update
+the trace and a narrow phosphor sweep highlights it. Display DMA runs below
+audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
+or `assets/fm1.png` and run
 `python3 wavegraph-fm1/assets/pack_logo.py` with Pillow installed.
 
 ## Build and flash

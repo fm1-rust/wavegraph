@@ -1,6 +1,6 @@
 # WaveGraph
 
-[![WaveGraph boot logo over a green waveform on the FM-1 emulator](wavegraph-fm1/assets/boot-screen.png)](wavegraph-fm1/)
+[![WaveGraph boot screen with pink FM-1 lettering over the green waveform](wavegraph-fm1/assets/boot-screen.png)](wavegraph-fm1/)
 
 WaveGraph runs Pure Data-like audio patches on embedded systems. The engine
 interprets a compiled signal graph and processes frame-timed events using
