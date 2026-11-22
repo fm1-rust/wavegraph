@@ -12,6 +12,7 @@ heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
 wavegraph-303 = { path = "../wavegraph-303" }
+wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../wavegraph-monosynth" }
 wavegraph-sample.workspace = true
 

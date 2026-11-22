@@ -22,8 +22,11 @@ during the boot animation.
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix. |
 | PLAY/STOP | Reserved for a future sequencer. |
-| FX | Switch the mix between dry and half gain. |
-| SEL button | Switch the scope between the selected voice before FX and MASTER (VCA on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
+| FX | Open or close the global reverb view. The FX button stays illuminated while that page is visible. |
+| Knobs 1–4 in FX | Monosynth send, 303 send, decay and wet return level (0–128, except decay 0–127). |
+| ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
+| SEL button in FX | Mute or unmute the wet return without clearing the reverb tail. |
+| SEL button (instrument view) | Switch the scope between the selected voice before FX and MASTER (VCA on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
 | Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -86,13 +89,29 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 | --- | --- |
 | ![303 preview with filter decay and rising accent peaks](assets/tb-303-envelope.png) | ![303 preview with the accent sweep isolated and a 30 ms VCA attack](assets/tb-303-accent-sweep.png) |
 
+## Global reverb
+
+FX and ENV are mutually exclusive views; opening either closes the other.
+The FX view stays global while PRESETS changes the selected instrument.
+The instrument's own knob assignments remain unchanged outside FX.
+The global page always scopes the final DAC mix, regardless of the instrument
+scope-tap selection.
+
+The independent send levels are initially 32/128 (monosynth) and 24/128
+(303). Disable the return with SEL to hear dry audio while the reverb continues
+processing. The same reverb tank stays alive across full/half graph edits.
+This first mono, fixed-point effect uses approximately 17 KiB of static delay
+storage; it is not an emulation of the Roland DEP-5.
+
 ## Audio and display
 
-Every 128-frame ALNK0 block calls both persistent WaveGraph nodes. The graph
-trims the 303 to quarter gain, adds both voices, and sends the mix to both
-stereo channels. FX uses the async `EditQueue` to switch the gain stage
-between blocks. The edit is acknowledged when DMA accepts the first block
-using the new route.
+Every 128-frame ALNK0 block calls the two persistent instrument nodes, a shared
+send mixer and a reverb processor. WaveGraph bytecode trims the 303 to quarter
+gain, creates independent effect sends, and mixes the wet return with the
+dry output before duplicating the mono mix to both stereo channels.
+FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
+gain program between blocks, with an acknowledgement once DMA accepts the
+first block under that route.
 
 The scope captures 240 consecutive samples starting at a rising zero crossing.
 A two-block queue feeds an async observer. Missing blocks and routing changes
