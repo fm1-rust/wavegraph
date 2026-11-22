@@ -1,13 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+    "instruments/wavegraph-*",
     "wavegraph",
-    "wavegraph-303",
     "wavegraph-core",
     "wavegraph-fx",
     "wavegraph-fm1",
-    "wavegraph-monosynth",
-    "wavegraph-organ",
     "wavegraph-sample"
 ]
 

@@ -13,7 +13,7 @@ wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
 [dev-dependencies]
-wavegraph = { version = "0.1", path = "../wavegraph" }
+wavegraph = { version = "0.1", path = "../../wavegraph" }
 
 [features]
 raw = ["dep:libm"]

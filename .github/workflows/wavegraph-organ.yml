@@ -3,7 +3,7 @@ name: wavegraph-organ
 on:
   pull_request:
     paths: &wavegraph-organ-paths
-      - 'wavegraph-organ/**'
+      - 'instruments/wavegraph-organ/**'
       - 'wavegraph-core/**'
       - 'wavegraph-sample/**'
       - 'Cargo.toml'

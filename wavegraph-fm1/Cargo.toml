@@ -11,10 +11,10 @@ description = "Three WaveGraph instruments (monosynth, house organ, 303) and osc
 heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
-wavegraph-303 = { path = "../wavegraph-303" }
+wavegraph-303 = { path = "../instruments/wavegraph-303" }
 wavegraph-fx.workspace = true
-wavegraph-monosynth = { path = "../wavegraph-monosynth" }
-wavegraph-organ = { path = "../wavegraph-organ" }
+wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
+wavegraph-organ = { path = "../instruments/wavegraph-organ" }
 wavegraph-sample.workspace = true
 
 [target.'cfg(target_os = "none")'.dependencies]

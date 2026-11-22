@@ -124,8 +124,8 @@ git archive f23c3eeec5559ee31fd46d13b9afd58bf4d5cf4c:wavegraph-303/src/x0x \
 printf '%s\n' '#include "voice.h"' '#include "fx.h"' > "$work/model.cpp"
 (cd "$work" && "$CPP2RUST" --model=unsafe --file=model.cpp \
     --cxxflags=-std=c++17 --cxxflags="-I$work" -o=model.rs)
-python3 wavegraph-303/tools/freestanding.py < "$work/model.rs" > wavegraph-303/src/raw.rs
-rustfmt +1.100.0 --edition 2024 wavegraph-303/src/raw.rs
+python3 instruments/wavegraph-303/tools/freestanding.py < "$work/model.rs" > instruments/wavegraph-303/src/raw.rs
+rustfmt +1.100.0 --edition 2024 instruments/wavegraph-303/src/raw.rs
 ```
 
 The intermediate `model.rs` had SHA-256

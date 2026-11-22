@@ -5,7 +5,7 @@ on:
     paths: &wavegraph-paths
       - 'wavegraph/**'
       - 'wavegraph-core/**'
-      - 'wavegraph-monosynth/**'
+      - 'instruments/wavegraph-monosynth/**'
       - 'wavegraph-sample/**'
       - Cargo.toml
       - Cargo.lock
