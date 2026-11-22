@@ -227,7 +227,9 @@ mod app {
         Draw::spawn(()).expect("one display task");
     }
 
-    #[task(binds = TIMER5, priority = 3, shared = [leds])]
+    // The upper seven keys share an LED line with the velocity probe. End its
+    // 100 µs column slot on time even when the audio graph is rendering.
+    #[task(binds = TIMER5, priority = 4, shared = [leds])]
     struct Panel {
         timer: Timer5,
         controls: TouchControls,
@@ -395,7 +397,7 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 4, shared = [settings, late])]
+    #[task(binds = ALNK0, priority = 3, shared = [settings, late])]
     struct Audio {
         output: Output,
         instrument: Instrument<'static>,
