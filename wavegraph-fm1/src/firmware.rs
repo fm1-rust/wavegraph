@@ -9,6 +9,7 @@ use crate::{
     capture::Trace,
     envelope::EnvelopeControls,
     instrument::{Fx, Part, Parts, Voice},
+    organ::{Controls as OrganControls, OrganKey},
 };
 use fm1_audio::MasterLevel;
 
@@ -21,6 +22,7 @@ pub struct Settings {
     fx: Fx,
     master: MasterLevel,
     voice_tap: bool,
+    menu_since: Option<u32>,
 }
 
 impl Settings {
@@ -32,6 +34,7 @@ impl Settings {
         fx: Fx::INITIAL,
         master: MasterLevel::MIN,
         voice_tap: false,
+        menu_since: None,
     };
 
     fn labels(self, half_gain: bool) -> Labels {
@@ -39,6 +42,9 @@ impl Settings {
             voice: self.parts.voices[self.focus as usize],
             focus: self.focus,
             bass: self.parts.bass,
+            organ: self.parts.organ,
+            organ_keys: self.parts.organ_keys,
+            menu_since: self.menu_since,
             env_mode: self.env_mode,
             fx_view: self.fx_view,
             fx: self.fx,
@@ -54,6 +60,9 @@ pub(super) struct Labels {
     pub(super) voice: Voice,
     pub(super) focus: Part,
     pub(super) bass: Controls,
+    pub(super) organ: OrganControls,
+    pub(super) organ_keys: [OrganKey; wavegraph_organ::POLYPHONY],
+    pub(super) menu_since: Option<u32>,
     pub(super) env_mode: bool,
     pub(super) fx_view: bool,
     pub(super) fx: Fx,
@@ -102,9 +111,15 @@ mod app {
     use wavegraph_303::Tb303;
     use wavegraph_fx::{REVERB_SAMPLES, Reverb, SendMixer};
     use wavegraph_monosynth::{Monosynth, Tuning};
+    use wavegraph_organ::Organ;
 
     const SCANS: usize = 8;
-    type PanelFrame = (Scan, Part, [Gate; 2]);
+    type PanelFrame = (
+        Scan,
+        Part,
+        [Gate; 3],
+        [crate::organ::OrganKey; wavegraph_organ::POLYPHONY],
+    );
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
 
     pub struct ScopeBlock {
@@ -126,17 +141,20 @@ mod app {
         let board = Board::take().expect("CPU0 board");
         let timer = Clock::start(board.timers.with_panel_scan_rate());
         let clock = timer.clock();
-        static PLAYERS: StaticCell<[Node; 2]> = StaticCell::new();
+        static PLAYERS: StaticCell<[Node; 3]> = StaticCell::new();
+        static ORGAN: ConstStaticCell<Organ> =
+            ConstStaticCell::new(Organ::new(FRAME_RATE.0, FRAME_RATE.1).expect("organ clock"));
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
         static EFFECTS: StaticCell<(FxSend, FxReverb<'static>)> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 4];
+        type Nodes = [&'static mut dyn Process<Message, I24>; 5];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
-        let [mono, bass] = PLAYERS.init_with(|| {
+        let [mono, organ, bass] = PLAYERS.init_with(|| {
             [
                 Node::Mono(Monosynth::new(&TUNING)),
+                Node::Organ(ORGAN.take()),
                 Node::Bass(Tb303::new(FRAME_RATE.0 as f32 / FRAME_RATE.1 as f32)),
             ]
         });
@@ -146,7 +164,7 @@ mod app {
                 FxReverb(Reverb::new(REVERB_STORAGE.take())),
             )
         });
-        let nodes = NODES.init_with(|| [mono, bass, send, reverb]);
+        let nodes = NODES.init_with(|| [mono, organ, bass, send, reverb]);
         let instrument = programs.bind(nodes).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
@@ -250,10 +268,14 @@ mod app {
                     });
                 }
             }
-            // Absolute ownership and both gates survive a dropped scan, including note-offs.
-            let _ = self
-                .scans
-                .try_send((scan, self.keyboard.focus, self.keyboard.gates()));
+            // A full state snapshot survives dropped scans. The organ includes
+            // strike generations so even same-pitch restrikes can be detected.
+            let _ = self.scans.try_send((
+                scan,
+                self.keyboard.focus,
+                self.keyboard.gates(),
+                self.keyboard.organ_keys(),
+            ));
         }
     }
 
@@ -268,13 +290,16 @@ mod app {
     impl RticAsyncTask for Input {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
-            while let Ok((scan, focus, gates)) = self.input.recv().await {
+            while let Ok((scan, focus, gates, organ_keys)) = self.input.recv().await {
                 let before = self.settings;
                 self.settings.focus = focus;
+                if scan.encoder_delta(Encoder::Presets) != 0 {
+                    self.settings.menu_since = Some(ticks());
+                }
                 if before.focus != focus {
                     self.settings.env_mode = false;
                 }
-                if scan.pressed(Button::Env) {
+                if scan.pressed(Button::Env) && focus != Part::Organ {
                     self.settings.env_mode = !self.settings.env_mode;
                     if self.settings.env_mode {
                         self.settings.fx_view = false;
@@ -289,6 +314,7 @@ mod app {
                 for (voice, gate) in self.settings.parts.voices.iter_mut().zip(gates) {
                     voice.gate = gate;
                 }
+                self.settings.parts.organ_keys = organ_keys;
                 let knobs = [
                     Encoder::Knob1,
                     Encoder::Knob2,

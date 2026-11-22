@@ -7,6 +7,7 @@ members = [
     "wavegraph-fx",
     "wavegraph-fm1",
     "wavegraph-monosynth",
+    "wavegraph-organ",
     "wavegraph-sample"
 ]
 

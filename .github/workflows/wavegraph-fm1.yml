@@ -9,6 +9,7 @@ on:
       - 'wavegraph-core/**'
       - 'wavegraph-fx/**'
       - 'wavegraph-monosynth/**'
+      - 'wavegraph-organ/**'
       - 'wavegraph-sample/**'
       - Cargo.toml
       - Cargo.lock
