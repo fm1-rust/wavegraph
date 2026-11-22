@@ -2,13 +2,24 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+pub use wavegraph_adsr::Adsr;
+
+use wavegraph_adsr::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
 
 /// Maximum simultaneous notes, including voices in their release tail.
 pub const POLYPHONY: usize = 4;
 
-// Q16.16 envelope state with Q15 peak amplitude. Each voice is roughly -24 dBFS at full
+/// VCA settings for the dry house patch.
+pub const DEFAULT_ENVELOPE: Adsr = Adsr {
+    attack_us: 2_000,
+    decay_us: 100_000,
+    sustain_percent: 100,
+    release_us: Params::INITIAL.release_ms as u32 * 1_000,
+};
+
+// Q16.16 key transient with Q15 peak amplitude. Each voice is roughly -24 dBFS at full
 // velocity, allowing four notes to mix without saturating Q23 output.
 const FULL: u32 = 32767 << 16;
 const Q31_SHIFT: u32 = 12;
@@ -34,7 +45,8 @@ pub struct Params {
     pub percussion: u8,
     /// Time for the transient to fade, in milliseconds (5..=500).
     pub decay_ms: u16,
-    /// Gate release time, in milliseconds (0..=1000).
+    /// VCA release in whole milliseconds, saturating at `u16::MAX`.
+    /// [`Organ::vca_envelope`] reports the exact time in microseconds.
     pub release_ms: u16,
 }
 
@@ -75,7 +87,9 @@ pub enum Message {
     Percussion(u8),
     /// Transient decay time in milliseconds, clamped to 5..=500.
     DecayMs(u16),
-    /// Release time in milliseconds, clamped to 0..=1000.
+    /// Set the amplitude envelope for all voices, including held notes and tails.
+    VcaEnvelope(Adsr),
+    /// Set only VCA release in milliseconds, clamped to 0..=1000.
     ReleaseMs(u16),
     /// Release every held key while preserving the release tails.
     AllNotesOff,
@@ -86,54 +100,45 @@ pub enum Message {
 #[derive(Clone, Copy, Debug)]
 struct Voice {
     note: Option<u8>,
-    held: bool,
     age: u32,
     velocity: u8,
     phase: u32,
     step: u32,
-    amp: u32,
+    envelope: Envelope,
     transient: u32,
-    release_step: u32,
 }
 
 impl Voice {
     const SILENT: Self = Self {
         note: None,
-        held: false,
         age: 0,
         velocity: 0,
         phase: 0,
         step: 0,
-        amp: 0,
+        envelope: Envelope::IDLE,
         transient: 0,
-        release_step: FULL,
     };
 
-    #[allow(clippy::arithmetic_side_effects, reason = "The frame count is nonzero")]
-    fn release(&mut self, frames: u32) {
-        if self.held {
-            self.held = false;
-            // Divide only on gate changes, never in the audio sample loop.
-            self.release_step = (self.amp / frames.max(1)).max(1);
+    fn release(&mut self, timing: &Timing) {
+        self.envelope.gate_off(timing);
+        if self.envelope.is_idle() {
+            self.note = None;
         }
     }
 
     #[allow(
         clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
-        reason = "The Q16 envelope converts to 0..=32767; DSP intermediates fit i32."
+        reason = "Gain is in 0..=1 and the Q15 mixer intermediates fit i32."
     )]
-    fn next(&mut self, params: Params, attack_step: u32, decay_step: u32) -> i32 {
+    fn next(&mut self, params: Params, timing: &Timing, decay_step: u32) -> i32 {
         if self.note.is_none() {
             return 0;
         }
-        self.amp = if self.held {
-            self.amp.saturating_add(attack_step).min(FULL)
-        } else {
-            self.amp.saturating_sub(self.release_step)
-        };
-        if self.amp == 0 {
-            *self = Self::SILENT;
+        let gain = self.envelope.advance(timing);
+        if self.envelope.is_idle() {
+            self.note = None;
             return 0;
         }
 
@@ -193,7 +198,7 @@ impl Voice {
         self.phase = self.phase.wrapping_add(self.step);
 
         let struck = ((body + click) * i32::from(self.velocity)) >> 7;
-        (struck * (self.amp >> 16) as i32) >> 15
+        (struck * (gain * 32767.0) as i32) >> 15
     }
 }
 
@@ -207,8 +212,7 @@ fn triangle(phase: u32) -> i32 {
     32767 - (2 * ramp - 65535).abs()
 }
 
-// Quarter-wave lookup with 8-bit interpolation. No floating-point math in
-// the per-sample path; shares the same 65-entry curve as wavegraph-monosynth.
+// Same 65-entry quarter-wave sine table and 8-bit interpolation as the monosynth.
 const SINE: [i16; 65] = [
     0, 804, 1608, 2410, 3212, 4011, 4808, 5602, 6393, 7179, 7962, 8739, 9512, 10278, 11039, 11793,
     12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868, 19519, 20159, 20787,
@@ -257,9 +261,10 @@ pub struct Organ {
     serial: u32,
     rate_num: u32,
     rate_den: u32,
-    attack_step: u32,
     decay_step: u32,
-    release_frames: u32,
+    sample_period: f32,
+    vca_envelope: Adsr,
+    timing: Timing,
 }
 
 impl Organ {
@@ -290,6 +295,7 @@ impl Organ {
             i += 1;
         }
         let params = Params::INITIAL;
+        let sample_period = (denominator as f64 / numerator as f64) as f32;
         let mut organ = Self {
             steps,
             voices: [Voice::SILENT; POLYPHONY],
@@ -297,13 +303,12 @@ impl Organ {
             serial: 0,
             rate_num: numerator,
             rate_den: denominator,
-            attack_step: FULL,
             decay_step: FULL,
-            release_frames: 1,
+            sample_period,
+            vca_envelope: DEFAULT_ENVELOPE,
+            timing: DEFAULT_ENVELOPE.at_sample_period(sample_period),
         };
-        organ.attack_step = organ.ramp_step(2);
         organ.decay_step = organ.ramp_step(params.decay_ms);
-        organ.release_frames = organ.frames(params.release_ms);
         Some(organ)
     }
 
@@ -313,7 +318,13 @@ impl Organ {
         self.params
     }
 
-    /// The number of audible voices, including release tails.
+    /// The VCA settings shared by all four voices.
+    #[must_use]
+    pub const fn vca_envelope(&self) -> Adsr {
+        self.vca_envelope
+    }
+
+    /// The number of occupied voices, including held keys at zero sustain and release tails.
     #[must_use]
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|v| v.note.is_some()).count()
@@ -322,7 +333,9 @@ impl Organ {
     /// The held note in each of the four voice slots (release tails are `None`).
     #[must_use]
     pub fn held_notes(&self) -> [Option<u8>; POLYPHONY] {
-        self.voices.map(|v| if v.held { v.note } else { None })
+        self.voices
+            .each_ref()
+            .map(|v| if v.envelope.is_gated() { v.note } else { None })
     }
 
     #[allow(
@@ -365,7 +378,7 @@ impl Organ {
             .voices
             .iter()
             .enumerate()
-            .filter(|(_, v)| !v.held)
+            .filter(|(_, v)| !v.envelope.is_gated())
             .max_by_key(|(_, v)| self.serial.wrapping_sub(v.age));
         if let Some((i, _)) = released {
             return i;
@@ -377,12 +390,26 @@ impl Organ {
             .map_or(0, |(i, _)| i)
     }
 
+    fn set_vca_envelope(&mut self, adsr: Adsr) {
+        let adsr = Adsr {
+            sustain_percent: adsr.sustain_percent.min(100),
+            ..adsr
+        };
+        let timing = adsr.at_sample_period(self.sample_period);
+        for voice in &mut self.voices {
+            voice.envelope.retime(&self.timing, &timing);
+        }
+        self.timing = timing;
+        self.vca_envelope = adsr;
+        self.params.release_ms = u16::try_from(adsr.release_us / 1_000).unwrap_or(u16::MAX);
+    }
+
     fn apply(&mut self, message: Message) {
         match message {
             Message::NoteOn { note, velocity: 0 } | Message::NoteOff(note) => {
                 for voice in &mut self.voices {
                     if voice.note == Some(note) {
-                        voice.release(self.release_frames);
+                        voice.release(&self.timing);
                     }
                 }
             }
@@ -394,15 +421,13 @@ impl Organ {
                     self.serial = self.serial.wrapping_add(1);
                     self.voices[i] = Voice {
                         note: Some(note),
-                        held: true,
                         age: self.serial,
                         velocity: velocity.min(127),
-                        phase: 0,
                         step,
-                        amp: 0,
                         transient: FULL,
-                        release_step: FULL,
+                        ..Voice::SILENT
                     };
+                    self.voices[i].envelope.gate_on(&self.timing);
                 }
             }
             Message::Voicing(voicing) => self.params.voicing = voicing,
@@ -412,13 +437,14 @@ impl Organ {
                 self.params.decay_ms = ms.clamp(5, 500);
                 self.decay_step = self.ramp_step(self.params.decay_ms);
             }
-            Message::ReleaseMs(ms) => {
-                self.params.release_ms = ms.min(1000);
-                self.release_frames = self.frames(self.params.release_ms);
-            }
+            Message::VcaEnvelope(adsr) => self.set_vca_envelope(adsr),
+            Message::ReleaseMs(ms) => self.set_vca_envelope(Adsr {
+                release_us: u32::from(ms.min(1000)) * 1_000,
+                ..self.vca_envelope
+            }),
             Message::AllNotesOff => {
                 for voice in &mut self.voices {
-                    voice.release(self.release_frames);
+                    voice.release(&self.timing);
                 }
             }
             Message::Reset => self.voices = [Voice::SILENT; POLYPHONY],
@@ -434,7 +460,7 @@ impl Organ {
             let sum: i32 = self
                 .voices
                 .iter_mut()
-                .map(|v| v.next(self.params, self.attack_step, self.decay_step))
+                .map(|v| v.next(self.params, &self.timing, self.decay_step))
                 .sum();
             *sample = S::from_sample_(sum << Q31_SHIFT);
         }

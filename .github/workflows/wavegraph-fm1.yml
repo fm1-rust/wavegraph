@@ -6,6 +6,7 @@ on:
       - 'wavegraph-fm1/**'
       - 'wavegraph/**'
       - 'instruments/wavegraph-*/**'
+      - 'wavegraph-adsr/**'
       - 'wavegraph-core/**'
       - 'wavegraph-fx/**'
       - 'wavegraph-sample/**'

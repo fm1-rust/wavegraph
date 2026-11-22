@@ -81,7 +81,7 @@ enum Page {
     Scope(Part),
     Menu(Part),
     Fx,
-    Envelope(EnvelopeControls),
+    Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
 }
 
@@ -174,32 +174,45 @@ impl Screen {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
+        focus: Part,
         controls: EnvelopeControls,
         late: bool,
     ) -> Result<(), Error> {
-        let page = Page::Envelope(controls);
+        let page = Page::Envelope(focus, controls);
         let previous = self.page.replace(page);
         if previous != Some(page) {
-            let entering = !matches!(previous, Some(Page::Envelope(_)));
+            let entering = !matches!(previous, Some(Page::Envelope(part, _)) if part == focus);
+            let (style, title, ink) = if focus == Part::Organ {
+                (
+                    WaveformStyle {
+                        trace: ORGAN_LIME,
+                        ..ORGAN_STYLE
+                    },
+                    b"ORGAN VCA ENV".as_slice(),
+                    ORGAN_LIME,
+                )
+            } else {
+                (ENV_STYLE, b"VCA ENVELOPE".as_slice(), palette::GREEN)
+            };
             if entering {
-                self.change_view(ENV_STYLE);
+                self.change_view(style);
             }
             self.plot.paint_async(lcd, &controls.trace(), clock).await?;
             if entering {
                 // The curve's dirty tiles stay between the two label bands.
-                let background = ENV_STYLE.background.into_storage();
+                let background = style.background.into_storage();
                 lcd.fill_rect(0, 0, SIZE, 16, background)?;
                 lcd.fill_rect(0, 192, SIZE, SIZE - 192, background)?;
             }
-            self.text.text(0, 0, b"VCA ENVELOPE", palette::GREEN);
+            self.text.text(0, 0, title, ink);
             let adsr = controls.adsr();
-            env_time(self.text, 0, 12, b"A", adsr.attack_us);
-            env_time(self.text, 10, 12, b"D", adsr.decay_us);
+            env_time(self.text, 0, 12, b"A", adsr.attack_us, ink);
+            env_time(self.text, 10, 12, b"D", adsr.decay_us, ink);
             self.text.text(0, 14, b"S", palette::WHITE);
             self.text
-                .number(1, 14, 4, u32::from(adsr.sustain_percent), palette::GREEN);
+                .number(1, 14, 4, u32::from(adsr.sustain_percent), ink);
             self.text.text(5, 14, b"/100", palette::MUTED);
-            env_time(self.text, 10, 14, b"R", adsr.release_us);
+            env_time(self.text, 10, 14, b"R", adsr.release_us, ink);
         }
         if late {
             self.text.text(16, 0, b"LATE", palette::RED);
@@ -304,12 +317,16 @@ impl Screen {
                         .paint_bass_envelope(lcd, clock, labels.bass, late)
                         .await;
                 }
-                Part::Mono => {
+                Part::Mono | Part::Organ => {
+                    let controls = if labels.focus == Part::Organ {
+                        labels.organ.envelope
+                    } else {
+                        labels.mono_envelope
+                    };
                     return self
-                        .paint_envelope(lcd, clock, labels.mono_envelope, late)
+                        .paint_envelope(lcd, clock, labels.focus, controls, late)
                         .await;
                 }
-                Part::Organ => {} // Organ ENV is reserved for a future editor.
             }
         }
         let bass = !labels.fx_view && labels.focus == Part::Bass;
@@ -434,8 +451,8 @@ impl Screen {
     }
 }
 
-fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32) {
-    let (value, unit) = if us.is_multiple_of(1_000_000) {
+fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32, ink: Rgb565) {
+    let (value, unit) = if us != 0 && us.is_multiple_of(1_000_000) {
         (us / 1_000_000, b"S ")
     } else if us.is_multiple_of(1000) {
         (us / 1000, b"MS")
@@ -443,7 +460,7 @@ fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32) {
         (us, b"US")
     };
     text.text(x, y, label, palette::WHITE);
-    text.number(x + 1, y, 5, value, palette::GREEN);
+    text.number(x + 1, y, 5, value, ink);
     text.text(x + 6, y, unit, palette::MUTED);
 }
 

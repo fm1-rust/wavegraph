@@ -24,6 +24,7 @@ let envelope = Message::VcaEnvelope(Adsr {
 });
 ```
 
+The monosynth uses [wavegraph-adsr](../../wavegraph-adsr/) for its VCA.
 Attack rises linearly to peak gain. Decay and release follow quadratic
 curves to sustain and silence. Overlapping notes share a gate. Releasing the
 current note starts the tail at its present level, and a fresh attack can

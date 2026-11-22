@@ -1,7 +1,10 @@
 //! M1-inspired organ panel controls, separate from the DSP's voice state.
 
-use crate::instrument::{EventBatch, Note, at};
-use wavegraph_organ::Message;
+use crate::{
+    envelope::EnvelopeControls,
+    instrument::{EventBatch, Note, at},
+};
+use wavegraph_organ::{Message, Params};
 
 /// A physical organ key and its strike generation, retained across dropped scans.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,16 +33,22 @@ impl Knob {
     const ALL: [Self; 4] = [Self::Tone, Self::Percussion, Self::Decay, Self::Release];
 }
 
-/// Four persistent knob values in the DSP's own units.
+/// Organ timbre and amplitude controls retained across panel views.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Controls {
-    values: [u16; 4],
+    tone: u8,
+    percussion: u8,
+    decay_ms: u16,
+    pub(super) envelope: EnvelopeControls,
     last: Knob,
 }
 
 impl Controls {
     pub(super) const INITIAL: Self = Self {
-        values: [80, 44, 70, 55],
+        tone: Params::INITIAL.tone,
+        percussion: Params::INITIAL.percussion,
+        decay_ms: Params::INITIAL.decay_ms,
+        envelope: EnvelopeControls::ORGAN,
         last: Knob::Tone,
     };
 
@@ -52,44 +61,58 @@ impl Controls {
             if delta == 0 {
                 continue;
             }
-            let (minimum, maximum, scale) = match knob {
-                Knob::Tone | Knob::Percussion => (0, 127, 1),
-                Knob::Decay => (5, 500, 5),
-                Knob::Release => (0, 1000, 5),
-            };
-            let i = knob as usize;
-            self.values[i] = self.values[i]
-                .saturating_add_signed(i16::from(delta) * scale)
-                .clamp(minimum, maximum);
+            match knob {
+                Knob::Tone => self.tone = self.tone.saturating_add_signed(delta).min(127),
+                Knob::Percussion => {
+                    self.percussion = self.percussion.saturating_add_signed(delta).min(127)
+                }
+                Knob::Decay => {
+                    self.decay_ms = self
+                        .decay_ms
+                        .saturating_add_signed(i16::from(delta) * 5)
+                        .clamp(5, 500)
+                }
+                Knob::Release => self.envelope.turn_organ([0, 0, 0, delta]),
+            }
             self.last = knob;
         }
     }
 
     pub(super) fn readout(self) -> (&'static [u8], u16, &'static [u8]) {
-        let value = self.values[self.last as usize];
         match self.last {
-            Knob::Tone => (b"TONE     ", value, b"/127"),
-            Knob::Percussion => (b"PERCUSS  ", value, b"/127"),
-            Knob::Decay => (b"DECAY    ", value, b"MS  "),
-            Knob::Release => (b"RELEASE  ", value, b"MS  "),
+            Knob::Tone => (b"TONE     ", u16::from(self.tone), b"/127"),
+            Knob::Percussion => (b"PERCUSS  ", u16::from(self.percussion), b"/127"),
+            Knob::Decay => (b"KEY DECAY", self.decay_ms, b"MS  "),
+            Knob::Release => (
+                b"RELEASE  ",
+                u16::try_from(self.envelope.adsr().release_us / 1000)
+                    .expect("panel release fits in milliseconds"),
+                b"MS  ",
+            ),
         }
     }
 
     pub(super) fn events(self, previous: Option<Self>) -> EventBatch {
         let mut batch = EventBatch::new();
-        for knob in Knob::ALL {
-            let i = knob as usize;
-            if previous.is_some_and(|p| p.values[i] == self.values[i]) {
-                continue;
+        let old = previous.unwrap_or(Self::INITIAL);
+        for (changed, msg) in [
+            (self.tone != old.tone, Message::Tone(self.tone)),
+            (
+                self.percussion != old.percussion,
+                Message::Percussion(self.percussion),
+            ),
+            (
+                self.decay_ms != old.decay_ms,
+                Message::DecayMs(self.decay_ms),
+            ),
+            (
+                self.envelope != old.envelope,
+                Message::VcaEnvelope(self.envelope.adsr()),
+            ),
+        ] {
+            if previous.is_none() || changed {
+                batch.push(at(msg)).expect("four organ controls");
             }
-            let value = self.values[i];
-            let message = match knob {
-                Knob::Tone => Message::Tone(u8::try_from(value).unwrap_or(127)),
-                Knob::Percussion => Message::Percussion(u8::try_from(value).unwrap_or(127)),
-                Knob::Decay => Message::DecayMs(value),
-                Knob::Release => Message::ReleaseMs(value),
-            };
-            batch.push(at(message)).expect("four organ knobs");
         }
         batch
     }
@@ -111,5 +134,42 @@ mod tests {
         );
         controls.turn_knobs([i8::MIN; 4]);
         assert_eq!(controls.readout().1, 50);
+    }
+
+    #[test]
+    fn both_views_edit_one_release_and_key_decay_is_independent_of_vca_decay() {
+        let mut panel = Controls::INITIAL;
+        assert_eq!(panel.envelope.adsr(), wavegraph_organ::DEFAULT_ENVELOPE);
+        let initial = panel;
+        panel.turn_knobs([0, 0, 1, 2]);
+        assert_eq!(panel.envelope.adsr().release_us, 65_000);
+        assert_eq!(
+            panel.envelope.adsr().decay_us,
+            initial.envelope.adsr().decay_us
+        );
+        assert_eq!(
+            panel.events(Some(initial)).as_slice(),
+            &[
+                at(Message::DecayMs(75)),
+                at(Message::VcaEnvelope(panel.envelope.adsr())),
+            ]
+        );
+        let old = panel;
+        panel.envelope.turn_organ([1, 1, -30, -1]);
+        assert_eq!(panel.readout().1, 60);
+        assert_eq!(
+            panel.events(Some(old)).as_slice(),
+            &[at(Message::VcaEnvelope(panel.envelope.adsr()))]
+        );
+        panel.envelope.turn_organ([i8::MIN; 4]);
+        assert_eq!(
+            panel.envelope.adsr(),
+            wavegraph_adsr::Adsr {
+                sustain_percent: 0,
+                ..wavegraph_adsr::Adsr::GATE
+            }
+        );
+        let trace = panel.envelope.trace();
+        assert!(trace.iter().all(|&y| y == 172));
     }
 }

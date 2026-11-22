@@ -4,6 +4,7 @@ on:
   pull_request:
     paths: &wavegraph-paths
       - 'wavegraph/**'
+      - 'wavegraph-adsr/**'
       - 'wavegraph-core/**'
       - 'instruments/wavegraph-monosynth/**'
       - 'wavegraph-sample/**'
@@ -32,4 +33,4 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install stable --profile minimal --no-self-update
-      - run: cargo +stable test -p wavegraph -p wavegraph-core -p wavegraph-monosynth --all-features --locked
+      - run: cargo +stable test -p wavegraph -p wavegraph-adsr -p wavegraph-core -p wavegraph-monosynth --all-features --locked
