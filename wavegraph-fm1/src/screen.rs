@@ -18,7 +18,10 @@ use fm1_rticx::{
 };
 use static_cell::{ConstStaticCell, StaticCell};
 
+mod selector;
 mod splash;
+
+use selector::Selector;
 
 const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
 const GRID: u8 = 24;
@@ -54,9 +57,7 @@ const ORGAN_STYLE: WaveformStyle = WaveformStyle {
 };
 const ORGAN_LIME: Rgb565 = Rgb565::new(25, 63, 5);
 const ORGAN_MUTED: Rgb565 = Rgb565::new(12, 26, 18);
-const MENU_BG: Rgb565 = Rgb565::new(4, 7, 8);
-const MENU_BORDER: Rgb565 = Rgb565::new(22, 48, 5);
-const MENU_TICKS: u32 = 140; // The 100 Hz timer holds the patch list for 1.4 s.
+const MENU_TICKS: u32 = 100; // One second after the last PRESETS detent.
 const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
 const BASS_MUTED: Rgb565 = Rgb565::new(7, 15, 8);
 const LANE_INKS: [Rgb565; 3] = [SILVER.trace, OXIDE_RED, Rgb565::new(1, 18, 15)];
@@ -79,7 +80,6 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Part),
-    Menu(Part),
     Fx,
     Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
@@ -90,6 +90,7 @@ pub(super) struct Screen {
     lanes: [&'static mut Lane; 3],
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
+    selector: &'static mut Selector,
     beam: Beam,
     page: Option<Page>,
 }
@@ -98,6 +99,7 @@ impl Screen {
     pub(super) fn new() -> Self {
         static PLOT: StaticCell<Waveform<WIDTH, WIDTH>> = StaticCell::new();
         static LANES: [StaticCell<Lane>; 3] = [const { StaticCell::new() }; 3];
+        static SELECTOR: ConstStaticCell<Selector> = ConstStaticCell::new(Selector::new());
         static TEXT: StaticCell<TextGrid> = StaticCell::new();
         static STRIP: ConstStaticCell<[[u8; 2]; BAND * HEIGHT]> =
             ConstStaticCell::new([[0; 2]; BAND * HEIGHT]);
@@ -118,6 +120,7 @@ impl Screen {
             }),
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
+            selector: SELECTOR.take(),
             page: None,
             beam: Beam {
                 old_head: None,
@@ -130,44 +133,6 @@ impl Screen {
         self.plot.set_style(style);
         *self.text = TextGrid::with_background(style.background);
         self.beam.old_head = None;
-    }
-
-    // A modal overlay on top of the previous scope. During the 1.4-second
-    // selection window only the menu is painted; audio and scope capture keep
-    // running. The next page repaint invalidates the covered waveform tiles.
-    async fn paint_menu(
-        &mut self,
-        lcd: &mut Display,
-        clock: &mut Clock,
-        focus: Part,
-    ) -> Result<(), Error> {
-        let next = Page::Menu(focus);
-        if self.page == Some(next) {
-            return Ok(());
-        }
-        self.page = Some(next);
-        *self.text = TextGrid::with_background(MENU_BG);
-        // Narrow lime frame and charcoal interior evoke the M1 patch browser.
-        lcd.fill_rect(12, 48, 216, 144, MENU_BORDER.into_storage())?;
-        lcd.fill_rect(14, 50, 212, 140, MENU_BG.into_storage())?;
-        self.text.text(3, 4, b"PATCH SELECT", palette::CYAN);
-        let names: [&[u8]; 3] = [b"1 MONOSYNTH", b"2 M1 ORGAN", b"3 TB-303"];
-        for (i, (part, name)) in [Part::Mono, Part::Organ, Part::Bass]
-            .into_iter()
-            .zip(names)
-            .enumerate()
-        {
-            let selected = part == focus;
-            self.text
-                .text(3, 6 + i * 2, if selected { b"+" } else { b" " }, ORGAN_LIME);
-            self.text.text(
-                5,
-                6 + i * 2,
-                name,
-                if selected { ORGAN_LIME } else { palette::WHITE },
-            );
-        }
-        self.text.paint_async(lcd, clock).await
     }
 
     async fn paint_envelope(
@@ -221,7 +186,10 @@ impl Screen {
     }
 
     fn bass_panel(&mut self, controls: Controls) {
-        let (ink, muted) = (OXIDE_RED, BASS_MUTED);
+        let (ink, muted) = (
+            self.selector.shade(OXIDE_RED),
+            self.selector.shade(BASS_MUTED),
+        );
         self.text.text(0, 0, b"TB-303", ink);
         let bank = controls.bank;
         self.text.text(
@@ -299,14 +267,12 @@ impl Screen {
         late: bool,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        if labels
-            .menu_since
-            .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS)
-        {
-            return self.paint_menu(lcd, clock, labels.focus).await;
-        }
-        // The menu covered scope tiles; force a clean redraw on its exit.
-        if matches!(self.page, Some(Page::Menu(_))) {
+        let browsing = !labels.env_mode
+            && labels
+                .menu_since
+                .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS);
+        if self.selector.select(browsing.then_some(labels.focus)) {
+            // Restore the palette and any tiles previously covered by the list.
             self.plot.invalidate();
             self.page = None;
         }
@@ -338,6 +304,8 @@ impl Screen {
         } else {
             (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
         };
+        let style = self.selector.style(style);
+        let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
         let page = if labels.fx_view {
             Page::Fx
         } else {
@@ -353,9 +321,12 @@ impl Screen {
         } else {
             frame.trace
         };
-        self.plot
-            .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
-            .await?;
+        // While browsing, compose moving trace pixels and the list in the same LCD write.
+        if changed_page || !browsing {
+            self.plot
+                .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
+                .await?;
+        }
         if changed_page {
             let (header, footer) = if bass || organ || labels.fx_view {
                 (if bass { 48 } else { 16 }, 32)
@@ -366,8 +337,7 @@ impl Screen {
                 lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
-        self.beam
-            .paint(lcd, clock, &trace, self.strip, style, labels.focus)
+        self.paint_beam(lcd, clock, &trace, style, labels.focus)
             .await?;
         if labels.fx_view {
             self.text.text(0, 0, b"FX / REVERB", ink);
@@ -437,8 +407,13 @@ impl Screen {
         self.text.text(0, 14, labels.voice.label(labels.focus), ink);
         self.text.text(8, 14, labels.voice.note_name(), bright);
         if late {
-            self.text
-                .text(12, 14, b"LATE", if bass { OXIDE_RED } else { palette::RED });
+            self.text.text(
+                12,
+                14,
+                b"LATE",
+                self.selector
+                    .shade(if bass { OXIDE_RED } else { palette::RED }),
+            );
         }
         self.text.text(16, 14, b"V", muted);
         let velocity = labels
@@ -506,25 +481,42 @@ fn phosphor(part: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
     }
 }
 
-impl Beam {
-    async fn paint(
+impl Screen {
+    async fn paint_beam(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
         trace: &Trace,
-        scratch: &mut [[u8; 2]],
         style: WaveformStyle,
         part: Part,
     ) -> Result<(), Error> {
-        let head = self.old_head.map_or(0, |x| (x + BAND) % WIDTH);
+        let beam = &mut self.beam;
+        let selector = &*self.selector;
+        let head = beam.old_head.map_or(0, |x| (x + BAND) % WIDTH);
         let mut lcd = lcd.as_async(clock)?;
         for x0 in (0..WIDTH).step_by(BAND) {
             // Include the old halo when a note or its gain changes under the beam.
             let mut top = HEIGHT;
             let mut bottom = 0;
+            if selector.visible()
+                && beam.old_head.is_none()
+                && x0 < selector::RIGHT
+                && x0 + BAND > selector::LEFT
+            {
+                top = selector::TOP - usize::from(TOP);
+                bottom = selector::BOTTOM - 1 - usize::from(TOP);
+            }
             for x in x0..x0 + BAND {
+                if selector.visible() && beam.old_head.is_some() {
+                    let old = segment(&beam.old_trace, x);
+                    let new = segment(trace, x);
+                    if old != new {
+                        top = top.min(old.0).min(new.0);
+                        bottom = bottom.max(old.1).max(new.1);
+                    }
+                }
                 for (which_head, which_trace) in
-                    [(Some(head), trace), (self.old_head, &self.old_trace)]
+                    [(Some(head), trace), (beam.old_head, &beam.old_trace)]
                 {
                     if which_head.is_some_and(|h| age(h, x) < TRAIL) {
                         let (a, b) = segment(which_trace, x);
@@ -537,11 +529,13 @@ impl Beam {
                 continue;
             }
             let height = bottom - top + 1;
-            let pixels = &mut scratch[..BAND * height];
+            let pixels = &mut self.strip[..BAND * height];
             for dx in 0..BAND {
                 let x = x0 + dx;
                 let (a, b) = segment(trace, x);
                 let (ink, halo) = phosphor(part, age(head, x));
+                let ink = selector.shade(ink);
+                let halo = halo.map(|color| selector.shade(color));
                 for y in top..=bottom {
                     let paper = paper(style, x, usize::from(TOP) + y);
                     let color = if (a..=b).contains(&y) {
@@ -551,7 +545,8 @@ impl Beam {
                     } else {
                         paper
                     };
-                    pixels[(y - top) * BAND + dx] = color.to_be_bytes();
+                    pixels[(y - top) * BAND + dx] =
+                        selector.pixel(x, usize::from(TOP) + y, color).to_be_bytes();
                 }
             }
             lcd.write_rect_buffered(
@@ -564,8 +559,8 @@ impl Beam {
             .await?;
         }
         lcd.flush().await?;
-        self.old_head = Some(head);
-        self.old_trace = *trace;
+        beam.old_head = Some(head);
+        beam.old_trace = *trace;
         Ok(())
     }
 }

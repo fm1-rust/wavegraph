@@ -315,13 +315,12 @@ mod app {
             while let Ok((scan, focus, gates, organ_keys)) = self.input.recv().await {
                 let before = self.settings;
                 self.settings.focus = focus;
-                if scan.encoder_delta(Encoder::Presets) != 0 {
+                if before.focus != focus || scan.encoder_delta(Encoder::Presets) != 0 {
                     self.settings.menu_since = Some(ticks());
-                }
-                if before.focus != focus {
                     self.settings.env_mode = false;
                 }
                 if scan.pressed(Button::Env) {
+                    self.settings.menu_since = None;
                     self.settings.env_mode = !self.settings.env_mode;
                     if self.settings.env_mode {
                         self.settings.fx_view = false;
