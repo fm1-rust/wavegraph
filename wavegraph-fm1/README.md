@@ -15,7 +15,8 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 | Control | Action |
 | --- | --- |
 | PRESETS encoder | Select monosynth → organ → TB-303; a patch list overlays the previous screen for 1.4 seconds. Holding notes does not switch their owner. |
-| Piano keys | Play F3 to G5; the organ has four independent voices, while monosynth and 303 remain monophonic. |
+| Piano keys | Play F3 to G5 at the default octave. The organ has four voices. The monosynth and 303 each play one note at a time. |
+| OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
@@ -30,7 +31,7 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Mute or unmute the wet return without clearing the reverb tail. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
-| Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
+| Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
 | --- | --- | --- | --- | --- |

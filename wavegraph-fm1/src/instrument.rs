@@ -80,24 +80,36 @@ pub(super) struct Gate {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Held {
+    key: u8,
     part: Part,
     note: Note,
     strike: u32,
 }
 
-/// Keys retain their owning instrument after focus moves; the newest four
-/// organ keys are a complete, allocation-free snapshot for the audio task.
+/// A physical key retains the part and pitch it had when struck.
 #[derive(Debug, Default)]
 pub(super) struct Keyboard<const KEYS: usize> {
     pub(super) focus: Part,
+    pub(super) octave: i8,
     held: Vec<Held, KEYS>,
     gates: [Gate; 3],
     serial: u32,
 }
 
 impl<const KEYS: usize> Keyboard<KEYS> {
-    pub(super) fn press(&mut self, note: Note) {
-        self.release(note.number);
+    pub(super) fn shift_octave(&mut self, delta: i8) {
+        self.octave = self.octave.saturating_add(delta).clamp(-3, 3);
+    }
+
+    /// The unshifted panel note identifies the physical key on both edges.
+    pub(super) fn press(&mut self, key: Note) {
+        self.release(key.number);
+        let note = Note {
+            number: key
+                .number
+                .saturating_add_signed(self.octave.saturating_mul(12)),
+            velocity: key.velocity,
+        };
         let gate = &mut self.gates[self.focus as usize];
         if gate.note.is_none() {
             gate.phrase = gate.phrase.wrapping_add(1);
@@ -106,6 +118,7 @@ impl<const KEYS: usize> Keyboard<KEYS> {
         self.serial = self.serial.wrapping_add(1);
         self.held
             .push(Held {
+                key: key.number,
                 part: self.focus,
                 note,
                 strike: self.serial,
@@ -113,8 +126,8 @@ impl<const KEYS: usize> Keyboard<KEYS> {
             .expect("one entry per pressed key");
     }
 
-    pub(super) fn release(&mut self, number: u8) {
-        if let Some(i) = self.held.iter().position(|key| key.note.number == number) {
+    pub(super) fn release(&mut self, key: u8) {
+        if let Some(i) = self.held.iter().position(|held| held.key == key) {
             let part = self.held.remove(i).part;
             self.gates[part as usize].note = self
                 .held
@@ -204,20 +217,23 @@ impl Voice {
         })
     }
 
-    pub(super) fn note_name(self) -> [u8; 3] {
+    pub(super) fn note_name(self) -> [u8; 4] {
         const NAMES: [[u8; 2]; 12] = [
             *b"C ", *b"C#", *b"D ", *b"D#", *b"E ", *b"F ", *b"F#", *b"G ", *b"G#", *b"A ", *b"A#",
             *b"B ",
         ];
         let Some(Note { number: note, .. }) = self.sounding() else {
-            return *b"-- ";
+            return *b"--  ";
         };
         let [letter, accidental] = NAMES[usize::from(note % 12)];
-        let octave = b'0'.saturating_add((note / 12).saturating_sub(1));
+        let [octave, tail] = match (note / 12).checked_sub(1) {
+            Some(octave) => [b'0'.saturating_add(octave), b' '],
+            None => *b"-1",
+        };
         if accidental == b'#' {
-            [letter, accidental, octave]
+            [letter, accidental, octave, tail]
         } else {
-            [letter, octave, b' ']
+            [letter, octave, tail, b' ']
         }
     }
 }
@@ -315,18 +331,21 @@ impl Parts {
             left.strike == right.strike
                 && sounding(left, old_transpose) == sounding(right, now_transpose)
         };
-        // Release removed and retuned keys first, then strike newly visible keys.
-        // The audio instrument itself keeps at most four voices, including tails.
+        // Two physical keys can hold the same pitch across an octave change.
+        // Release it only when its last key goes up.
         for &old in &old_keys {
             if let Some(note) = sounding(old, old_transpose)
-                && !self.organ_keys.iter().any(|&new| same(old, new))
+                && !self.organ_keys.iter().any(|&new| {
+                    sounding(new, now_transpose).is_some_and(|held| held.number == note.number)
+                })
             {
                 events
                     .push(at(OrganMessage::NoteOff(note.number)))
                     .expect("at most four organ note-offs");
             }
         }
-        for &new in &self.organ_keys {
+        // Apply simultaneous strikes oldest first so the newest velocity wins.
+        for &new in self.organ_keys.iter().rev() {
             if let Some(note) = sounding(new, now_transpose)
                 && !old_keys.iter().any(|&old| same(old, new))
             {
@@ -723,6 +742,82 @@ mod tests {
     }
 
     #[test]
+    fn octave_follows_the_keyboard_and_held_keys_keep_their_pitch_and_part() {
+        let mut keys = Keyboard::<4>::default();
+        keys.shift_octave(1);
+        keys.press(note(53, 80)); // F3 plays F4 on the monosynth.
+        keys.focus.turn_preset(1);
+        keys.press(note(57, 90)); // A3 plays A4 on the organ.
+        keys.shift_octave(-1);
+        keys.press(note(65, 95)); // F4 on the organ.
+        keys.focus.turn_preset(1);
+        keys.shift_octave(-1);
+        keys.press(note(77, 105)); // F5 plays F4 on the 303.
+        assert_eq!(
+            keys.gates().map(|gate| gate.note),
+            [Some(note(65, 80)), Some(note(65, 95)), Some(note(65, 105))]
+        );
+        keys.release(65);
+        assert_eq!(keys.organ_keys()[0].note, Some(note(69, 90)));
+        keys.release(53);
+        assert_eq!(
+            keys.gates().map(|gate| gate.note),
+            [None, Some(note(69, 90)), Some(note(65, 105))]
+        );
+        keys.release(77);
+        keys.release(57);
+        assert_eq!(keys.gates().map(|gate| gate.note), [None; 3]);
+    }
+
+    #[test]
+    fn octave_limits_compose_with_select_transpose() {
+        for (step, key, transpose, pitch, name) in
+            [(-1, 54, -12, 6, *b"F#-1"), (1, 79, 12, 127, *b"G9  ")]
+        {
+            let mut keys = Keyboard::<1>::default();
+            for _ in 0..5 {
+                keys.shift_octave(step);
+            }
+            keys.press(note(key, 100));
+            let mut parts = Parts::INITIAL;
+            parts.turn_select(Part::Mono, transpose);
+            let voice = &mut parts.voices[Part::Mono as usize];
+            voice.gate = keys.gates()[Part::Mono as usize];
+            assert_eq!(voice.sounding(), Some(note(pitch, 100)));
+            assert_eq!(voice.note_name(), name);
+        }
+    }
+
+    #[test]
+    fn either_organ_key_can_sustain_a_shared_pitch() {
+        for (first, last) in [(65, 53), (53, 65)] {
+            let mut keys = Keyboard::<2>::default();
+            keys.focus.turn_preset(1);
+            keys.press(note(65, 60));
+            keys.shift_octave(1);
+            keys.press(note(53, 100));
+            let mut parts = Parts::INITIAL;
+            parts.organ_keys = keys.organ_keys();
+            let strike = |velocity| at(OrganMessage::NoteOn { note: 65, velocity });
+            assert_eq!(
+                parts.organ_events(Some(Parts::INITIAL)).as_slice(),
+                &[strike(60), strike(100)]
+            );
+            let both = parts;
+            keys.release(first);
+            parts.organ_keys = keys.organ_keys();
+            assert!(parts.organ_events(Some(both)).is_empty());
+            let remaining = parts;
+            keys.release(last);
+            parts.organ_keys = keys.organ_keys();
+            assert_eq!(
+                parts.organ_events(Some(remaining)).as_slice(),
+                &[at(OrganMessage::NoteOff(65))]
+            );
+        }
+    }
+
+    #[test]
     fn knob_one_preserves_both_cutoffs_and_sends_the_initial_monosynth_cutoff() {
         let mut parts = Parts::INITIAL;
         let initial = parts;
@@ -812,7 +907,7 @@ mod tests {
             parts
                 .mono_envelope
                 .turn([i8::MIN, i8::MIN, i8::MAX, i8::MIN]);
-            assert_eq!(parts.voices[0].note_name(), *b"-- ");
+            assert_eq!(parts.voices[0].note_name(), *b"--  ");
             assert_eq!(
                 instrument.render(parts, &mut buses)?.map(I24::inner),
                 [0; 32]
@@ -823,7 +918,7 @@ mod tests {
                 let mono = &mut parts.voices[0];
                 mono.gate.note = Some(note(69, velocity));
                 mono.transpose = 12;
-                assert_eq!(mono.note_name(), *b"A5 ");
+                assert_eq!(mono.note_name(), *b"A5  ");
                 let block = instrument.render(parts, &mut buses)?.map(I24::inner);
                 let level = (32767 * i32::from(velocity)) >> 3;
                 assert!(block[12..].iter().all(|sample| sample.abs() == level));
@@ -844,7 +939,7 @@ mod tests {
             let mut buses = [[I24::default(); 3]; BUS_COUNT];
             let mut parts = Parts::INITIAL;
             parts.voices[0].gate.note = Some(note(69, 80));
-            assert_eq!(parts.voices[0].note_name(), *b"A4 ");
+            assert_eq!(parts.voices[0].note_name(), *b"A4  ");
             let dry = instrument.render(parts, &mut buses)?.map(I24::inner);
             assert_eq!(dry[0], 0);
             assert!(dry[1] > 0);
@@ -1045,12 +1140,13 @@ mod tests {
             })]
         );
         old = bass;
+        keys.shift_octave(1);
         keys.press(note(60, 96));
         bass.gate = keys.gates()[Part::Bass as usize];
         assert_eq!(
             &*controls.events(controls, bass, old),
             &[at(BassMessage::NoteOn {
-                note: 60,
+                note: 72,
                 accent: true,
                 slide: true,
             })]
@@ -1058,6 +1154,7 @@ mod tests {
         old = bass;
         keys.release(60);
         keys.release(53);
+        keys.shift_octave(-1);
         keys.press(note(60, 96));
         bass.gate = keys.gates()[Part::Bass as usize];
         bass.turn_waveform(Part::Bass, -1);
