@@ -10,7 +10,10 @@ use crate::{
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
 use fm1_rticx::{
-    bsp::display::{Display, Error, SIZE},
+    bsp::{
+        display::{Display, Error, SIZE},
+        time::ticks,
+    },
     time::Clock,
 };
 use static_cell::{ConstStaticCell, StaticCell};
@@ -39,6 +42,21 @@ const SILVER: WaveformStyle = WaveformStyle {
     grid_x: GRID,
     grid_y: GRID,
 };
+// Inspired by Korg's modern M1 plug-in: charcoal housing, electric lime
+// selection accents and a cool-blue numeric readout. Not a copied skin.
+const ORGAN_STYLE: WaveformStyle = WaveformStyle {
+    background: Rgb565::new(3, 5, 7),
+    grid: Rgb565::new(5, 13, 9),
+    center: Rgb565::new(8, 22, 11),
+    trace: Rgb565::new(22, 59, 7),
+    grid_x: GRID,
+    grid_y: GRID,
+};
+const ORGAN_LIME: Rgb565 = Rgb565::new(25, 63, 5);
+const ORGAN_MUTED: Rgb565 = Rgb565::new(12, 26, 18);
+const MENU_BG: Rgb565 = Rgb565::new(4, 7, 8);
+const MENU_BORDER: Rgb565 = Rgb565::new(22, 48, 5);
+const MENU_TICKS: u32 = 140; // The 100 Hz timer holds the patch list for 1.4 s.
 const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
 const BASS_MUTED: Rgb565 = Rgb565::new(7, 15, 8);
 const LANE_INKS: [Rgb565; 3] = [SILVER.trace, OXIDE_RED, Rgb565::new(1, 18, 15)];
@@ -61,6 +79,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Part),
+    Menu(Part),
     Fx,
     Envelope(EnvelopeControls),
     BassEnvelope(Controls),
@@ -111,6 +130,44 @@ impl Screen {
         self.plot.set_style(style);
         *self.text = TextGrid::with_background(style.background);
         self.beam.old_head = None;
+    }
+
+    // A modal overlay on top of the previous scope. During the 1.4-second
+    // selection window only the menu is painted; audio and scope capture keep
+    // running. The next page repaint invalidates the covered waveform tiles.
+    async fn paint_menu(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        focus: Part,
+    ) -> Result<(), Error> {
+        let next = Page::Menu(focus);
+        if self.page == Some(next) {
+            return Ok(());
+        }
+        self.page = Some(next);
+        *self.text = TextGrid::with_background(MENU_BG);
+        // Narrow lime frame and charcoal interior evoke the M1 patch browser.
+        lcd.fill_rect(12, 48, 216, 144, MENU_BORDER.into_storage())?;
+        lcd.fill_rect(14, 50, 212, 140, MENU_BG.into_storage())?;
+        self.text.text(3, 4, b"PATCH SELECT", palette::CYAN);
+        let names: [&[u8]; 3] = [b"1 MONOSYNTH", b"2 M1 ORGAN", b"3 TB-303"];
+        for (i, (part, name)) in [Part::Mono, Part::Organ, Part::Bass]
+            .into_iter()
+            .zip(names)
+            .enumerate()
+        {
+            let selected = part == focus;
+            self.text
+                .text(3, 6 + i * 2, if selected { b"+" } else { b" " }, ORGAN_LIME);
+            self.text.text(
+                5,
+                6 + i * 2,
+                name,
+                if selected { ORGAN_LIME } else { palette::WHITE },
+            );
+        }
+        self.text.paint_async(lcd, clock).await
     }
 
     async fn paint_envelope(
@@ -229,21 +286,38 @@ impl Screen {
         late: bool,
     ) -> Result<(), Error> {
         let labels = frame.labels;
+        if labels
+            .menu_since
+            .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS)
+        {
+            return self.paint_menu(lcd, clock, labels.focus).await;
+        }
+        // The menu covered scope tiles; force a clean redraw on its exit.
+        if matches!(self.page, Some(Page::Menu(_))) {
+            self.plot.invalidate();
+            self.page = None;
+        }
         if labels.env_mode && !labels.fx_view {
-            return match labels.focus {
+            match labels.focus {
                 Part::Bass => {
-                    self.paint_bass_envelope(lcd, clock, labels.bass, late)
-                        .await
+                    return self
+                        .paint_bass_envelope(lcd, clock, labels.bass, late)
+                        .await;
                 }
                 Part::Mono => {
-                    self.paint_envelope(lcd, clock, labels.mono_envelope, late)
-                        .await
+                    return self
+                        .paint_envelope(lcd, clock, labels.mono_envelope, late)
+                        .await;
                 }
-            };
+                Part::Organ => {} // Organ ENV is reserved for a future editor.
+            }
         }
         let bass = !labels.fx_view && labels.focus == Part::Bass;
+        let organ = !labels.fx_view && labels.focus == Part::Organ;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
+        } else if organ {
+            (ORGAN_STYLE, ORGAN_LIME, ORGAN_MUTED, palette::CYAN)
         } else {
             (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
         };
@@ -266,7 +340,7 @@ impl Screen {
             .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
             .await?;
         if changed_page {
-            let (header, footer) = if bass || labels.fx_view {
+            let (header, footer) = if bass || organ || labels.fx_view {
                 (if bass { 48 } else { 16 }, 32)
             } else {
                 (16, 16)
@@ -276,14 +350,7 @@ impl Screen {
             }
         }
         self.beam
-            .paint(
-                lcd,
-                clock,
-                &trace,
-                self.strip,
-                style,
-                if bass { Part::Bass } else { Part::Mono },
-            )
+            .paint(lcd, clock, &trace, self.strip, style, labels.focus)
             .await?;
         if labels.fx_view {
             self.text.text(0, 0, b"FX / REVERB", ink);
@@ -317,6 +384,20 @@ impl Screen {
         }
         if bass {
             self.bass_panel(labels.bass);
+        } else if organ {
+            self.text.text(0, 0, b"M1 ORGAN", ink);
+            let voices = labels
+                .organ_keys
+                .iter()
+                .filter(|key| key.note.is_some())
+                .count();
+            self.text.text(9, 0, b"V", muted);
+            self.text
+                .number(10, 0, 1, u32::try_from(voices).unwrap_or(0), bright);
+            let (name, value, units) = labels.organ.readout();
+            self.text.text(0, 13, name, muted);
+            self.text.number(10, 13, 4, u32::from(value), bright);
+            self.text.text(15, 13, units, muted);
         } else {
             self.text.text(0, 0, b"CUT", muted);
             self.text
@@ -332,6 +413,7 @@ impl Screen {
         let source = match (labels.voice_tap, labels.focus) {
             (false, _) => b"DAC",
             (true, Part::Mono) => b"VCA",
+            (true, Part::Organ) => b"ORG",
             (true, Part::Bass) => b"SRC",
         };
         self.text.text(17, 0, source, muted);
@@ -388,6 +470,14 @@ fn phosphor(part: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
             4..=9 => (OXIDE_RED, None),
             10..TRAIL => (Rgb565::new(8, 9, 5), None),
             _ => (SILVER.trace, None),
+        };
+    }
+    if part == Part::Organ {
+        return match age {
+            0..=4 => (ORGAN_LIME, Some(palette::CYAN)),
+            5..=12 => (Rgb565::new(19, 53, 9), None),
+            13..TRAIL => (Rgb565::new(11, 37, 7), None),
+            _ => (ORGAN_STYLE.trace, None),
         };
     }
     match age {

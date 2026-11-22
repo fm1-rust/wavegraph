@@ -1,6 +1,10 @@
 //! Persistent instruments feed a shared effect send/return graph.
 
-use crate::{bass::Controls, envelope::EnvelopeControls};
+use crate::{
+    bass::Controls,
+    envelope::EnvelopeControls,
+    organ::{Controls as OrganControls, OrganKey},
+};
 use heapless::Vec;
 use wavegraph::{
     Event, Port, Process, ProcessContext,
@@ -10,6 +14,7 @@ use wavegraph::{
 use wavegraph_303::{Message as BassMessage, Tb303};
 use wavegraph_fx::{Message as FxMessage, Reverb, SendMixer};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Waveform};
+use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
 
 const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
@@ -32,22 +37,29 @@ const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
 pub(super) enum Part {
     #[default]
     Mono,
+    Organ,
     Bass,
 }
 
 impl Part {
+    /// Full signed encoder delta, wrapping over exactly three instruments.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "A part index plus an i8 delta fits i16"
+    )]
     pub(super) fn turn_preset(&mut self, detents: i8) {
-        if detents % 2 != 0 {
-            *self = match self {
-                Self::Mono => Self::Bass,
-                Self::Bass => Self::Mono,
-            };
-        }
+        let index = (i16::from(*self as u8) + i16::from(detents)).rem_euclid(3);
+        *self = match index {
+            0 => Self::Mono,
+            1 => Self::Organ,
+            _ => Self::Bass,
+        };
     }
 
     pub(super) const fn tap(self) -> usize {
         match self {
             Self::Mono => 0,
+            Self::Organ => 6,
             Self::Bass => 2,
         }
     }
@@ -66,12 +78,21 @@ pub(super) struct Gate {
     pub(super) phrase: u32,
 }
 
-/// Each key keeps the instrument selected at note-on until it is released.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Held {
+    part: Part,
+    note: Note,
+    strike: u32,
+}
+
+/// Keys retain their owning instrument after focus moves; the newest four
+/// organ keys are a complete, allocation-free snapshot for the audio task.
 #[derive(Debug, Default)]
 pub(super) struct Keyboard<const KEYS: usize> {
     pub(super) focus: Part,
-    held: Vec<(Part, Note), KEYS>,
-    gates: [Gate; 2],
+    held: Vec<Held, KEYS>,
+    gates: [Gate; 3],
+    serial: u32,
 }
 
 impl<const KEYS: usize> Keyboard<KEYS> {
@@ -82,25 +103,48 @@ impl<const KEYS: usize> Keyboard<KEYS> {
             gate.phrase = gate.phrase.wrapping_add(1);
         }
         gate.note = Some(note);
+        self.serial = self.serial.wrapping_add(1);
         self.held
-            .push((self.focus, note))
+            .push(Held {
+                part: self.focus,
+                note,
+                strike: self.serial,
+            })
             .expect("one entry per pressed key");
     }
 
     pub(super) fn release(&mut self, number: u8) {
-        if let Some(i) = self.held.iter().position(|(_, note)| note.number == number) {
-            let (part, _) = self.held.remove(i);
+        if let Some(i) = self.held.iter().position(|key| key.note.number == number) {
+            let part = self.held.remove(i).part;
             self.gates[part as usize].note = self
                 .held
                 .iter()
                 .rev()
-                .find(|(owner, _)| *owner == part)
-                .map(|(_, note)| *note);
+                .find(|key| key.part == part)
+                .map(|key| key.note);
         }
     }
 
-    pub(super) fn gates(&self) -> [Gate; 2] {
+    pub(super) fn gates(&self) -> [Gate; 3] {
         self.gates
+    }
+
+    /// Four most recently held organ keys. Older physical keys are restored
+    /// when a newer key is released; their strike IDs do not change.
+    pub(super) fn organ_keys(&self) -> [OrganKey; POLYPHONY] {
+        let mut result = [OrganKey::EMPTY; POLYPHONY];
+        let organ_keys = self
+            .held
+            .iter()
+            .rev()
+            .filter(|held| held.part == Part::Organ);
+        for (slot, held) in result.iter_mut().zip(organ_keys) {
+            *slot = OrganKey {
+                note: Some(held.note),
+                strike: held.strike,
+            };
+        }
+        result
     }
 }
 
@@ -128,7 +172,7 @@ impl Voice {
         let position = self.waveform.wrapping_add_signed(detents);
         self.waveform = match part {
             Part::Mono => position % 4,
-            Part::Bass => position % 2,
+            Part::Organ | Part::Bass => position % 2,
         };
     }
 
@@ -146,6 +190,8 @@ impl Voice {
     pub(super) fn label(self, part: Part) -> &'static [u8] {
         match part {
             Part::Mono => MONO_WAVEFORMS[usize::from(self.waveform)].1,
+            Part::Organ if self.waveform == 0 => b"HOUSE   ",
+            Part::Organ => b"ANALOG  ",
             Part::Bass if self.waveform == 0 => b"SAW     ",
             Part::Bass => b"SQUARE  ",
         }
@@ -178,22 +224,26 @@ impl Voice {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Parts {
-    pub(super) voices: [Voice; 2],
+    pub(super) voices: [Voice; 3],
     pub(super) bass: Controls,
+    pub(super) organ: OrganControls,
+    pub(super) organ_keys: [OrganKey; POLYPHONY],
     pub(super) mono_envelope: EnvelopeControls,
 }
 
 impl Parts {
     pub(super) const INITIAL: Self = Self {
-        voices: [Voice::INITIAL; 2],
+        voices: [Voice::INITIAL; 3],
         bass: Controls::INITIAL,
+        organ: OrganControls::INITIAL,
+        organ_keys: [OrganKey::EMPTY; POLYPHONY],
         mono_envelope: EnvelopeControls::INITIAL,
     };
 
     pub(super) fn turn_select(&mut self, focus: Part, detents: i8) {
         match focus {
-            Part::Mono => {
-                let voice = &mut self.voices[Part::Mono as usize];
+            Part::Mono | Part::Organ => {
+                let voice = &mut self.voices[focus as usize];
                 voice.transpose = voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
             Part::Bass => self.bass.turn_select(detents),
@@ -203,6 +253,7 @@ impl Parts {
     pub(super) fn turn_knobs(&mut self, focus: Part, detents: [i8; 4]) {
         match focus {
             Part::Mono => self.voices[Part::Mono as usize].turn_cutoff(detents[0]),
+            Part::Organ => self.organ.turn_knobs(detents),
             Part::Bass => self.bass.turn_knobs(detents),
         }
     }
@@ -248,6 +299,57 @@ impl Parts {
         }
         events
     }
+
+    fn organ_events(self, previous: Option<Self>) -> EventBatch {
+        let mut events = self.organ.events(previous.map(|parts| parts.organ));
+        let old_keys = previous.map_or([OrganKey::EMPTY; POLYPHONY], |p| p.organ_keys);
+        let old_transpose = previous.map_or(0, |p| p.voices[Part::Organ as usize].transpose);
+        let now_transpose = self.voices[Part::Organ as usize].transpose;
+        let sounding = |key: OrganKey, transpose: i8| {
+            key.note.map(|mut note| {
+                note.number = note.number.saturating_add_signed(transpose);
+                note
+            })
+        };
+        let same = |left: OrganKey, right: OrganKey| {
+            left.strike == right.strike
+                && sounding(left, old_transpose) == sounding(right, now_transpose)
+        };
+        // Release removed and retuned keys first, then strike newly visible keys.
+        // The audio instrument itself keeps at most four voices, including tails.
+        for &old in &old_keys {
+            if let Some(note) = sounding(old, old_transpose)
+                && !self.organ_keys.iter().any(|&new| same(old, new))
+            {
+                events
+                    .push(at(OrganMessage::NoteOff(note.number)))
+                    .expect("at most four organ note-offs");
+            }
+        }
+        for &new in &self.organ_keys {
+            if let Some(note) = sounding(new, now_transpose)
+                && !old_keys.iter().any(|&old| same(old, new))
+            {
+                events
+                    .push(at(OrganMessage::NoteOn {
+                        note: note.number,
+                        velocity: note.velocity,
+                    }))
+                    .expect("at most four organ note-ons");
+            }
+        }
+        let shape = self.voices[Part::Organ as usize].waveform;
+        if previous.is_none_or(|p| p.voices[Part::Organ as usize].waveform != shape) {
+            events
+                .push(at(OrganMessage::Voicing(if shape == 0 {
+                    Voicing::House
+                } else {
+                    Voicing::Analog
+                })))
+                .expect("one voicing change");
+        }
+        events
+    }
 }
 
 /// Global sends and return settings, independent of the active instrument.
@@ -274,7 +376,7 @@ impl Fx {
         ..Self::DRY
     };
 
-    #[expect(dead_code)]
+    #[cfg_attr(test, expect(dead_code))]
     pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
         for (value, delta) in [
             &mut self.mono,
@@ -330,6 +432,7 @@ impl Fx {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Message {
     Mono(MonoMessage),
+    Organ(OrganMessage),
     Bass(BassMessage),
     Fx(FxMessage),
 }
@@ -337,6 +440,11 @@ pub(super) enum Message {
 impl From<MonoMessage> for Message {
     fn from(value: MonoMessage) -> Self {
         Self::Mono(value)
+    }
+}
+impl From<OrganMessage> for Message {
+    fn from(value: OrganMessage) -> Self {
+        Self::Organ(value)
     }
 }
 impl From<BassMessage> for Message {
@@ -358,12 +466,13 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
     }
 }
 
-// One waveform, eight knob assignments and one note transition at the block boundary.
-const MAX_EVENTS: usize = 10;
+// Four organ note-offs, four note-ons, four panel values and a voicing event.
+const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 
 pub(super) enum Node<'a> {
     Mono(Monosynth<'a>),
+    Organ(&'a mut Organ),
     Bass(Tb303),
 }
 
@@ -378,6 +487,10 @@ impl Process<Message, I24> for Node<'_> {
         match self {
             Self::Mono(node) => dispatch(node, cx, |m| match m {
                 Message::Mono(m) => Some(m),
+                _ => None,
+            }),
+            Self::Organ(node) => dispatch(*node, cx, |m| match m {
+                Message::Organ(m) => Some(m),
                 _ => None,
             }),
             Self::Bass(node) => dispatch(node, cx, |m| match m {
@@ -408,7 +521,7 @@ impl Process<Message, I24> for FxSend {
     }
 }
 
-/// One reverb tank shared by both synths; no storage on the ISR stack.
+/// One reverb tank shared by the monosynth and 303; no storage on the ISR stack.
 pub(super) struct FxReverb<'a>(pub(super) Reverb<'a>);
 
 impl Process<Message, I24> for FxReverb<'_> {
@@ -449,28 +562,28 @@ fn dispatch<M>(
         inputs: cx.inputs,
         outputs: cx.outputs,
         events: &events,
-        emit: &mut |e| Err(e), // Both native voices have only a signal outlet.
+        emit: &mut |e| Err(e), // The instrument nodes have only a signal outlet.
     });
 }
 
-pub(super) const BUS_COUNT: usize = 8;
-type Plan = Program<'static, 8, 2>;
+pub(super) const BUS_COUNT: usize = 10;
+type Plan = Program<'static, 10, 2>;
 pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
     pub(super) fn decode() -> Result<Self, Error> {
-        // 0: mono, 1: bass, 2: quarter-gain bass, 3: dry mix.
-        // 4: per-instrument send, 5: wet return, 6: dry+wet.
-        // 7: optional half-gain output. Effect state survives program edits.
+        // The organ joins the dry mix after the monosynth and 303 reverb sends.
         const ROUTE: &[u8] = &[
             VERSION, 1, 0, 0, 1, // CALL mono -> 0
-            1, 1, 0, 1, // CALL bass -> 1
+            1, 2, 0, 1, // CALL bass -> 1
             2, 1, 32, // GAIN bass by 1/4 -> 2
-            3, 0, 2, // MIX dry voices -> 3
-            1, 2, 2, 1, 0, 2, // CALL send mixer(0,2) -> 4
-            1, 3, 1, 1, 4, // CALL reverb(4) -> 5
-            3, 3, 5, // MIX dry+wet -> 6
-            2, 6, 64, // GAIN optional headroom -> 7
+            3, 0, 2, // MIX mono and bass -> 3
+            1, 3, 2, 1, 0, 2, // CALL send mixer(0,2) -> 4
+            1, 4, 1, 1, 4, // CALL reverb(4) -> 5
+            1, 1, 0, 1, // CALL organ -> 6
+            3, 3, 6, // MIX all three dry voices -> 7
+            3, 7, 5, // MIX dry+wet -> 8
+            2, 8, 64, // GAIN optional headroom -> 9
         ];
         const DRY_LEN: usize = ROUTE.len() - 3;
         Ok(Self([
@@ -522,6 +635,7 @@ impl Instrument<'_> {
     ) -> Result<&'b [I24; N], Error> {
         let bass = parts.voices[Part::Bass as usize];
         let mono_events = parts.mono_events(self.previous);
+        let organ_events = parts.organ_events(self.previous);
         let old = self.previous.unwrap_or(Parts::INITIAL);
         let bass_events = parts
             .bass
@@ -530,12 +644,18 @@ impl Instrument<'_> {
         self.patch.render(
             &mut Software,
             buses,
-            &[&mono_events, &bass_events, &fx_events, &fx_events],
+            &[
+                &mono_events,
+                &organ_events,
+                &bass_events,
+                &fx_events,
+                &fx_events,
+            ],
             |_, e| Err(e),
         )?;
         self.previous = Some(parts);
         self.previous_fx = Some(self.fx);
-        Ok(&buses[if self.half_gain { 7 } else { 6 }])
+        Ok(&buses[if self.half_gain { 9 } else { 8 }])
     }
 }
 
@@ -555,38 +675,51 @@ mod tests {
         let programs = Programs::decode()?;
         let tuning = Tuning::new(mono_rate, 1).expect("audio sample clock");
         let mut mono = Node::Mono(Monosynth::new(&tuning));
+        let mut organ_state = Organ::new(mono_rate, 1).expect("organ sample clock");
+        let mut organ = Node::Organ(&mut organ_state);
         let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0));
         let mut send = FxSend(SendMixer::new());
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxReverb(Reverb::new(&mut storage));
-        let mut nodes: [&mut dyn Process<Message, I24>; 4] =
-            [&mut mono, &mut bass, &mut send, &mut reverb];
+        let mut nodes: [&mut dyn Process<Message, I24>; 5] =
+            [&mut mono, &mut organ, &mut bass, &mut send, &mut reverb];
         test(&mut programs.bind(&mut nodes)?)
     }
 
     #[test]
-    fn keys_keep_their_owner_and_recall_each_parts_last_strike() {
-        let mut keys = Keyboard::<3>::default();
-        let (a, c, e) = (note(69, 35), note(72, 113), note(76, 64));
+    fn keys_keep_their_owner_with_three_parts_and_polyphonic_organ() {
+        let mut keys = Keyboard::<5>::default();
+        let (a, c, e, g, bass) = (
+            note(69, 35),
+            note(72, 113),
+            note(76, 64),
+            note(79, 100),
+            note(55, 96),
+        );
         keys.press(a);
         keys.press(c);
-        let [mono, _] = keys.gates();
+        let [mono, _, _] = keys.gates();
         assert_eq!(mono.note, Some(c));
-        keys.focus.turn_preset(-1);
+        keys.focus.turn_preset(1); // Mono -> Organ
         keys.press(e);
+        keys.press(g);
+        assert_eq!(keys.organ_keys()[0].note, Some(g));
+        assert_eq!(keys.organ_keys()[1].note, Some(e));
+        keys.focus.turn_preset(1); // Organ -> Bass
+        keys.press(bass);
         keys.release(c.number);
-        assert_eq!(keys.gates().map(|g| g.note), [Some(a), Some(e)]);
-        keys.focus.turn_preset(i8::MIN);
-        assert_eq!(keys.focus, Part::Bass);
-        keys.focus.turn_preset(i8::MAX);
-        assert_eq!(keys.focus, Part::Mono);
+        assert_eq!(keys.gates().map(|g| g.note), [Some(a), Some(g), Some(bass)]);
+        keys.release(g.number);
+        assert_eq!(keys.organ_keys()[0].note, Some(e));
+        assert_eq!(keys.gates()[1].note, Some(e));
         keys.release(e.number);
-        assert_eq!(keys.gates().map(|g| g.note), [Some(a), None]);
+        keys.release(bass.number);
         keys.release(a.number);
+        assert_eq!(keys.gates().map(|g| g.note), [None, None, None]);
+        keys.focus.turn_preset(1); // Bass -> Mono
         keys.press(a);
         assert_ne!(keys.gates()[0].phrase, mono.phrase);
         keys.release(a.number);
-        assert_eq!(keys.gates().map(|g| g.note), [None, None]);
     }
 
     #[test]
@@ -738,7 +871,7 @@ mod tests {
             sync(&mut parts, &keys);
             instrument.render(parts, &mut buses)?;
             assert_eq!(buses[Part::Bass.tap()].map(I24::inner), [0; 128]);
-            keys.focus.turn_preset(1);
+            keys.focus.turn_preset(-1); // Mono -> Bass
             keys.press(note(53, 110));
             sync(&mut parts, &keys);
             for half in [false, true] {
@@ -765,7 +898,7 @@ mod tests {
             }
             assert_eq!(buses[Part::Mono.tap()].map(I24::inner), [0; 128]);
             assert!(buses[Part::Bass.tap()].iter().any(|s| s.inner() != 0));
-            keys.focus.turn_preset(-1);
+            keys.focus.turn_preset(1); // Bass -> Mono
             keys.release(53);
             sync(&mut parts, &keys);
             instrument.render(parts, &mut buses)?;
@@ -788,7 +921,7 @@ mod tests {
             },
             ..Voice::INITIAL
         };
-        parts.voices = [voice; 2];
+        parts.voices = [voice; 3];
         parts.turn_knobs(Part::Bass, [0, 0, 0, -10]);
         let filter = parts.bass;
         assert_eq!(
@@ -801,7 +934,7 @@ mod tests {
             [b"TUNING   ", b"ATTACK   ", b"ACCENT   ", b"OVERDRIVE"]
         );
         assert_eq!(parts.bass.last().name(), b"TUNING   ");
-        assert!(parts.bass.events(filter, parts.voices[1], voice).is_empty());
+        assert!(parts.bass.events(filter, parts.voices[2], voice).is_empty());
         parts.turn_knobs(Part::Bass, [-7, 1, 5, 12]);
         let edited = parts.bass;
         assert_eq!(edited.readout().1, 12);
@@ -824,7 +957,7 @@ mod tests {
         assert_eq!(parts.bass.readout(), filter.readout());
         parts.turn_select(Part::Mono, -4);
         assert_eq!(parts.voices[0].sounding(), Some(note(49, 100)));
-        assert_eq!(parts.voices[1], voice);
+        assert_eq!(parts.voices[2], voice);
         parts.turn_select(Part::Bass, 1);
         assert_eq!(parts.bass, edited);
     }
@@ -850,7 +983,46 @@ mod tests {
             });
             instrument.render(parts, &mut buses)?;
             assert!(buses[5].iter().all(|sample| sample.inner() == 0));
-            assert_eq!(buses[6], buses[3], "muting FX preserves dry output");
+            assert_eq!(buses[8], buses[7], "muting FX preserves dry output");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn organ_chord_stays_live_while_bass_is_played() -> Result<(), Error> {
+        with_instrument(44_100, |instrument| {
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let mut parts = Parts::INITIAL;
+            let mut keys = Keyboard::<6>::default();
+            keys.focus.turn_preset(1); // Organ
+            for pitch in [60, 64, 67, 71] {
+                keys.press(note(pitch, 110));
+            }
+            parts.organ_keys = keys.organ_keys();
+            instrument.render(parts, &mut buses)?;
+            assert!(buses[Part::Organ.tap()].iter().any(|x| x.inner() != 0));
+            assert_eq!(buses[Part::Bass.tap()].map(I24::inner), [0; 128]);
+            // Fifth key displaces the oldest, and releasing it brings back the oldest.
+            keys.press(note(74, 95));
+            parts.organ_keys = keys.organ_keys();
+            instrument.render(parts, &mut buses)?;
+            assert_eq!(parts.organ_keys[0].note, Some(note(74, 95)));
+            keys.release(74);
+            parts.organ_keys = keys.organ_keys();
+            assert_eq!(parts.organ_keys[3].note, Some(note(60, 110)));
+            instrument.render(parts, &mut buses)?;
+            keys.focus.turn_preset(1); // Bass
+            keys.press(note(53, 100));
+            parts.voices[Part::Bass as usize].gate = keys.gates()[Part::Bass as usize];
+            instrument.render(parts, &mut buses)?;
+            assert!(buses[Part::Organ.tap()].iter().any(|x| x.inner() != 0));
+            assert!(buses[Part::Bass.tap()].iter().any(|x| x.inner() != 0));
+            for pitch in [60, 64, 67, 71] {
+                keys.release(pitch);
+            }
+            parts.organ_keys = keys.organ_keys();
+            instrument.render(parts, &mut buses)?;
+            assert_eq!(parts.organ_keys, [OrganKey::EMPTY; POLYPHONY]);
             Ok(())
         })
     }
@@ -859,11 +1031,11 @@ mod tests {
     fn bass_legato_retrigger_and_panel_changes() {
         let mut controls = Controls::INITIAL;
         let mut keys = Keyboard::<2>::default();
-        keys.focus.turn_preset(1);
+        keys.focus.turn_preset(-1); // Mono -> Bass
         let mut bass = Voice::INITIAL;
         let mut old = bass;
         keys.press(note(53, 95));
-        bass.gate = keys.gates()[1];
+        bass.gate = keys.gates()[Part::Bass as usize];
         assert_eq!(
             &*controls.events(controls, bass, old),
             &[at(BassMessage::NoteOn {
@@ -874,7 +1046,7 @@ mod tests {
         );
         old = bass;
         keys.press(note(60, 96));
-        bass.gate = keys.gates()[1];
+        bass.gate = keys.gates()[Part::Bass as usize];
         assert_eq!(
             &*controls.events(controls, bass, old),
             &[at(BassMessage::NoteOn {
@@ -887,7 +1059,7 @@ mod tests {
         keys.release(60);
         keys.release(53);
         keys.press(note(60, 96));
-        bass.gate = keys.gates()[1];
+        bass.gate = keys.gates()[Part::Bass as usize];
         bass.turn_waveform(Part::Bass, -1);
         controls.turn_knobs([i8::MAX; 4]);
         assert_eq!(controls.readout().1, 1870);

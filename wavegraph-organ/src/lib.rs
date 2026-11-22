@@ -1,0 +1,467 @@
+#![no_std]
+#![forbid(unsafe_code)]
+#![doc = include_str!("../README.md")]
+
+use wavegraph_core::{Port, Process, ProcessContext};
+use wavegraph_sample::FromSample;
+
+/// Maximum simultaneous notes, including voices in their release tail.
+pub const POLYPHONY: usize = 4;
+
+// Q16.16 envelope state with Q15 peak amplitude. Each voice is roughly -24 dBFS at full
+// velocity, allowing four notes to mix without saturating Q23 output.
+const FULL: u32 = 32767 << 16;
+const Q31_SHIFT: u32 = 12;
+
+/// Two oscillator recipes based on independent M1 Organ 2 recreation techniques.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Voicing {
+    /// Additive 1:3:6 harmonic ratio, a common FM/VA house-organ recipe.
+    #[default]
+    House,
+    /// Triangle/saw bottom, triangle two octaves up, and a square three up.
+    Analog,
+}
+
+/// Controls for a dry, M1-inspired house organ. This is *not* the M1 PCM ROM.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Params {
+    /// Oscillator harmonic blend.
+    pub voicing: Voicing,
+    /// Amount of the bright upper harmonic, 0..=127.
+    pub tone: u8,
+    /// Short, high-frequency key transient, 0..=127.
+    pub percussion: u8,
+    /// Time for the transient to fade, in milliseconds (5..=500).
+    pub decay_ms: u16,
+    /// Gate release time, in milliseconds (0..=1000).
+    pub release_ms: u16,
+}
+
+impl Params {
+    /// Initial dry organ patch, tuned for short house stabs and bass riffs.
+    pub const INITIAL: Self = Self {
+        voicing: Voicing::House,
+        tone: 80,
+        percussion: 44,
+        decay_ms: 70,
+        release_ms: 55,
+    };
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self::INITIAL
+    }
+}
+
+/// One message inlet accepting note and panel changes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Message {
+    /// Note-on; zero velocity means note-off, as with MIDI.
+    NoteOn {
+        /// MIDI note number in 0..=127.
+        note: u8,
+        /// Strike velocity (0 is note-off, other values clamp to 127).
+        velocity: u8,
+    },
+    /// Release only the matching held note; stale note-offs are ignored.
+    NoteOff(u8),
+    /// Switch between two modeled harmonic recipes.
+    Voicing(Voicing),
+    /// Upper-partial balance (0..=127).
+    Tone(u8),
+    /// Percussive transient level (0..=127).
+    Percussion(u8),
+    /// Transient decay time in milliseconds, clamped to 5..=500.
+    DecayMs(u16),
+    /// Release time in milliseconds, clamped to 0..=1000.
+    ReleaseMs(u16),
+    /// Release every held key while preserving the release tails.
+    AllNotesOff,
+    /// Silence all voices immediately, retaining panel settings.
+    Reset,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Voice {
+    note: Option<u8>,
+    held: bool,
+    age: u32,
+    velocity: u8,
+    phase: u32,
+    step: u32,
+    amp: u32,
+    transient: u32,
+    release_step: u32,
+}
+
+impl Voice {
+    const SILENT: Self = Self {
+        note: None,
+        held: false,
+        age: 0,
+        velocity: 0,
+        phase: 0,
+        step: 0,
+        amp: 0,
+        transient: 0,
+        release_step: FULL,
+    };
+
+    #[allow(clippy::arithmetic_side_effects, reason = "The frame count is nonzero")]
+    fn release(&mut self, frames: u32) {
+        if self.held {
+            self.held = false;
+            // Divide only on gate changes, never in the audio sample loop.
+            self.release_step = (self.amp / frames.max(1)).max(1);
+        }
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_wrap,
+        reason = "The Q16 envelope converts to 0..=32767; DSP intermediates fit i32."
+    )]
+    fn next(&mut self, params: Params, attack_step: u32, decay_step: u32) -> i32 {
+        if self.note.is_none() {
+            return 0;
+        }
+        self.amp = if self.held {
+            self.amp.saturating_add(attack_step).min(FULL)
+        } else {
+            self.amp.saturating_sub(self.release_step)
+        };
+        if self.amp == 0 {
+            *self = Self::SILENT;
+            return 0;
+        }
+
+        // The M1 uses an organ multisample, not drawbars. Offer two modeled
+        // alternatives to audition rather than claiming either is exact:
+        // a 1:3:6 additive spectrum and MusicRadar's 1:4:8 oscillator recipe.
+        // Omit upper partials beyond Nyquist instead of wrapping their phases.
+        let low = match params.voicing {
+            Voicing::House => triangle(self.phase),
+            Voicing::Analog => {
+                let saw = i32::from((self.phase >> 16) as u16) - 32768;
+                (3 * triangle(self.phase) + saw) >> 2
+            }
+        };
+        let (mid, high) = match params.voicing {
+            Voicing::House => (
+                if self.step < 715_827_882 {
+                    sine(self.phase.wrapping_mul(3))
+                } else {
+                    0
+                },
+                if self.step < 357_913_941 {
+                    sine(self.phase.wrapping_mul(6))
+                } else {
+                    0
+                },
+            ),
+            Voicing::Analog => (
+                if self.step < 536_870_912 {
+                    triangle(self.phase.wrapping_mul(4))
+                } else {
+                    0
+                },
+                if self.step < 268_435_456 {
+                    if self.phase.wrapping_mul(8) < 0x8000_0000 {
+                        32767
+                    } else {
+                        -32767
+                    }
+                } else {
+                    0
+                },
+            ),
+        };
+        let body = (low * 18 + mid * 8 + (high * i32::from(params.tone) * 7 / 127)) >> 5;
+
+        // No random generator or PCM sample required: the short click is a
+        // high-frequency pulse whose amplitude falls with the key transient.
+        let pulse = if self.phase.wrapping_mul(16) < 0x8000_0000 {
+            32767_i32
+        } else {
+            -32767_i32
+        };
+        let click_gain = (i32::from(params.percussion) * (self.transient >> 16) as i32) >> 7;
+        let click = (pulse * click_gain) >> 18;
+        self.transient = self.transient.saturating_sub(decay_step);
+        self.phase = self.phase.wrapping_add(self.step);
+
+        let struck = ((body + click) * i32::from(self.velocity)) >> 7;
+        (struck * (self.amp >> 16) as i32) >> 15
+    }
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "16-bit ramp intermediates fit i32"
+)]
+fn triangle(phase: u32) -> i32 {
+    let ramp = i32::from((phase >> 16) as u16);
+    32767 - (2 * ramp - 65535).abs()
+}
+
+// Quarter-wave lookup with 8-bit interpolation. No floating-point math in
+// the per-sample path; shares the same 65-entry curve as wavegraph-monosynth.
+const SINE: [i16; 65] = [
+    0, 804, 1608, 2410, 3212, 4011, 4808, 5602, 6393, 7179, 7962, 8739, 9512, 10278, 11039, 11793,
+    12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868, 19519, 20159, 20787,
+    21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319, 26790, 27245, 27683,
+    28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113, 31356, 31580, 31785,
+    31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
+];
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "Quarter-wave interpolation fits i32"
+)]
+fn sine(phase: u32) -> i32 {
+    let quarter = phase & 0x3fff_ffff;
+    let folded = if phase & 0x4000_0000 == 0 {
+        quarter
+    } else {
+        (1 << 30) - quarter
+    };
+    let index = (folded >> 24) as usize;
+    let a = i32::from(SINE[index]);
+    let b = i32::from(SINE[(index + 1).min(64)]);
+    let frac = i32::from(((folded >> 16) & 255) as u8);
+    let sample = a + (((b - a) * frac) >> 8);
+    if phase & 0x8000_0000 == 0 {
+        sample
+    } else {
+        -sample
+    }
+}
+
+/// A fixed four-voice, dry house organ with one message inlet and one signal
+/// outlet.
+/// Voices are reused on re-strike, then allocated from silence, then from
+/// oldest released voices, and finally stolen from the oldest held note.
+#[derive(Clone, Debug)]
+#[allow(
+    missing_copy_implementations,
+    reason = "Avoid accidental copies of mutable instrument state"
+)]
+pub struct Organ {
+    steps: [u32; 128],
+    voices: [Voice; POLYPHONY],
+    params: Params,
+    serial: u32,
+    rate_num: u32,
+    rate_den: u32,
+    attack_step: u32,
+    decay_step: u32,
+    release_frames: u32,
+}
+
+impl Organ {
+    /// Construct for `numerator / denominator` frames/s (e.g. 24 MHz / 544).
+    /// Returns `None` for a zero clock. Notes at or above Nyquist are ignored.
+    #[must_use]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_lossless,
+        clippy::cast_precision_loss,
+        reason = "The positive phase increments are bounded by Nyquist."
+    )]
+    pub const fn new(numerator: u32, denominator: u32) -> Option<Self> {
+        if numerator == 0 || denominator == 0 {
+            return None;
+        }
+        let mut steps = [0; 128];
+        let mut step =
+            8.175_798_915_643_707 * 4_294_967_296.0 * denominator as f64 / numerator as f64;
+        let mut i = 0;
+        while i < steps.len() {
+            if step < 2_147_483_648.0 {
+                steps[i] = (step + 0.5) as u32;
+            }
+            step *= 1.059_463_094_359_295_3;
+            i += 1;
+        }
+        let params = Params::INITIAL;
+        let mut organ = Self {
+            steps,
+            voices: [Voice::SILENT; POLYPHONY],
+            params,
+            serial: 0,
+            rate_num: numerator,
+            rate_den: denominator,
+            attack_step: FULL,
+            decay_step: FULL,
+            release_frames: 1,
+        };
+        organ.attack_step = organ.ramp_step(2);
+        organ.decay_step = organ.ramp_step(params.decay_ms);
+        organ.release_frames = organ.frames(params.release_ms);
+        Some(organ)
+    }
+
+    /// The current panel settings.
+    #[must_use]
+    pub const fn params(&self) -> Params {
+        self.params
+    }
+
+    /// The number of audible voices, including release tails.
+    #[must_use]
+    pub fn active_voices(&self) -> usize {
+        self.voices.iter().filter(|v| v.note.is_some()).count()
+    }
+
+    /// The held note in each of the four voice slots (release tails are `None`).
+    #[must_use]
+    pub fn held_notes(&self) -> [Option<u8>; POLYPHONY] {
+        self.voices.map(|v| if v.held { v.note } else { None })
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_lossless,
+        clippy::cast_possible_truncation,
+        reason = "Products fit u64; the frame count is clamped to u32."
+    )]
+    const fn frames(&self, ms: u16) -> u32 {
+        if ms == 0 {
+            return 1;
+        }
+        let n = self.rate_num as u64 * ms as u64;
+        let d = self.rate_den as u64 * 1000;
+        let frames = n.div_ceil(d);
+        if frames == 0 {
+            1
+        } else if frames > u32::MAX as u64 {
+            u32::MAX
+        } else {
+            frames as u32
+        }
+    }
+
+    #[allow(clippy::arithmetic_side_effects, reason = "Nonzero frame count")]
+    const fn ramp_step(&self, ms: u16) -> u32 {
+        let frames = self.frames(ms);
+        let step = FULL / frames;
+        if step == 0 { 1 } else { step }
+    }
+
+    fn allocate(&self, note: u8) -> usize {
+        if let Some(i) = self.voices.iter().position(|v| v.note == Some(note)) {
+            return i;
+        }
+        if let Some(i) = self.voices.iter().position(|v| v.note.is_none()) {
+            return i;
+        }
+        let released = self
+            .voices
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| !v.held)
+            .max_by_key(|(_, v)| self.serial.wrapping_sub(v.age));
+        if let Some((i, _)) = released {
+            return i;
+        }
+        self.voices
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, v)| self.serial.wrapping_sub(v.age))
+            .map_or(0, |(i, _)| i)
+    }
+
+    fn apply(&mut self, message: Message) {
+        match message {
+            Message::NoteOn { note, velocity: 0 } | Message::NoteOff(note) => {
+                for voice in &mut self.voices {
+                    if voice.note == Some(note) {
+                        voice.release(self.release_frames);
+                    }
+                }
+            }
+            Message::NoteOn { note, velocity } => {
+                if let Some(&step) = self.steps.get(usize::from(note))
+                    && step != 0
+                {
+                    let i = self.allocate(note);
+                    self.serial = self.serial.wrapping_add(1);
+                    self.voices[i] = Voice {
+                        note: Some(note),
+                        held: true,
+                        age: self.serial,
+                        velocity: velocity.min(127),
+                        phase: 0,
+                        step,
+                        amp: 0,
+                        transient: FULL,
+                        release_step: FULL,
+                    };
+                }
+            }
+            Message::Voicing(voicing) => self.params.voicing = voicing,
+            Message::Tone(tone) => self.params.tone = tone.min(127),
+            Message::Percussion(punch) => self.params.percussion = punch.min(127),
+            Message::DecayMs(ms) => {
+                self.params.decay_ms = ms.clamp(5, 500);
+                self.decay_step = self.ramp_step(self.params.decay_ms);
+            }
+            Message::ReleaseMs(ms) => {
+                self.params.release_ms = ms.min(1000);
+                self.release_frames = self.frames(self.params.release_ms);
+            }
+            Message::AllNotesOff => {
+                for voice in &mut self.voices {
+                    voice.release(self.release_frames);
+                }
+            }
+            Message::Reset => self.voices = [Voice::SILENT; POLYPHONY],
+        }
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "Four bounded 16-bit voices in Q31 cannot overflow i32."
+    )]
+    fn render<S: FromSample<i32>>(&mut self, output: &mut [S]) {
+        for sample in output {
+            let sum: i32 = self
+                .voices
+                .iter_mut()
+                .map(|v| v.next(self.params, self.attack_step, self.decay_step))
+                .sum();
+            *sample = S::from_sample_(sum << Q31_SHIFT);
+        }
+    }
+}
+
+impl<S: FromSample<i32>> Process<Message, S> for Organ {
+    fn inlets(&self) -> &[Port] {
+        &[Port::Message]
+    }
+
+    fn outlets(&self) -> &[Port] {
+        &[Port::Signal]
+    }
+
+    fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, S>) {
+        let output = &mut cx.outputs[0];
+        let mut start = 0;
+        for event in cx.events {
+            let frame = event.frame.min(output.len());
+            if frame < start {
+                continue;
+            }
+            self.render(&mut output[start..frame]);
+            self.apply(event.message);
+            start = frame;
+        }
+        self.render(&mut output[start..]);
+    }
+}

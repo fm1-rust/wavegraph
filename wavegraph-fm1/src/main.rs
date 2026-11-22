@@ -1,4 +1,4 @@
-//! WaveGraph monosynth and 303 firmware for the FM-1.
+//! WaveGraph monosynth, house organ and 303 firmware for the FM-1.
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 
@@ -17,6 +17,8 @@ mod envelope;
 mod firmware;
 #[cfg(any(target_os = "none", test))]
 mod instrument;
+#[cfg(any(target_os = "none", test))]
+mod organ;
 #[cfg(target_os = "none")]
 mod screen;
 

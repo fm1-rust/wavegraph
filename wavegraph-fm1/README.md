@@ -1,10 +1,12 @@
 # WaveGraph for the FM-1
 
-Play the [monosynth](../wavegraph-monosynth/) and [303 bass synth](../wavegraph-303/)
-together on the M-VAVE FM-1. The firmware starts on the green monosynth page
-with a sine selected and the cutoff at 5 kHz. Turn PRESETS one click in
-either direction for the silver TB-303 page. Both instruments are playable
-during the boot animation.
+Play three instruments together on the M-VAVE FM-1: the green
+[monosynth](../wavegraph-monosynth/), charcoal-and-lime four-voice
+[M1-inspired organ](../wavegraph-organ/), and silver
+[TB-303](../wavegraph-303/). PRESETS cycles them in that order, one detent
+at a time, with a transient three-row patch-selection overlay. Each part
+keeps sounding when you select another. The default page is the green
+monosynth, with sine selected and the cutoff at 5 kHz.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
 | --- | --- | --- |
@@ -12,12 +14,13 @@ during the boot animation.
 
 | Control | Action |
 | --- | --- |
-| PRESETS encoder | Select the instrument for new key presses, panel edits and the display. |
-| Piano keys | Play F3 to G5. Each instrument sounds its most recently pressed key. |
-| ALGORITHM encoder | Monosynth cycles through sine, triangle, sawtooth and square. The 303 switches between saw and square. |
-| SELECT encoder | Monosynth transposes up or down by up to 12 semitones. On the 303, turn one click either way to switch knob banks. |
+| PRESETS encoder | Select monosynth → organ → TB-303; a patch list overlays the previous screen for 1.4 seconds. Holding notes does not switch their owner. |
+| Piano keys | Play F3 to G5; the organ has four independent voices, while monosynth and 303 remain monophonic. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
+| SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
-| ENV | Open or close the selected instrument’s envelope view. The button stays lit while the view is open. |
+| Knobs 1–4 on the organ | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
+| ENV | Open or close the mono/303 envelope editor. An organ envelope editor is not implemented yet. |
 | Knobs 1–4 in monosynth ENV | Adjust attack, decay, sustain and release respectively. |
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix. |
@@ -26,7 +29,7 @@ during the boot animation.
 | Knobs 1–4 in FX | Monosynth send, 303 send, decay and wet return level (0–128, except decay 0–127). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Mute or unmute the wet return without clearing the reverb tail. |
-| SEL button (instrument view) | Switch the scope between the selected voice before FX and MASTER (VCA on the monosynth, SRC on the 303) and the stereo mix after MASTER (DAC). |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Hold for two seconds to return to USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -37,11 +40,30 @@ during the boot animation.
 SELECT updates the bank indicator and all four labels, including when the keys
 are idle. Returning to a bank recalls its settings and last-touched knob.
 
-Hold a monosynth note, turn PRESETS, then play a different key for the 303.
-Each key controls its own voice and release tail. Within each part,
-releasing the newest key recalls the previous key and its strike velocity.
-On the 303, strikes at velocity 96 and above trigger accent. Overlapping keys
-slide, and a fresh strike after release restarts the envelopes.
+Hold a monosynth note, turn PRESETS once to the organ, and play a four-note
+chord. Turn PRESETS again to the 303 and play a bassline: all three parts
+continue together. Keys retain the part they were pressed on. On the organ,
+the latest four physical keys take priority, and releasing a newer key
+restores an older held key. The monosynth and 303 preserve their existing
+last-note priority. On the 303, velocity 96+ triggers accent; overlapping
+notes slide and a new strike after release restarts the envelopes.
+
+## M1-inspired organ
+
+The organ is **modeled, not sampled**. ALGORITHM selects either a 1:3:6
+harmonic recipe (House) or a brighter 1:4:8 blend (Analog). Both include
+short key percussion, a programmable transient decay, and a release envelope.
+The modeling follows independent community recipes, not Korg's actual PCM
+multisample. No Korg ROM data is bundled. For a proper similarity check,
+compare a dry Organ 2 patch in the Korg M1 plug-in against both modes; a
+spectrum and envelope comparison would be more informative than a single
+house-music recording. The organ is initially **dry**; the global reverb
+continues to service the other two parts unchanged.
+
+The organ's dark charcoal panel with lime accents and a cyan readout takes
+visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
+list is inspired by the FM-1's stock patch-selector overlay. It freezes only
+the display's live scope while visible; the audio DMA keeps processing.
 
 ## VCA envelope
 
@@ -98,17 +120,18 @@ The global page always scopes the final DAC mix, regardless of the instrument
 scope-tap selection.
 
 The independent send levels are initially 32/128 (monosynth) and 24/128
-(303). Disable the return with SEL to hear dry audio while the reverb continues
+(303). The organ currently bypasses the reverb sends and joins the dry mix.
+Disable the return with SEL to hear dry audio while the reverb continues
 processing. The same reverb tank stays alive across full/half graph edits.
 This first mono, fixed-point effect uses approximately 17 KiB of static delay
 storage; it is not an emulation of the Roland DEP-5.
 
 ## Audio and display
 
-Every 128-frame ALNK0 block calls the two persistent instrument nodes, a shared
+Every 128-frame ALNK0 block calls three persistent instrument nodes, a shared
 send mixer and a reverb processor. WaveGraph bytecode trims the 303 to quarter
-gain, creates independent effect sends, and mixes the wet return with the
-dry output before duplicating the mono mix to both stereo channels.
+gain, creates independent monosynth and 303 sends, and adds the dry organ and
+the wet return before duplicating the mix to both stereo channels.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
@@ -155,6 +178,7 @@ The firmware source is available under the [Apache License, Version 2.0](LICENSE
 or the [MIT License](LICENSE-MIT).
 
 [sh101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
+[korg-m1]: https://www.korg.com/us/products/software/kc_m1/
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash

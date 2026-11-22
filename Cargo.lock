@@ -866,6 +866,7 @@ dependencies = [
  "wavegraph-303",
  "wavegraph-fx",
  "wavegraph-monosynth",
+ "wavegraph-organ",
  "wavegraph-sample",
 ]
 
@@ -874,6 +875,14 @@ name = "wavegraph-monosynth"
 version = "0.1.0"
 dependencies = [
  "micromath",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
+name = "wavegraph-organ"
+version = "0.1.0"
+dependencies = [
  "wavegraph-core",
  "wavegraph-sample",
 ]
