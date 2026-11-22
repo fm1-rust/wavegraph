@@ -438,7 +438,7 @@ impl Screen {
         self.text.text(8, 14, labels.voice.note_name(), bright);
         if late {
             self.text
-                .text(11, 14, b"LATE", if bass { OXIDE_RED } else { palette::RED });
+                .text(12, 14, b"LATE", if bass { OXIDE_RED } else { palette::RED });
         }
         self.text.text(16, 14, b"V", muted);
         let velocity = labels

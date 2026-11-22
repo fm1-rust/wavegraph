@@ -244,15 +244,31 @@ mod app {
                 return;
             };
             self.leds = self.shared().leds.lock(|leds| *leds);
-            // The recovery chord stays available even if an application task stalls.
+            let now = cycles();
+            // Time the recovery chord against the crystal even if scan interrupts run late.
             if scan.is_down(Button::OctaveDown) && scan.is_down(Button::OctaveUp) {
-                let now = ticks();
-                if now.wrapping_sub(*self.octave_since.get_or_insert(now)) >= 2 * Timers::TICK_HZ {
+                self.keyboard.octave = 0;
+                if now.wrapping_sub(*self.octave_since.get_or_insert(now)) >= 2 * Timers::CRYSTAL_HZ
+                {
                     enter_download_mode();
                 }
             } else {
                 self.octave_since = None;
+                if scan.pressed(Button::OctaveDown) {
+                    self.keyboard.shift_octave(-1);
+                } else if scan.pressed(Button::OctaveUp) {
+                    self.keyboard.shift_octave(1);
+                }
             }
+            let octave = self.keyboard.octave;
+            // At 24 MHz these bits toggle every 350 ms and 175 ms respectively.
+            let lit = match octave.unsigned_abs() {
+                1 => now & (1 << 23) == 0,
+                2 => now & (1 << 22) == 0,
+                _ => true,
+            };
+            self.leds.set(Button::OctaveDown, octave < 0 && lit);
+            self.leds.set(Button::OctaveUp, octave > 0 && lit);
             self.keyboard
                 .focus
                 .turn_preset(scan.encoder_delta(Encoder::Presets));
