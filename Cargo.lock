@@ -848,7 +848,7 @@ version = "0.1.0"
 
 [[package]]
 name = "wavegraph-fm1"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "embedded-graphics",
  "fm1-audio",

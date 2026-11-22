@@ -163,7 +163,9 @@ or `assets/fm1.png` and run
 ## Build and flash
 
 The [firmware workflow] builds a `wavegraph-fm1` artifact containing
-`wavegraph-fm1.fwsc` for M-Flasher. For a local build, follow the
+`wavegraph-fm1.fwsc` for M-Flasher and the [browser emulator], plus a raw
+`wavegraph-fm1.bin` for emulators that accept an application image (such as
+[fm1-emulator]). For a local build, follow the
 [FM-1 toolchain setup] for `RUSTC`, `PI32V2_BIN` and `PI32V2_ISA`, and set
 `PI32V2_TARGET` to the SDK's `fm1/targets/pi32v2-none.json`. From the
 WaveGraph workspace root run
@@ -172,10 +174,17 @@ WaveGraph workspace root run
 ./wavegraph-fm1/build.sh
 ```
 
-The image is written to `target/pi32v2-none/firmware/wavegraph-fm1.fwsc`.
+Both files are written to `target/pi32v2-none/firmware/`.
 Cargo resolves the FM-1 SDK from crates.io, including `fm1` 0.1.3 and
 `fm1-rticx` 0.1.1. CI uses the SDK’s shared pi32v2 build workflow to package
 the flashable image.
+
+To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
+`Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
+[release workflow] checks the tag against the Cargo version, tests and builds
+the firmware, then attaches versioned `.fwsc` and `.bin` files to a GitHub
+Release. Open the `.fwsc` in the [browser emulator] or run it with
+`fm1-live --fwsc`; no additional conversion is needed for that emulator.
 
 ## License
 
@@ -186,6 +195,9 @@ or the [MIT License](LICENSE-MIT).
 [korg-m1]: https://www.korg.com/us/products/software/kc_m1/
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
+[release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
+[browser emulator]: https://joakimeriksson.github.io/fm1-emu/
+[fm1-emulator]: https://github.com/simonjohansson/fm1-emulator
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
