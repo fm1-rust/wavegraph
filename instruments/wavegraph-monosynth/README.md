@@ -59,5 +59,5 @@ license) under both licenses above, without additional terms or conditions.
 [voice]: https://github.com/fm1-rust/fm1-rust/blob/a4a770c8743cee972cfbfb5478145e5198be4550/fm1-rticx/examples/rticx-waveform/voice.rs
 [engine]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph#rendering-a-compiled-patch
 [SH-101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
-[apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-APACHE
-[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-monosynth/LICENSE-MIT
+[apache]: https://github.com/fm1-rust/wavegraph/blob/main/instruments/wavegraph-monosynth/LICENSE-APACHE
+[mit]: https://github.com/fm1-rust/wavegraph/blob/main/instruments/wavegraph-monosynth/LICENSE-MIT

@@ -4,19 +4,19 @@
 
 WaveGraph runs Pure Data-like audio patches on embedded systems. The engine
 interprets a compiled signal graph and processes frame-timed events using
-caller-owned buffers. Each instrument is a separate crate built on the same
-patch object interface.
+caller-owned buffers. Each instrument is a separate crate. The
+[instrument guide](instruments/README.md) shows how to implement one as a patch object.
 
 ## Crates
 
 | Crate | Description | crates.io | Documentation | Build status |
 | --- | --- | --- | --- | --- |
 | [`wavegraph`](wavegraph/) | DSP and bytecode interpreter | [crates.io](https://crates.io/crates/wavegraph) | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
-| [`wavegraph-303`](wavegraph-303/) | Monophonic 303 bass synth with accent and slide | Unpublished | [Instrument guide](wavegraph-303/README.md) | [![Build status][303-build]][303-ci] |
+| [`wavegraph-303`](instruments/wavegraph-303/) | Monophonic 303 bass synth with accent and slide | Unpublished | [Instrument guide](instruments/wavegraph-303/README.md) | [![Build status][303-build]][303-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-fm1`](wavegraph-fm1/) | Three instruments and live oscilloscope for the M-VAVE FM-1 | Firmware | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
-| [`wavegraph-monosynth`](wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
-| [`wavegraph-organ`](wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
+| [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
 
 The libraries support Rust 1.88 and build without `std` or a heap allocator.

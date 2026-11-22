@@ -3,7 +3,7 @@ name: wavegraph-303
 on:
   pull_request:
     paths: &wavegraph-303-paths
-      - 'wavegraph-303/**'
+      - 'instruments/wavegraph-303/**'
       - 'wavegraph-core/**'
       - 'wavegraph-sample/**'
       - 'wavegraph/**'

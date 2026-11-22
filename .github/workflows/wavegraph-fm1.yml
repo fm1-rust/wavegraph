@@ -5,11 +5,9 @@ on:
     paths: &firmware-paths
       - 'wavegraph-fm1/**'
       - 'wavegraph/**'
-      - 'wavegraph-303/**'
+      - 'instruments/wavegraph-*/**'
       - 'wavegraph-core/**'
       - 'wavegraph-fx/**'
-      - 'wavegraph-monosynth/**'
-      - 'wavegraph-organ/**'
       - 'wavegraph-sample/**'
       - Cargo.toml
       - Cargo.lock

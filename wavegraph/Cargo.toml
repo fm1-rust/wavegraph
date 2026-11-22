@@ -19,7 +19,7 @@ wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
 [dev-dependencies]
-wavegraph-monosynth = { version = "0.1", path = "../wavegraph-monosynth" }
+wavegraph-monosynth = { version = "0.1", path = "../instruments/wavegraph-monosynth" }
 
 [target.'cfg(not(target_os = "none"))'.dev-dependencies]
 critical-section = { version = "1.2", features = ["std"] }

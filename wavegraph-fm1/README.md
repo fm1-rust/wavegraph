@@ -1,9 +1,9 @@
 # WaveGraph for the FM-1
 
 Play three instruments together on the M-VAVE FM-1: the green
-[monosynth](../wavegraph-monosynth/), charcoal-and-lime four-voice
-[M1-inspired organ](../wavegraph-organ/), and silver
-[TB-303](../wavegraph-303/). PRESETS cycles them in that order, one detent
+[monosynth](../instruments/wavegraph-monosynth/), charcoal-and-lime four-voice
+[M1-inspired organ](../instruments/wavegraph-organ/), and silver
+[TB-303](../instruments/wavegraph-303/). PRESETS cycles them in that order, one detent
 at a time, with a transient three-row patch-selection overlay. Each part
 keeps sounding when you select another. The default page is the green
 monosynth, with sine selected and the cutoff at 5 kHz.
