@@ -34,6 +34,10 @@ pub enum Message {
     EnvOctaves(f32),
     /// Set the unaccented envelope decay in seconds (nonnegative and finite).
     DecaySeconds(f32),
+    /// Set the VCA attack time constant in seconds (nonnegative and finite).
+    AttackSeconds(f32),
+    /// Set the oscillator overdrive into the resonant filter, in dB (0..=36).
+    OverdriveDb(f32),
     /// Set the accent amount in 0..=1.
     Accent(f32),
     /// Set the tuning offset in semitones (finite).
@@ -88,6 +92,10 @@ impl Tb303 {
             Message::DecaySeconds(seconds) if seconds >= 0.0 && seconds.is_finite() => {
                 self.params.decay_s = seconds
             }
+            Message::AttackSeconds(seconds) if seconds >= 0.0 && seconds.is_finite() => {
+                self.params.attack_s = seconds
+            }
+            Message::OverdriveDb(db) if (0.0..=36.0).contains(&db) => self.params.overdrive_db = db,
             Message::Accent(value) if (0.0..=1.0).contains(&value) => self.params.accent = value,
             Message::TuningSemitones(semitones) if semitones.is_finite() => {
                 self.params.tuning_st = semitones

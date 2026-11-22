@@ -9,6 +9,7 @@ description = "WaveGraph monosynth, 303 bass synth and oscilloscope for the M-VA
 
 [dependencies]
 heapless.workspace = true
+micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
 wavegraph-303 = { path = "../wavegraph-303" }
 wavegraph-monosynth = { path = "../wavegraph-monosynth" }
@@ -20,7 +21,6 @@ fm1-audio = "0.1"
 fm1-controls = "0.1.1"
 fm1-graphics = { version = "0.1", features = ["async-display"] }
 fm1-rticx = { version = "0.1.1", features = ["audio", "async-display"] }
-micromath = "2.2"
 static_cell = "2.1.1"
 
 [lints]

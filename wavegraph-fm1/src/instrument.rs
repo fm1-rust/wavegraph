@@ -1,9 +1,6 @@
 //! Two persistent instrument nodes feed a common mix and switchable gain stage.
 
-use crate::{
-    bass::{Controls, Knob},
-    envelope::EnvelopeControls,
-};
+use crate::{bass::Controls, envelope::EnvelopeControls};
 use heapless::Vec;
 use wavegraph::{
     Event, Port, Process, ProcessContext,
@@ -192,14 +189,20 @@ impl Parts {
         mono_envelope: EnvelopeControls::INITIAL,
     };
 
+    pub(super) fn turn_select(&mut self, focus: Part, detents: i8) {
+        match focus {
+            Part::Mono => {
+                let voice = &mut self.voices[Part::Mono as usize];
+                voice.transpose = voice.transpose.saturating_add(detents).clamp(-12, 12);
+            }
+            Part::Bass => self.bass.turn_select(detents),
+        }
+    }
+
     pub(super) fn turn_knobs(&mut self, focus: Part, detents: [i8; 4]) {
         match focus {
             Part::Mono => self.voices[Part::Mono as usize].turn_cutoff(detents[0]),
-            Part::Bass => {
-                for (knob, delta) in Knob::ALL.into_iter().zip(detents) {
-                    self.bass.turn(knob, delta);
-                }
-            }
+            Part::Bass => self.bass.turn_knobs(detents),
         }
     }
 
@@ -272,8 +275,8 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
     }
 }
 
-// The 303 can send six events. The monosynth can send three controls and both gate edges.
-const MAX_EVENTS: usize = 6;
+// One waveform, eight knob assignments and one note transition at the block boundary.
+const MAX_EVENTS: usize = 10;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 
 pub(super) enum Node<'a> {
@@ -630,6 +633,57 @@ mod tests {
     }
 
     #[test]
+    fn select_switches_the_legend_without_changing_the_sound_and_recalls_each_bank() {
+        let mut parts = Parts::INITIAL;
+        let voice = Voice {
+            gate: Gate {
+                note: Some(note(53, 100)),
+                phrase: 1,
+            },
+            ..Voice::INITIAL
+        };
+        parts.voices = [voice; 2];
+        parts.turn_knobs(Part::Bass, [0, 0, 0, -10]);
+        let filter = parts.bass;
+        assert_eq!(
+            filter.readout(),
+            (b"DECAY    ".as_slice(), 500, b"MS   ".as_slice())
+        );
+        parts.turn_select(Part::Bass, -1);
+        assert_eq!(
+            parts.bass.bank.knobs().map(|k| k.name()),
+            [b"TUNING   ", b"ATTACK   ", b"ACCENT   ", b"OVERDRIVE"]
+        );
+        assert_eq!(parts.bass.last().name(), b"TUNING   ");
+        assert!(parts.bass.events(filter, parts.voices[1], voice).is_empty());
+        parts.turn_knobs(Part::Bass, [-7, 1, 5, 12]);
+        let edited = parts.bass;
+        assert_eq!(edited.readout().1, 12);
+        assert_eq!(
+            &*edited.events(filter, voice, voice),
+            &[
+                at(BassMessage::TuningSemitones(-0.7)),
+                at(BassMessage::AttackSeconds(0.002)),
+                at(BassMessage::Accent(0.55)),
+                at(BassMessage::OverdriveDb(12.0)),
+            ]
+        );
+        parts.turn_select(Part::Bass, i8::MIN);
+        assert_eq!(parts.bass, edited);
+        parts.turn_select(Part::Bass, i8::MAX);
+        assert_eq!(
+            parts.bass.bank.knobs().map(|k| k.name()),
+            [b"CUTOFF   ", b"RESONANCE", b"ENVMOD   ", b"DECAY    "]
+        );
+        assert_eq!(parts.bass.readout(), filter.readout());
+        parts.turn_select(Part::Mono, -4);
+        assert_eq!(parts.voices[0].sounding(), Some(note(49, 100)));
+        assert_eq!(parts.voices[1], voice);
+        parts.turn_select(Part::Bass, 1);
+        assert_eq!(parts.bass, edited);
+    }
+
+    #[test]
     fn bass_legato_retrigger_and_panel_changes() {
         let mut controls = Controls::INITIAL;
         let mut keys = Keyboard::<2>::default();
@@ -663,10 +717,10 @@ mod tests {
         keys.press(note(60, 96));
         bass.gate = keys.gates()[1];
         bass.turn_waveform(Part::Bass, -1);
-        for knob in Knob::ALL {
-            controls.turn(knob, i8::MAX);
-        }
+        controls.turn_knobs([i8::MAX; 4]);
         assert_eq!(controls.readout().1, 1870);
+        controls.turn_select(1);
+        controls.turn_knobs([i8::MAX; 4]);
         assert_eq!(
             &*controls.events(Controls::INITIAL, bass, old),
             &[
@@ -674,6 +728,10 @@ mod tests {
                 at(BassMessage::Resonance(1.0)),
                 at(BassMessage::EnvOctaves(6.0)),
                 at(BassMessage::DecaySeconds(1.87)),
+                at(BassMessage::TuningSemitones(12.0)),
+                at(BassMessage::AttackSeconds(0.06)),
+                at(BassMessage::Accent(1.0)),
+                at(BassMessage::OverdriveDb(36.0)),
                 at(BassMessage::Waveform(wavegraph_303::Waveform::Square)),
                 at(BassMessage::NoteOn {
                     note: 60,

@@ -35,6 +35,37 @@ fn accent_slide_and_drive() {
 }
 
 #[test]
+fn vca_attack_and_filter_overdrive_shape_the_onset() {
+    fn onset(attack_s: f32, overdrive_db: f32) -> [f32; 512] {
+        let mut voice = Voice::new(48_000.0);
+        let params = VoiceParams {
+            attack_s,
+            overdrive_db,
+            ..Default::default()
+        };
+        let mut samples = [0.0; 512];
+        voice.note_on(48, false, false);
+        voice.render_add(&params, &mut samples);
+        samples
+    }
+
+    let stock = onset(0.0015, 0.0);
+    let slow = onset(0.06, 0.0);
+    let driven = onset(0.0015, 24.0);
+    let energy = |samples: &[f32]| samples.iter().map(|x| x * x).sum::<f32>();
+    assert!(energy(&slow) < energy(&stock) * 0.05);
+    assert!(energy(&driven) > energy(&stock));
+    // A change in output volume alone would leave zero residual after gain matching.
+    let gain = stock.iter().zip(&driven).map(|(a, b)| a * b).sum::<f32>() / energy(&stock);
+    let residual: f32 = stock
+        .iter()
+        .zip(&driven)
+        .map(|(a, b)| (gain * a - b).powi(2))
+        .sum();
+    assert!(residual > energy(&driven) * 0.01);
+}
+
+#[test]
 #[cfg(feature = "raw")]
 fn coefficient_phase_and_drive_history_cross_block_boundaries() {
     for rate in [44_100.0, 24_000_000.0 / 544.0, 48_000.0, 96_000.0] {
@@ -163,5 +194,38 @@ fn release_ends_on_the_reference_frame() {
                 assert!(!voice.sounding(), "release did not end at {rate} Hz");
             }
         }
+    }
+}
+
+#[test]
+fn closely_spaced_accents_retain_charge_across_gates() {
+    use wavegraph_303::Envelopes;
+    let params = VoiceParams {
+        resonance: 1.0,
+        accent: 1.0,
+        ..VoiceParams::default()
+    };
+    for samples_per_ms in [4_u16, 48] {
+        let ms = usize::from(samples_per_ms);
+        let mut env = Envelopes::new(f32::from(samples_per_ms) * 1000.0);
+        let mut previous_peak = 0.0;
+        for _ in 0..3 {
+            env.note_on(true, false);
+            let mut peak = 0.0_f32;
+            for _ in 0..56 {
+                peak = peak.max(env.advance(&params, ms).accent_octaves);
+            }
+            assert!(peak > previous_peak && peak < 3.0);
+            previous_peak = peak;
+            env.note_off();
+            let tail = env.advance(&params, 40 * ms);
+            assert!(tail.accent_octaves > 0.0 && tail.accent_octaves < peak);
+        }
+        // A long rest discharges the sweep. The following plain note adds no charge.
+        env.note_off();
+        let faded = env.advance(&params, 4_000 * ms);
+        env.note_on(false, false);
+        assert!(faded.accent_octaves < 0.001);
+        assert!(env.advance(&params, 96 * ms).accent_octaves <= faded.accent_octaves);
     }
 }
