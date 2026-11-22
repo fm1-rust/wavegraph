@@ -245,6 +245,7 @@ mod app {
             let Some((scan, touch)) = self.controls.scan(&self.leds) else {
                 return;
             };
+            // Start with the UI button lamps each sweep, then add the physical key lamps.
             self.leds = self.shared().leds.lock(|leds| *leds);
             let now = cycles();
             // Time the recovery chord against the crystal even if scan interrupts run late.
@@ -278,8 +279,11 @@ mod app {
             for key in PianoKey::all().filter(|&key| scan.released(key)) {
                 self.keyboard.release(53 + key.index());
             }
-            for key in PianoKey::all().filter(|&key| scan.pressed(key)) {
-                if let Some(velocity) = touch.velocity(key) {
+            for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
+                self.leds.set(key, true);
+                if scan.pressed(key)
+                    && let Some(velocity) = touch.velocity(key)
+                {
                     self.keyboard.press(Note {
                         number: 53 + key.index(),
                         velocity,

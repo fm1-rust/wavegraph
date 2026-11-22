@@ -15,7 +15,7 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 | Control | Action |
 | --- | --- |
 | PRESETS encoder | Select monosynth → organ → TB-303; a patch list overlays the previous screen for 1.4 seconds. Holding notes does not switch their owner. |
-| Piano keys | Play F3 to G5 at the default octave. The organ has four voices. The monosynth and 303 each play one note at a time. |
+| Piano keys | Play F3 to G5 at the default octave. Each key stays lit while you hold it. The organ has four voices. The monosynth and 303 each play one note at a time. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
