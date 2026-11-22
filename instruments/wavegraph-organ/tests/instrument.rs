@@ -1,7 +1,7 @@
 //! Fixed-size polyphony, frame offsets, and PCM/f32 output.
 #![allow(clippy::unwrap_used, reason = "Tests use known nonzero sample clocks")]
 use wavegraph_core::{Event, Process, ProcessContext};
-use wavegraph_organ::{Message, Organ, POLYPHONY, Params, Voicing};
+use wavegraph_organ::{Adsr, Message, Organ, POLYPHONY, Params, Voicing};
 use wavegraph_sample::I24;
 
 fn event(frame: usize, message: Message) -> Event<Message> {
@@ -181,4 +181,106 @@ fn modeled_voicings_are_distinct_and_keep_note_state() {
     let a = render::<512>(&mut analog, &[event(0, key(48))]);
     assert_ne!(h, a);
     assert_eq!(house.held_notes(), analog.held_notes());
+}
+
+#[test]
+fn vca_shapes_the_body_and_click_at_the_event_frame() {
+    let mut organ = Organ::new(1_000, 1).expect("one frame per millisecond");
+    let mut reference = organ.clone();
+    let adsr = Adsr {
+        attack_us: 4_000,
+        decay_us: 4_000,
+        sustain_percent: 50,
+        release_us: 4_000,
+    };
+    let samples = render::<16>(
+        &mut organ,
+        &[
+            event(2, Message::VcaEnvelope(adsr)),
+            event(2, key(24)),
+            event(10, Message::NoteOff(24)),
+        ],
+    );
+    let full = render::<16>(
+        &mut reference,
+        &[
+            event(2, Message::VcaEnvelope(Adsr::GATE)),
+            event(2, key(24)),
+        ],
+    );
+    // Expected gain in 32nds, including quadratic decay and release.
+    let gains = [0, 0, 8, 16, 24, 32, 25, 20, 17, 16, 9, 4, 1, 0, 0, 0];
+    for ((sample, dry), gain) in samples.into_iter().zip(full).zip(gains) {
+        // One Q15 unit of gain rounding plus one integer mixer LSB.
+        assert!((32 * sample - gain * dry).abs() <= 32 * 32);
+    }
+    assert_eq!(&samples[13..], &[0; 3]);
+    assert_eq!(organ.active_voices(), 0);
+}
+
+#[test]
+fn a_held_silent_voice_can_swell_again_and_edits_retime_its_release() {
+    let mut organ = Organ::new(1_000, 1).expect("audio clock");
+    let mut adsr = Adsr {
+        sustain_percent: 0,
+        release_us: 8_000,
+        ..Adsr::GATE
+    };
+    assert_eq!(
+        render::<8>(
+            &mut organ,
+            &[event(0, Message::VcaEnvelope(adsr)), event(0, key(24))]
+        ),
+        [0; 8],
+    );
+    assert_eq!(organ.held_notes()[0], Some(24));
+    assert_eq!(organ.active_voices(), 1);
+    adsr.sustain_percent = 100;
+    assert!(
+        render::<8>(&mut organ, &[event(0, Message::VcaEnvelope(adsr))])
+            .iter()
+            .any(|&s| s != 0)
+    );
+    render::<2>(&mut organ, &[event(0, Message::AllNotesOff)]);
+    // Six of eight release frames remain. Halving the release leaves three.
+    let tail = render::<5>(&mut organ, &[event(0, Message::ReleaseMs(4))]);
+    assert_ne!(tail[1], 0);
+    assert_eq!(tail[2..], [0; 3]);
+    assert_eq!(organ.active_voices(), 0);
+    assert_eq!(
+        organ.vca_envelope(),
+        Adsr {
+            release_us: 4_000,
+            ..adsr
+        }
+    );
+    assert_eq!(organ.params().release_ms, 4);
+}
+
+#[test]
+fn overlapping_keys_run_independent_envelopes_and_restrikes_start_fresh() {
+    let mut organ = Organ::new(8_000, 1).expect("audio clock");
+    let adsr = Adsr {
+        attack_us: 2_000,
+        decay_us: 3_000,
+        sustain_percent: 35,
+        release_us: 4_000,
+    };
+    render::<0>(&mut organ, &[event(0, Message::VcaEnvelope(adsr))]);
+    let mut first = organ.clone();
+    let mut second = organ.clone();
+    let a = [event(2, key(36)), event(14, Message::NoteOff(36))];
+    let b = [event(8, key(48))];
+    let chord = render::<64>(&mut organ, &[a[0], b[0], a[1]]);
+    let left = render::<64>(&mut first, &a);
+    let right = render::<64>(&mut second, &b);
+    assert_eq!(chord, core::array::from_fn(|i| left[i] + right[i]));
+    assert_eq!(organ.active_voices(), 1);
+    let strike = [event(0, key(48))];
+    // Compare a re-strike on a held note to a first strike after Reset.
+    render::<0>(&mut first, &[event(0, Message::Reset)]);
+    assert_eq!(
+        render::<32>(&mut organ, &strike),
+        render::<32>(&mut first, &strike)
+    );
 }

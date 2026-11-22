@@ -839,16 +839,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "wavegraph-core"
+name = "wavegraph-adsr"
 version = "0.1.0"
 
 [[package]]
-name = "wavegraph-fx"
+name = "wavegraph-core"
 version = "0.1.0"
-dependencies = [
- "wavegraph-core",
- "wavegraph-sample",
-]
 
 [[package]]
 name = "wavegraph-fm1"
@@ -864,9 +860,18 @@ dependencies = [
  "static_cell",
  "wavegraph",
  "wavegraph-303",
+ "wavegraph-adsr",
  "wavegraph-fx",
  "wavegraph-monosynth",
  "wavegraph-organ",
+ "wavegraph-sample",
+]
+
+[[package]]
+name = "wavegraph-fx"
+version = "0.1.0"
+dependencies = [
+ "wavegraph-core",
  "wavegraph-sample",
 ]
 
@@ -875,6 +880,7 @@ name = "wavegraph-monosynth"
 version = "0.1.0"
 dependencies = [
  "micromath",
+ "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-sample",
 ]
@@ -883,6 +889,7 @@ dependencies = [
 name = "wavegraph-organ"
 version = "0.1.0"
 dependencies = [
+ "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-sample",
 ]

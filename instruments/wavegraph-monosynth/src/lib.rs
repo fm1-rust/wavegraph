@@ -2,13 +2,12 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-mod envelope;
 mod filter;
 
-pub use envelope::Adsr;
+pub use wavegraph_adsr::Adsr;
 
-use envelope::Envelope;
 use filter::LowPass;
+use wavegraph_adsr::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
 
@@ -146,6 +145,7 @@ pub struct Monosynth<'a> {
     waveform: Waveform,
     filter: LowPass,
     envelope: Envelope,
+    timing: Timing,
     note: u8,
     velocity: u8,
     phase: u32,
@@ -160,7 +160,8 @@ impl<'a> Monosynth<'a> {
             tuning,
             waveform: Waveform::Sine,
             filter: LowPass::OPEN,
-            envelope: Envelope::GATE,
+            envelope: Envelope::IDLE,
+            timing: Adsr::GATE.at_sample_period(tuning.sample_period),
             note: 69,
             velocity: 0,
             phase: 0,
@@ -172,17 +173,21 @@ impl<'a> Monosynth<'a> {
         match message {
             Message::Waveform(shape) => self.waveform = shape,
             Message::CutoffHz(hz) => self.filter.set_cutoff(hz, self.tuning.sample_period),
-            Message::VcaEnvelope(adsr) => self.envelope.set(adsr, self.tuning.sample_period),
+            Message::VcaEnvelope(adsr) => {
+                let timing = adsr.at_sample_period(self.tuning.sample_period);
+                self.envelope.retime(&self.timing, &timing);
+                self.timing = timing;
+            }
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
                 if self.note == note {
-                    self.envelope.gate_off();
+                    self.envelope.gate_off(&self.timing);
                 }
             }
             Message::NoteOn { note, velocity } => {
                 if let Some(&step) = self.tuning.steps.get(usize::from(note)) {
                     self.note = note;
                     self.step = step;
-                    self.envelope.gate_on();
+                    self.envelope.gate_on(&self.timing);
                     self.velocity = if step == 0 { 0 } else { velocity.min(127) };
                 }
             }
@@ -201,7 +206,8 @@ impl<'a> Monosynth<'a> {
             let oscillator = self.waveform.sample(self.phase) << 8;
             let filtered = self.filter.process(oscillator);
             let q23 = (filtered * i32::from(self.velocity)) >> 11;
-            *sample = S::from_sample_(((q23 as f32 * self.envelope.next()) as i32) << 8);
+            *sample =
+                S::from_sample_(((q23 as f32 * self.envelope.advance(&self.timing)) as i32) << 8);
             self.phase = self.phase.wrapping_add(self.step);
         }
     }

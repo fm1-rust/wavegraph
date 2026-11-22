@@ -19,9 +19,9 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
-| Knobs 1–4 on the organ | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
-| ENV | Open or close the mono/303 envelope editor. An organ envelope editor is not implemented yet. |
-| Knobs 1–4 in monosynth ENV | Adjust attack, decay, sustain and release respectively. |
+| Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
+| ENV | Open or close the selected instrument’s envelope page. ENV stays lit while the page is open. |
+| Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix. |
 | PLAY/STOP | Reserved for a future sequencer. |
@@ -52,7 +52,7 @@ notes slide and a new strike after release restarts the envelopes.
 
 The organ is **modeled, not sampled**. ALGORITHM selects either a 1:3:6
 harmonic recipe (House) or a brighter 1:4:8 blend (Analog). Both include
-short key percussion, a programmable transient decay, and a release envelope.
+short key percussion with its own decay and a separate per-voice amplitude envelope.
 The modeling follows independent community recipes, not Korg's actual PCM
 multisample. No Korg ROM data is bundled. For a proper similarity check,
 compare a dry Organ 2 patch in the Korg M1 plug-in against both modes; a
@@ -70,16 +70,20 @@ the display's live scope while visible; the audio DMA keeps processing.
 Hold a key and turn Knob 3 to hear the sustain level change. Release the key
 and turn Knob 4 to shorten or extend the tail. The graph and readouts also
 respond while the keyboard is idle. Press ENV again to return to the scope.
-Turning PRESETS to the 303 closes the editor and keeps the monosynth settings.
+Switching instruments with PRESETS closes the editor. Each part recalls its own settings.
 
-| Knob | Parameter | Range | Initial value |
+| Knob | Parameter | Monosynth range (initial) | Organ range (initial) |
 | --- | --- | --- | --- |
-| 1 | Attack | 1.5 ms–4 s | 8 ms |
-| 2 | Decay | 2 ms–10 s | 160 ms |
-| 3 | Sustain | 0–100% | 70% |
-| 4 | Release | 2 ms–10 s | 125 ms |
+| 1 | Attack | 1.5 ms–4 s (8 ms) | 0–4 s (2 ms) |
+| 2 | Decay | 2 ms–10 s (160 ms) | 0–10 s (100 ms) |
+| 3 | Sustain | 0–100% (70%) | 0–100% (100%) |
+| 4 | Release | 2 ms–10 s (125 ms) | 0–1 s (55 ms) |
 
-The time ranges follow the [Roland SH-101][sh101]. The editor scales each
+On the organ, knob 4 edits the same release in either view, in 5 ms steps.
+Knob 3 on the scope sets the key click's decay. On the ENV page, lower sustain
+to hear knob 2 shape the decay of the whole note.
+
+The monosynth ranges follow the [Roland SH-101][sh101]. The editor scales each
 stage's width by knob position so you can see a short attack next to a long
 release. The flat section shows the level held until key-up.
 

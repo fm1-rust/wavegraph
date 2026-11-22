@@ -10,6 +10,7 @@ categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "organ", "house", "dsp", "no-std"]
 
 [dependencies]
+wavegraph-adsr.workspace = true
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 

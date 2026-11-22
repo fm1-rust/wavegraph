@@ -299,7 +299,7 @@ mod app {
                 if before.focus != focus {
                     self.settings.env_mode = false;
                 }
-                if scan.pressed(Button::Env) && focus != Part::Organ {
+                if scan.pressed(Button::Env) {
                     self.settings.env_mode = !self.settings.env_mode;
                     if self.settings.env_mode {
                         self.settings.fx_view = false;
@@ -332,13 +332,15 @@ mod app {
                 } else {
                     let voice = &mut self.settings.parts.voices[focus as usize];
                     voice.turn_waveform(focus, scan.encoder_delta(Encoder::Algorithm));
-                    if self.settings.env_mode && focus == Part::Mono {
-                        self.settings.parts.mono_envelope.turn(knobs);
-                    } else {
-                        self.settings
-                            .parts
-                            .turn_select(focus, scan.encoder_delta(Encoder::Select));
-                        self.settings.parts.turn_knobs(focus, knobs);
+                    match (self.settings.env_mode, focus) {
+                        (true, Part::Mono) => self.settings.parts.mono_envelope.turn(knobs),
+                        (true, Part::Organ) => self.settings.parts.organ.envelope.turn_organ(knobs),
+                        _ => {
+                            self.settings
+                                .parts
+                                .turn_select(focus, scan.encoder_delta(Encoder::Select));
+                            self.settings.parts.turn_knobs(focus, knobs);
+                        }
                     }
                     if scan.pressed(Button::Sel) {
                         self.settings.voice_tap = !self.settings.voice_tap;

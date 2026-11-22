@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'wavegraph/v*'
+      - 'wavegraph-adsr/v*'
       - 'wavegraph-core/v*'
       - 'wavegraph-monosynth/v*'
       - 'wavegraph-sample/v*'

@@ -21,7 +21,22 @@ leaves headroom when used beside the TB-303 and monosynth.
 | `Tone(0..=127)` | Upper harmonic / brightness | 80 |
 | `Percussion(0..=127)` | Attack click / punch | 44 |
 | `DecayMs(5..=500)` | How long the click lasts | 70 ms |
-| `ReleaseMs(0..=1000)` | How long released notes fade | 55 ms |
+| `VcaEnvelope(Adsr)` | Per-voice attack, decay, sustain and release | 2 ms, 100 ms, 100%, 55 ms |
+| `ReleaseMs(0..=1000)` | Change only the VCA release | 55 ms |
+
+Each note starts its own amplitude envelope. The key click has its own decay
+inside that envelope. At full sustain, VCA decay has no audible effect.
+Lower sustain to hear it. Edits apply to held notes and release tails at the
+event frame. Re-striking a pitch starts its oscillator, click and VCA together.
+
+The original M1 offers attack level, a decay breakpoint and a timed slope
+from that breakpoint to sustain. In Korg's factory program I17, Organ 2,
+the active oscillator's attack, breakpoint and sustain levels are all 99.
+Attack time is 0, decay and slope times are 99, and release time is 4 on
+Korg's 0–99 scale. A full-sustain
+ADSR therefore captures the held amplifier contour. WaveGraph retains its
+own 2 ms attack and 55 ms release. [M1 owner's manual, F4-1 and MIDI Table 1][m1-manual] ·
+[Factory preload, program I17][m1-preload]
 
 For house bass riffs, use short release, moderate punch, and a dry output. For
 bright chord stabs, raise tone and release; chorus/reverb can be added *after*
@@ -57,8 +72,9 @@ assert_eq!(organ.active_voices(), 3);
 
 ## Performance and limitations
 
-The render path uses Q16 envelope state, a 65-entry sine lookup table and integer
-mixing; it performs no transcendental math and allocates nothing per block.
+The four voices share one set of ADSR timings. Each advances its own gain
+per sample. The key transient uses fixed-point arithmetic, and the oscillators
+and mixer use integers and a 65-entry sine table. Rendering allocates nothing.
 An approximate sine plus triangle harmonic model cannot null against the M1
 PCM sound, particularly across the original keyboard's multisample zones.
 The transient and Analog's upper square wave are not bandlimited; higher
@@ -85,3 +101,6 @@ Licensed under either the [Apache License, Version 2.0](LICENSE-APACHE) or the
 Unless you explicitly state otherwise, you license contributions intentionally
 submitted for inclusion in this work under both licenses, without additional
 terms or conditions.
+
+[m1-manual]: https://cdn.korg.com/us/support/download/files/e223761dc7dee38a7c3c76983ddf2ea1.pdf
+[m1-preload]: https://www.korg.com/us/support/download/software/1/139/3374/

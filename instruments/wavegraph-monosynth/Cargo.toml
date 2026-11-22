@@ -11,6 +11,7 @@ rust-version.workspace = true
 
 [dependencies]
 micromath = { version = "2.2", default-features = false }
+wavegraph-adsr.workspace = true
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
