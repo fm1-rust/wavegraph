@@ -7,6 +7,7 @@ on:
       - 'wavegraph/**'
       - 'wavegraph-303/**'
       - 'wavegraph-core/**'
+      - 'wavegraph-fx/**'
       - 'wavegraph-monosynth/**'
       - 'wavegraph-sample/**'
       - Cargo.toml

@@ -1,0 +1,30 @@
+name: wavegraph-fx
+
+on:
+  pull_request:
+    paths: &fx-paths
+      - 'wavegraph-fx/**'
+      - 'wavegraph-core/**'
+      - 'wavegraph-sample/**'
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/wavegraph-fx.yml
+  push:
+    branches: [main]
+    paths: *fx-paths
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --target thumbv7em-none-eabihf --no-self-update
+      - run: cargo test -p wavegraph-fx --locked
+      - run: cargo build -p wavegraph-fx --lib --release --target thumbv7em-none-eabihf --locked

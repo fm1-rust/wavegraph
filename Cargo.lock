@@ -806,6 +806,14 @@ name = "wavegraph-core"
 version = "0.1.0"
 
 [[package]]
+name = "wavegraph-fx"
+version = "0.1.0"
+dependencies = [
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
 name = "wavegraph-fm1"
 version = "0.1.0"
 dependencies = [
@@ -819,6 +827,7 @@ dependencies = [
  "static_cell",
  "wavegraph",
  "wavegraph-303",
+ "wavegraph-fx",
  "wavegraph-monosynth",
  "wavegraph-sample",
 ]

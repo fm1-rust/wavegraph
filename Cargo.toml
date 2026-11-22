@@ -4,6 +4,7 @@ members = [
     "wavegraph",
     "wavegraph-303",
     "wavegraph-core",
+    "wavegraph-fx",
     "wavegraph-fm1",
     "wavegraph-monosynth",
     "wavegraph-sample"
@@ -16,6 +17,7 @@ license = "Apache-2.0 OR MIT"
 [workspace.dependencies]
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-core = { version = "0.1", path = "wavegraph-core" }
+wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
 
 [patch.crates-io]

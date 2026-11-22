@@ -93,6 +93,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Part),
+    Fx,
     Envelope(EnvelopeControls),
     BassEnvelope(Controls),
 }
@@ -292,7 +293,7 @@ impl Screen {
         late: bool,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        if labels.env_mode {
+        if labels.env_mode && !labels.fx_view {
             return match labels.focus {
                 Part::Bass => {
                     self.paint_bass_envelope(lcd, clock, labels.bass, late)
@@ -304,13 +305,17 @@ impl Screen {
                 }
             };
         }
-        let bass = labels.focus == Part::Bass;
+        let bass = !labels.fx_view && labels.focus == Part::Bass;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
         } else {
             (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
         };
-        let page = Page::Scope(labels.focus);
+        let page = if labels.fx_view {
+            Page::Fx
+        } else {
+            Page::Scope(labels.focus)
+        };
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
             self.change_view(style);
@@ -325,14 +330,55 @@ impl Screen {
             .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
             .await?;
         if changed_page {
-            let (header, footer) = if bass { (48, 32) } else { (16, 16) };
+            let (header, footer) = if bass || labels.fx_view {
+                (if bass { 48 } else { 16 }, 32)
+            } else {
+                (16, 16)
+            };
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
         self.beam
-            .paint(lcd, clock, &trace, self.strip, style, labels.focus)
+            .paint(
+                lcd,
+                clock,
+                &trace,
+                self.strip,
+                style,
+                if bass { Part::Bass } else { Part::Mono },
+            )
             .await?;
+        if labels.fx_view {
+            self.text.text(0, 0, b"FX / REVERB", ink);
+            self.text.text(
+                12,
+                0,
+                if labels.fx.enabled { b"ON " } else { b"OFF" },
+                bright,
+            );
+            self.text.text(
+                16,
+                0,
+                if late {
+                    b"LATE"
+                } else if labels.half_gain {
+                    b"HALF"
+                } else {
+                    b"FULL"
+                },
+                muted,
+            );
+            self.text.text(0, 13, b"1:M", muted);
+            self.text.number(4, 13, 3, u32::from(labels.fx.mono), ink);
+            self.text.text(8, 13, b"2:303", muted);
+            self.text.number(15, 13, 3, u32::from(labels.fx.bass), ink);
+            self.text.text(0, 14, b"3:DEC", muted);
+            self.text.number(6, 14, 3, u32::from(labels.fx.decay), ink);
+            self.text.text(11, 14, b"4:WET", muted);
+            self.text.number(17, 14, 3, u32::from(labels.fx.wet), ink);
+            return self.text.paint_async(lcd, clock).await;
+        }
         if bass {
             self.bass_panel(labels.bass);
         } else {
@@ -344,7 +390,7 @@ impl Screen {
         self.text.text(
             12,
             0,
-            if labels.half_gain { b"HALF" } else { b"DRY " },
+            if labels.half_gain { b"HALF" } else { b"FULL" },
             muted,
         );
         let source = match (labels.voice_tap, labels.focus) {
