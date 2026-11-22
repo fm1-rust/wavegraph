@@ -14,7 +14,7 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 
 | Control | Action |
 | --- | --- |
-| PRESETS encoder | Select monosynth → organ → TB-303; a patch list overlays the previous screen for 1.4 seconds. Holding notes does not switch their owner. |
+| PRESETS encoder | Cycle through monosynth → organ → TB-303. Each detent updates the panel and routes new keys to the highlighted instrument. Held notes stay with their original part. |
 | Piano keys | Play F3 to G5 at the default octave. Each key stays lit while you hold it. The organ has four voices. The monosynth and 303 each play one note at a time. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
@@ -63,8 +63,10 @@ continues to service the other two parts unchanged.
 
 The organ's dark charcoal panel with lime accents and a cyan readout takes
 visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
-list is inspired by the FM-1's stock patch-selector overlay. It freezes only
-the display's live scope while visible; the audio DMA keeps processing.
+list is inspired by the FM-1's stock patch-selector overlay. A bright outline
+and dark fill mark the selected row over the dimmed instrument page. The scope
+and controls stay live while browsing. The list closes one second after the
+last turn.
 
 ## VCA envelope
 
