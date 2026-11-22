@@ -57,6 +57,7 @@ pub struct Tb303 {
     pub params: VoiceParams,
     voice: Voice,
     held_note: Option<u8>,
+    suspend_idle: bool,
 }
 
 impl Tb303 {
@@ -67,6 +68,7 @@ impl Tb303 {
             params: VoiceParams::default(),
             voice: Voice::new(sample_rate),
             held_note: None,
+            suspend_idle: false,
         }
     }
 
@@ -109,8 +111,23 @@ impl Tb303 {
         }
     }
 
+    /// Let the oscillator and ladder sleep once the released VCA is below the Q23 floor.
+    /// The accent circuit continues to discharge between notes.
+    #[must_use]
+    pub fn with_idle_suspension(mut self) -> Self {
+        self.suspend_idle = true;
+        self
+    }
+
     fn render<S: OutputSample>(&mut self, output: &mut [S]) {
-        if !output.is_empty() {
+        if output.is_empty() {
+            return;
+        }
+        if self.suspend_idle && self.voice.skip_silence(&self.params, output.len()) {
+            for sample in output {
+                S::write(sample, 0.0);
+            }
+        } else {
             self.voice.render_with(&self.params, output, S::write);
         }
     }

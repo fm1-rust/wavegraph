@@ -212,6 +212,7 @@ dependencies = [
  "critical-section",
  "embedded-hal",
  "embedded-hal-async",
+ "heapless",
 ]
 
 [[package]]
@@ -839,6 +840,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavegraph-909"
+version = "0.1.0"
+dependencies = [
+ "wavegraph",
+ "wavegraph-core",
+ "wavegraph-sample",
+ "wavegraph-sampler",
+]
+
+[[package]]
 name = "wavegraph-adsr"
 version = "0.1.0"
 
@@ -860,6 +871,7 @@ dependencies = [
  "static_cell",
  "wavegraph",
  "wavegraph-303",
+ "wavegraph-909",
  "wavegraph-adsr",
  "wavegraph-fx",
  "wavegraph-monosynth",
@@ -897,6 +909,15 @@ dependencies = [
 [[package]]
 name = "wavegraph-sample"
 version = "0.1.0"
+
+[[package]]
+name = "wavegraph-sampler"
+version = "0.1.0"
+dependencies = [
+ "wavegraph",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
 
 [[package]]
 name = "windows-link"

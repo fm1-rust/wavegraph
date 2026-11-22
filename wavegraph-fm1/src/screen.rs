@@ -1,11 +1,13 @@
 //! Scope and envelope pages for the FM-1 display.
 
+use crate::overload::Severity;
 use crate::{
     bass::{Bank, Controls, Knob, envelope as bass_env},
-    capture::{FLAT, HEIGHT, Trace, WIDTH},
+    capture::{HEIGHT, Trace, WIDTH},
     envelope::EnvelopeControls,
     firmware::Frame,
     instrument::Part,
+    sequencer::{SeqPage, Transport},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
@@ -81,6 +83,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 enum Page {
     Scope(Part),
     Fx,
+    Sequencer(SeqPage),
     Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
 }
@@ -92,6 +95,8 @@ pub(super) struct Screen {
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
     selector: &'static mut Selector,
     beam: Beam,
+    dot: Option<Severity>,
+    dot_background: Rgb565,
     page: Option<Page>,
 }
 
@@ -122,17 +127,24 @@ impl Screen {
             strip: STRIP.take(),
             selector: SELECTOR.take(),
             page: None,
+            dot: None,
+            dot_background: STYLE.background,
             beam: Beam {
                 old_head: None,
-                old_trace: FLAT,
+                old_trace: None,
             },
         }
     }
 
     fn change_view(&mut self, style: WaveformStyle) {
+        self.dot = None;
+        self.dot_background = style.background;
         self.plot.set_style(style);
+        // Pages can share a palette; the previous pulse may still be on the LCD.
+        self.plot.invalidate();
         *self.text = TextGrid::with_background(style.background);
         self.beam.old_head = None;
+        self.beam.old_trace = None;
     }
 
     async fn paint_envelope(
@@ -141,7 +153,6 @@ impl Screen {
         clock: &mut Clock,
         focus: Part,
         controls: EnvelopeControls,
-        late: bool,
     ) -> Result<(), Error> {
         let page = Page::Envelope(focus, controls);
         let previous = self.page.replace(page);
@@ -178,9 +189,6 @@ impl Screen {
                 .number(1, 14, 4, u32::from(adsr.sustain_percent), ink);
             self.text.text(5, 14, b"/100", palette::MUTED);
             env_time(self.text, 10, 14, b"R", adsr.release_us, ink);
-        }
-        if late {
-            self.text.text(16, 0, b"LATE", palette::RED);
         }
         self.text.paint_async(lcd, clock).await
     }
@@ -224,7 +232,6 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         controls: Controls,
-        late: bool,
     ) -> Result<(), Error> {
         let page = Page::BassEnvelope(controls);
         let previous = self.page.replace(page);
@@ -253,9 +260,70 @@ impl Screen {
             }
             self.bass_panel(controls);
         }
-        if late {
-            self.text.text(16, 0, b"LATE", OXIDE_RED);
+        self.text.paint_async(lcd, clock).await
+    }
+
+    async fn paint_sequencer(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        view: SeqPage,
+        transport: Transport,
+    ) -> Result<(), Error> {
+        use wavegraph_909::{DEMO_PATTERN, Voice};
+
+        let page = Page::Sequencer(view);
+        if self.page.replace(page) != Some(page) {
+            self.change_view(STYLE);
+            lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
+            self.text.text(0, 0, b"TR-909", palette::WHITE);
+            if view == SeqPage::Pattern {
+                self.text.text(8, 0, b"PATTERN 1/2", palette::MUTED);
+                for (bar, steps) in DEMO_PATTERN.chunks_exact(16).enumerate() {
+                    let y = 4 + bar * 4;
+                    self.text.text(0, y, b"BAR", palette::MUTED);
+                    self.text.number(4, y, 1, bar as u32 + 1, palette::WHITE);
+                    for (row, (name, voice)) in [(b"BD", Voice::Kick), (b"SD", Voice::Snare)]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        self.text.text(0, y + 1 + row, name, palette::MUTED);
+                        for (step, voices) in steps.iter().enumerate() {
+                            let hit = voices.contains(&voice);
+                            self.text.text(
+                                4 + step,
+                                y + row + 1,
+                                if hit { b"X" } else { b"." },
+                                if hit { palette::GREEN } else { palette::MUTED },
+                            );
+                        }
+                    }
+                }
+                self.text.text(0, 14, b"SELECT FOR TEMPO", palette::MUTED);
+            } else {
+                self.text.text(10, 0, b"TEMPO 2/2", palette::MUTED);
+                self.text.text(0, 6, b"MASTER TEMPO", palette::WHITE);
+                self.text.text(0, 8, b"KNOB 3", palette::GREEN);
+                self.text.text(0, 14, b"SELECT FOR PATTERN", palette::MUTED);
+            }
+            self.text.text(13, 2, b"BPM", palette::MUTED);
         }
+        self.text.text(
+            0,
+            2,
+            if transport.playing() {
+                b"PLAY"
+            } else {
+                b"STOP"
+            },
+            if transport.playing() {
+                palette::GREEN
+            } else {
+                palette::RED
+            },
+        );
+        self.text
+            .number(9, 2, 3, u32::from(transport.bpm), palette::WHITE);
         self.text.paint_async(lcd, clock).await
     }
 
@@ -264,10 +332,44 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         frame: &Frame,
-        late: bool,
+        severity: Option<Severity>,
+        beat_phase: Option<u8>,
+    ) -> Result<(), Error> {
+        self.paint_page(lcd, clock, frame, beat_phase).await?;
+        if severity != self.dot {
+            let color = match severity {
+                None => self.dot_background,
+                Some(Severity::Amber) => Rgb565::new(31, 40, 0),
+                Some(Severity::Red) => palette::RED,
+            };
+            // Seven pixels in the reserved final header cell. The rectangle is
+            // rewritten only when the lamp or page changes.
+            let pixels = [0x1c_u8, 0x3e, 0x7f, 0x7f, 0x7f, 0x3e, 0x1c].map(|row| {
+                core::array::from_fn::<_, 7, _>(|x| {
+                    if row & (1 << x) != 0 {
+                        color
+                    } else {
+                        self.dot_background
+                    }
+                    .to_be_bytes()
+                })
+            });
+            lcd.write_rect_buffered(SIZE - 10, 4, 7, 7, pixels.as_flattened().as_flattened())?;
+            self.dot = severity;
+        }
+        Ok(())
+    }
+
+    async fn paint_page(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        frame: &Frame,
+        beat_phase: Option<u8>,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        let browsing = !labels.env_mode
+        let browsing = labels.seq.page.is_none()
+            && !labels.env_mode
             && labels
                 .menu_since
                 .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS);
@@ -276,12 +378,15 @@ impl Screen {
             self.plot.invalidate();
             self.page = None;
         }
+        if let Some(page) = labels.seq.page {
+            return self
+                .paint_sequencer(lcd, clock, page, labels.seq.transport)
+                .await;
+        }
         if labels.env_mode && !labels.fx_view {
             match labels.focus {
                 Part::Bass => {
-                    return self
-                        .paint_bass_envelope(lcd, clock, labels.bass, late)
-                        .await;
+                    return self.paint_bass_envelope(lcd, clock, labels.bass).await;
                 }
                 Part::Mono | Part::Organ => {
                     let controls = if labels.focus == Part::Organ {
@@ -290,7 +395,7 @@ impl Screen {
                         labels.mono_envelope
                     };
                     return self
-                        .paint_envelope(lcd, clock, labels.focus, controls, late)
+                        .paint_envelope(lcd, clock, labels.focus, controls)
                         .await;
                 }
             }
@@ -337,7 +442,12 @@ impl Screen {
                 lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
-        self.paint_beam(lcd, clock, &trace, style, labels.focus)
+        let pulse_part = if labels.fx_view {
+            Part::Mono
+        } else {
+            labels.focus
+        };
+        self.paint_beam(lcd, clock, &trace, style, pulse_part, beat_phase)
             .await?;
         if labels.fx_view {
             self.text.text(0, 0, b"FX / REVERB", ink);
@@ -348,15 +458,9 @@ impl Screen {
                 bright,
             );
             self.text.text(
-                16,
+                15,
                 0,
-                if late {
-                    b"LATE"
-                } else if labels.half_gain {
-                    b"HALF"
-                } else {
-                    b"FULL"
-                },
+                if labels.half_gain { b"HALF" } else { b"FULL" },
                 muted,
             );
             self.text.text(0, 13, b"1:M", muted);
@@ -403,18 +507,9 @@ impl Screen {
             (true, Part::Organ) => b"ORG",
             (true, Part::Bass) => b"SRC",
         };
-        self.text.text(17, 0, source, muted);
+        self.text.text(16, 0, source, muted);
         self.text.text(0, 14, labels.voice.label(labels.focus), ink);
         self.text.text(8, 14, labels.voice.note_name(), bright);
-        if late {
-            self.text.text(
-                12,
-                14,
-                b"LATE",
-                self.selector
-                    .shade(if bass { OXIDE_RED } else { palette::RED }),
-            );
-        }
         self.text.text(16, 14, b"V", muted);
         let velocity = labels
             .voice
@@ -441,7 +536,7 @@ fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32, ink:
 
 struct Beam {
     old_head: Option<usize>,
-    old_trace: Trace,
+    old_trace: Option<Trace>,
 }
 
 fn segment(trace: &Trace, x: usize) -> (usize, usize) {
@@ -489,17 +584,21 @@ impl Screen {
         trace: &Trace,
         style: WaveformStyle,
         part: Part,
+        beat_phase: Option<u8>,
     ) -> Result<(), Error> {
         let beam = &mut self.beam;
         let selector = &*self.selector;
-        let head = beam.old_head.map_or(0, |x| (x + BAND) % WIDTH);
+        let head = beat_phase.map(|phase| usize::from(phase) * WIDTH / 256);
+        if head.is_none() && beam.old_head.is_none() && !selector.visible() {
+            return Ok(());
+        }
         let mut lcd = lcd.as_async(clock)?;
         for x0 in (0..WIDTH).step_by(BAND) {
             // Include the old halo when a note or its gain changes under the beam.
             let mut top = HEIGHT;
             let mut bottom = 0;
             if selector.visible()
-                && beam.old_head.is_none()
+                && beam.old_trace.is_none()
                 && x0 < selector::RIGHT
                 && x0 + BAND > selector::LEFT
             {
@@ -507,17 +606,20 @@ impl Screen {
                 bottom = selector::BOTTOM - 1 - usize::from(TOP);
             }
             for x in x0..x0 + BAND {
-                if selector.visible() && beam.old_head.is_some() {
-                    let old = segment(&beam.old_trace, x);
+                if selector.visible()
+                    && let Some(previous) = &beam.old_trace
+                {
+                    let old = segment(previous, x);
                     let new = segment(trace, x);
                     if old != new {
                         top = top.min(old.0).min(new.0);
                         bottom = bottom.max(old.1).max(new.1);
                     }
                 }
-                for (which_head, which_trace) in
-                    [(Some(head), trace), (beam.old_head, &beam.old_trace)]
-                {
+                for (which_head, which_trace) in [
+                    (head, trace),
+                    (beam.old_head, beam.old_trace.as_ref().unwrap_or(trace)),
+                ] {
                     if which_head.is_some_and(|h| age(h, x) < TRAIL) {
                         let (a, b) = segment(which_trace, x);
                         top = top.min(a.saturating_sub(1));
@@ -533,9 +635,10 @@ impl Screen {
             for dx in 0..BAND {
                 let x = x0 + dx;
                 let (a, b) = segment(trace, x);
-                let (ink, halo) = phosphor(part, age(head, x));
-                let ink = selector.shade(ink);
-                let halo = halo.map(|color| selector.shade(color));
+                let (ink, halo) = head.map_or((style.trace, None), |h| {
+                    let (ink, halo) = phosphor(part, age(h, x));
+                    (selector.shade(ink), halo.map(|color| selector.shade(color)))
+                });
                 for y in top..=bottom {
                     let paper = paper(style, x, usize::from(TOP) + y);
                     let color = if (a..=b).contains(&y) {
@@ -559,8 +662,8 @@ impl Screen {
             .await?;
         }
         lcd.flush().await?;
-        beam.old_head = Some(head);
-        beam.old_trace = *trace;
+        beam.old_head = head;
+        beam.old_trace = Some(*trace);
         Ok(())
     }
 }

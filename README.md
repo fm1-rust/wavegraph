@@ -13,12 +13,14 @@ caller-owned buffers. Each instrument is a separate crate. The
 | --- | --- | --- | --- | --- |
 | [`wavegraph`](wavegraph/) | DSP and bytecode interpreter | [crates.io](https://crates.io/crates/wavegraph) | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-303`](instruments/wavegraph-303/) | Monophonic 303 bass synth with accent and slide | Unpublished | [Instrument guide](instruments/wavegraph-303/README.md) | [![Build status][303-build]][303-ci] |
+| [`wavegraph-909`](instruments/wavegraph-909/) | Six-voice hybrid 909 with a mono mix and individual outputs | Unpublished | [Instrument guide](instruments/wavegraph-909/README.md) | [![Build status][909-build]][909-ci] |
 | [`wavegraph-adsr`](wavegraph-adsr/) | Sample-clocked ADSR shared by the monosynth and organ | Unpublished | [Envelope guide](wavegraph-adsr/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
-| [`wavegraph-fm1`](wavegraph-fm1/) | Three instruments and live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
+| [`wavegraph-fm1`](wavegraph-fm1/) | Three synths, a sequenced 909 and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
+| [`wavegraph-sampler`](instruments/wavegraph-sampler/) | One-shot mono PCM player | Unpublished | [Playback guide](instruments/wavegraph-sampler/README.md) | [![Build status][sampler-build]][sampler-ci] |
 
 The libraries support Rust 1.88 and build without `std` or a heap allocator.
 To browse their API documentation locally, run `cargo doc --workspace --no-deps --open`.
@@ -41,9 +43,13 @@ cargo +stable test -p wavegraph --test patch --locked
 [wavegraph-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
 [303-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml/badge.svg?branch=main&event=push
 [303-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml
+[909-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-909.yml/badge.svg?branch=main&event=push
+[909-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-909.yml
 [fm1-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml/badge.svg?branch=main&event=push
 [fm1-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [organ-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-organ.yml/badge.svg?branch=main&event=push
 [organ-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-organ.yml
 [sample-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml/badge.svg?branch=main&event=push
 [sample-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml
+[sampler-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sampler.yml/badge.svg?branch=main&event=push
+[sampler-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sampler.yml

@@ -1,12 +1,12 @@
 # WaveGraph for the FM-1
 
-Play three instruments together on the M-VAVE FM-1: the green
+The M-VAVE FM-1 plays a [909 drum machine](../instruments/wavegraph-909/) alongside three keyboard instruments, the green
 [monosynth](../instruments/wavegraph-monosynth/), charcoal-and-lime four-voice
 [M1-inspired organ](../instruments/wavegraph-organ/), and silver
 [TB-303](../instruments/wavegraph-303/). PRESETS cycles them in that order, one detent
 at a time, with a transient three-row patch-selection overlay. Each part
 keeps sounding when you select another. The default page is the green
-monosynth, with sine selected and the cutoff at 5 kHz.
+monosynth, with sine selected and the cutoff at 5 kHz. The drum transport starts stopped at 126 BPM.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
 | --- | --- | --- |
@@ -14,6 +14,8 @@ monosynth, with sine selected and the cutoff at 5 kHz.
 
 | Control | Action |
 | --- | --- |
+| PLAY/STOP | Start the 909 on beat one from any page (green). Press again to silence the kit and stop (red). |
+| SEQ | Open the two-bar pattern view. Turn SELECT clockwise to page 2, then turn KNOB 3 to adjust master tempo by 1 BPM per detent (30–300 BPM). SEQ or HOME returns to the instrument. |
 | PRESETS encoder | Cycle through monosynth → organ → TB-303. Each detent updates the panel and routes new keys to the highlighted instrument. Held notes stay with their original part. |
 | Piano keys | Play F3 to G5 at the default octave. Each key stays lit while you hold it. The organ has four voices. The monosynth and 303 each play one note at a time. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
@@ -118,6 +120,41 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 | --- | --- |
 | ![303 preview with filter decay and rising accent peaks](assets/tb-303-envelope.png) | ![303 preview with the accent sweep isolated and a 30 ms VCA attack](assets/tb-303-accent-sweep.png) |
 
+## 909 and master tempo
+
+The 909 plays a fixed two-bar pattern with a kick on every quarter, snare and
+clap on the backbeat, closed and open hi-hats, and ride accents. The kit has its own graph
+node. Piano keys and PRESETS still operate the three melodic parts while it
+plays. Opening SEQ brings up the kick/snare grid and lights the SEQ button.
+
+The tempo control follows [the stock FM-1 sequencer][stock-seq]. Page 2 shows
+the current BPM and PLAY/STOP state. Tempo edits retain the position within
+the current sixteenth. The clock advances with the FM-1 audio frames, so
+panel scans and LCD redraws do not quantize the beat. The bundled 44.1 kHz
+cymbals play at the hardware rate of about 44,118 Hz, a pitch difference of
+roughly 0.7 cent.
+
+## Audio overloads and USB log
+
+A seven-pixel dot in the upper-right corner turns amber on a missed audio
+deadline and red on a second miss within one second. It disappears after one
+second without a miss. The `V` readout is the last key velocity.
+
+Connect USB and run `fm1 log` from the [FM-1 CLI][cli]. For example,
+`XR12 T4870 W3070 G2902 DMA` reports the 12th miss, 4,870 ms after boot,
+with 3,070 µs of interrupt work and 2,902 µs since the previous audio IRQ.
+`DMA` means the refill crossed a DMA boundary. The nominal 128-frame budget
+is 2,901 µs. Timestamps have 10 ms resolution. Work and gap values saturate
+at 99,999 µs. The snapshot holds the latest one or two events that fit the
+USB log packet, including misses while disconnected. Repeated reads preserve
+the snapshot until another miss occurs.
+
+The graph skips the oscillator and filter work of silent keyboard parts.
+Held notes, VCA release tails and the shared reverb keep running when you
+change presets. The 303 still discharges its accent capacitor while silent.
+
+[cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
+
 ## Global reverb
 
 FX and ENV are mutually exclusive views; opening either closes the other.
@@ -135,10 +172,10 @@ storage; it is not an emulation of the Roland DEP-5.
 
 ## Audio and display
 
-Every 128-frame ALNK0 block calls three persistent instrument nodes, a shared
-send mixer and a reverb processor. WaveGraph bytecode trims the 303 to quarter
+Every 128-frame ALNK0 block calls the three persistent synths, the drum
+machine, a shared send mixer and a reverb processor. WaveGraph bytecode trims the 303 to quarter
 gain, creates independent monosynth and 303 sends, and adds the dry organ and
-the wet return before duplicating the mix to both stereo channels.
+the wet return and the 909 before duplicating the mix to both stereo channels.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
@@ -146,8 +183,7 @@ first block under that route.
 The scope captures 240 consecutive samples starting at a rising zero crossing.
 A two-block queue feeds an async observer. Missing blocks and routing changes
 start a fresh trace. The trace labels travel with the samples. The cutoff
-readout follows the knob even while the scope waits for a trigger. A red LATE
-indicator latches if audio service misses its timing budget.
+readout follows the knob even while the scope waits for a trigger.
 
 The splash and instrument pages use [fm1-graphics] to draw a waveform on a
 24-pixel grid. The boot illustration combines two harmonics with phase
@@ -156,8 +192,10 @@ lettering rises from the bottom. The firmware version appears beneath it,
 taken from the `wavegraph-fm1` Cargo package at build time.
 
 The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
-artwork. Both draw in buffered RGB565 strips. During play, dirty tiles update
-the trace and a narrow phosphor sweep highlights it. Display DMA runs below
+artwork. Both draw in buffered RGB565 strips. The scope stays live while the transport is stopped. During playback, a
+narrow phosphor pulse crosses the trace once per quarter note, starting at
+the left edge with the kick. It follows the audio master clock across tempo
+changes and clears on STOP. Display DMA runs below
 audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
 or `assets/fm1.png` and run
 `python3 wavegraph-fm1/assets/pack_logo.py` with Pillow installed.
@@ -203,3 +241,5 @@ or the [MIT License](LICENSE-MIT).
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
+
+[stock-seq]: https://fuleo.github.io/fm1-guide/sequencer.html

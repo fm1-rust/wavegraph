@@ -1,0 +1,20 @@
+[package]
+name = "wavegraph-sampler"
+description = "One-shot PCM sample player for WaveGraph"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "sampler", "pcm", "no-std"]
+
+[dependencies]
+wavegraph-core.workspace = true
+wavegraph-sample.workspace = true
+
+[dev-dependencies]
+wavegraph = { version = "0.1", path = "../../wavegraph" }
+
+[lints]
+workspace = true

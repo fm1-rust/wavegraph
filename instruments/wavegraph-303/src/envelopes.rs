@@ -99,6 +99,22 @@ impl Envelopes {
         self.gate = false;
     }
 
+    // Below -160 dB the released VCA contributes less than one Q23 count.
+    pub(super) fn silent(&self) -> bool {
+        !self.gate && self.amplitude < 1.0e-8
+    }
+
+    pub(super) fn advance_silence(&mut self, p: &VoiceParams, frames: usize) {
+        // An accented note can leave the sweep capacitor charged after the VCA closes.
+        // Keep its control circuit running until the residual is below 0.01 cent.
+        if self.capacitor > 1.0e-6 || (self.accent && self.filter > 1.0e-6) {
+            let coefficients = self.coefficients(p);
+            for _ in 0..frames {
+                self.step(&coefficients);
+            }
+        }
+    }
+
     pub(super) fn sounding(&self) -> bool {
         self.gate || self.amplitude > 0.0001
     }

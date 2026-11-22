@@ -291,3 +291,28 @@ fn early_key_up_releases_from_the_partial_attack_at_the_device_clock() {
         assert!(samples[off + release - 1..].iter().all(|&s| s == 0));
     }
 }
+
+#[test]
+fn suspended_oscillator_keeps_phase_and_wakes_at_the_note_offset() {
+    let tuning = Tuning::new(48_000, 1).expect("audio clock");
+    let mut continuous = Monosynth::new(&tuning);
+    let mut suspended = continuous.clone().with_idle_suspension();
+    let shape = at(73, Message::Waveform(Waveform::Sawtooth));
+    assert_eq!(render::<128>(&mut suspended, &[shape]), [0; 128]);
+    render::<128>(&mut continuous, &[shape]);
+    let notes = [
+        at(
+            37,
+            Message::NoteOn {
+                note: 60,
+                velocity: 110,
+            },
+        ),
+        at(91, Message::NoteOff(60)),
+    ];
+    let samples = render::<128>(&mut suspended, &notes);
+    assert_eq!(samples, render::<128>(&mut continuous, &notes));
+    assert_eq!(&samples[..37], &[0; 37]);
+    assert!(samples[37..91].iter().any(|v| *v != 0));
+    assert_eq!(&samples[91..], &[0; 37]);
+}

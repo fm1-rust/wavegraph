@@ -1,0 +1,21 @@
+[package]
+name = "wavegraph-909"
+description = "Six-voice TR-909-style drum machine with modeled drums and PCM cymbals"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license = "(Apache-2.0 OR MIT) AND CC0-1.0"
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "drum-machine", "sampler", "no-std"]
+
+[dependencies]
+wavegraph-core.workspace = true
+wavegraph-sample.workspace = true
+wavegraph-sampler = { version = "0.1", path = "../wavegraph-sampler" }
+
+[dev-dependencies]
+wavegraph = { version = "0.1", path = "../../wavegraph" }
+
+[lints]
+workspace = true
