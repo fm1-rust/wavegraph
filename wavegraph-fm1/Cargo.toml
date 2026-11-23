@@ -5,6 +5,7 @@ edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 publish = false
+build = "assets/bumper.rs"
 description = "WaveGraph synthesizers, a sequenced 909 drum machine and an oscilloscope for FM-1"
 
 [dependencies]
@@ -26,6 +27,10 @@ fm1-controls = "0.1.1"
 fm1-graphics = { version = "0.1", features = ["async-display"] }
 fm1-rticx = { version = "0.1.1", features = ["audio", "async-display", "async-usb", "usb-log"] }
 static_cell = "2.1.1"
+
+[build-dependencies]
+wavegraph-303 = { path = "../instruments/wavegraph-303" }
+wavegraph-909 = { path = "../instruments/wavegraph-909" }
 
 [lints]
 workspace = true
