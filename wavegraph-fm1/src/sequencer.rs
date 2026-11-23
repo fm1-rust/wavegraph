@@ -306,6 +306,8 @@ pub(super) struct PatternPlayer {
     enabled: [bool; CHANNELS],
     gates: [PatternGate; CHANNELS],
     automation_left: usize,
+    /// Clock position of the last set of 303 control messages sent to the graph.
+    pub(super) automation_phase: (u8, u8),
     position: Option<Position>,
 }
 
@@ -318,6 +320,7 @@ impl PatternPlayer {
             enabled: [false; CHANNELS],
             gates: [PatternGate::CLOSED; CHANNELS],
             automation_left: 0,
+            automation_phase: (0, 0),
             position: None,
         }
     }
@@ -496,6 +499,7 @@ impl PatternPlayer {
             if self.automation_left == 0 {
                 if bass.contains(&true) {
                     let (position, fraction) = self.clock.position(false);
+                    self.automation_phase = (position.step, fraction);
                     for channel in Channel::ALL
                         .into_iter()
                         .filter(|channel| bass[channel.index()])

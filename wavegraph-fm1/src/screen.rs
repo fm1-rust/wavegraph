@@ -27,6 +27,7 @@ mod mixer;
 mod selector;
 mod sequencer;
 mod splash;
+mod tb303;
 mod tr808;
 
 use selector::{Menu, Selector};
@@ -102,6 +103,7 @@ pub(super) struct Screen {
     strip: &'static mut [[u8; 2]; BAND * WIDTH],
     selector: &'static mut Selector,
     drums: drums::Panel,
+    bass: tb303::Panel,
     mixer: mixer::Surface,
     sequence: sequencer::Grid,
     beam: Beam,
@@ -137,6 +139,7 @@ impl Screen {
             strip: STRIP.take(),
             selector: SELECTOR.take(),
             drums: drums::Panel::new(),
+            bass: tb303::Panel::default(),
             mixer: mixer::Surface::default(),
             sequence: sequencer::Grid::new(),
             page: None,
@@ -226,7 +229,7 @@ impl Screen {
         self.text.paint_async(lcd, clock).await
     }
 
-    fn bass_panel(&mut self, controls: Controls) {
+    fn bass_envelope_labels(&mut self, controls: Controls) {
         let (ink, muted) = (
             self.selector.shade(OXIDE_RED),
             self.selector.shade(BASS_MUTED),
@@ -291,7 +294,7 @@ impl Screen {
             for (lane, trace) in self.lanes.iter_mut().zip(&bass_env::traces(controls)) {
                 lane.paint_async(lcd, trace, clock).await?;
             }
-            self.bass_panel(controls);
+            self.bass_envelope_labels(controls);
         }
         self.text.paint_async(lcd, clock).await
     }
@@ -517,7 +520,8 @@ impl Screen {
             // LCD y=60..179, including the halo and dirty tiles within y=56..183.
             frame.trace.map(|y| (36 + u16::from(y) * 5 / 8) as u8)
         } else if bass {
-            frame.trace.map(|y| (25 + u16::from(y) * 3 / 4) as u8)
+            // Trace at LCD y=34..205. The halo and dirty tiles fit inside y=32..207.
+            frame.trace.map(|y| (10 + u16::from(y) * 9 / 10) as u8)
         } else if organ || fx {
             // Preserve the center at y=120; the bottom tile ends at y=207.
             frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
@@ -533,13 +537,23 @@ impl Screen {
         if changed_page {
             let (header, footer) = if drums {
                 (56, 56)
-            } else if bass || organ || fx {
-                (if bass { 48 } else { 16 }, 32)
+            } else if bass {
+                (tb303::MARGIN, tb303::MARGIN)
+            } else if organ || fx {
+                (16, 32)
             } else {
                 (16, 16)
             };
+            if bass {
+                self.dot_background = self.selector.shade(tb303::METAL);
+            }
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
-                lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
+                lcd.fill_rect(0, y, SIZE, height, self.dot_background.into_storage())?;
+            }
+            if bass {
+                for y in [header - 1, SIZE - footer] {
+                    lcd.fill_rect(0, y, SIZE, 1, muted.into_storage())?;
+                }
             }
         }
         let pulse_track = if fx { Part::Mono } else { labels.focus };
@@ -552,6 +566,26 @@ impl Screen {
             motion.position.map(|position| position.beat_phase),
         )
         .await?;
+        if bass {
+            let automation = motion
+                .bass_automation
+                .filter(|(channel, _, _)| *channel == labels.channel)
+                .map(|(channel, step, fraction)| {
+                    crate::sequencer::pattern::automation(channel, usize::from(step), fraction)
+                });
+            let mut lcd = lcd.as_async(clock)?;
+            return self
+                .bass
+                .paint(
+                    &mut lcd,
+                    self.strip,
+                    self.selector,
+                    &labels,
+                    automation,
+                    changed_page,
+                )
+                .await;
+        }
         if fx {
             let enabled = labels.fx.enabled(labels.fx_page);
             self.text.text(
@@ -618,13 +652,7 @@ impl Screen {
                     motion.drums[labels.channel.index()],
                 )
                 .await?;
-            let status = if !labels.seq.transport.playing() {
-                "STOP"
-            } else if labels.seq.enabled[labels.channel.index()] {
-                "PLAY"
-            } else {
-                "MUTE"
-            };
+            let status = transport_status(&labels);
             let source = if labels.voice_tap { b"KIT" } else { b"DAC" };
             if labels.focus == Part::Tr808 {
                 self.drums
@@ -649,9 +677,7 @@ impl Screen {
         }
         let part = labels.focus;
         let voice = labels.voice;
-        if bass {
-            self.bass_panel(labels.bass);
-        } else if organ {
+        if organ {
             self.text.text(0, 0, b"M1 ORGAN", ink);
             let voices = labels
                 .organ_keys
@@ -690,6 +716,16 @@ impl Screen {
         let velocity = voice.gate.note.map_or(0, |note| u32::from(note.velocity));
         self.text.number(17, 14, 3, velocity, ink);
         self.text.paint_async(lcd, clock).await
+    }
+}
+
+fn transport_status(labels: &Labels) -> &'static str {
+    if !labels.seq.transport.playing() {
+        "STOP"
+    } else if labels.seq.enabled[labels.channel.index()] {
+        "PLAY"
+    } else {
+        "MUTE"
     }
 }
 

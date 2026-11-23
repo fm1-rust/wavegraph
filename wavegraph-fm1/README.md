@@ -18,7 +18,7 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![Silver 303 scope with decay on knob 4](assets/tb-303.png) | ![Silver 303 scope with overdrive on knob 4](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![303 filter bank with Decay on encoder 4](assets/tb-303.png) | ![303 voice bank with Drive on encoder 4](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
@@ -37,7 +37,7 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | ENV | Open or close the selected melodic instrument’s envelope page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
-| Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
+| Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
 | SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
@@ -58,8 +58,18 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | B1/2 | Cutoff | Resonance | Filter env mod | Filter decay |
 | B2/2 | Tuning (±12 semitones, 10 cents per click) | VCA attack (0–60 ms) | Accent amount (0–100%) | Overdrive (0–36 dB into the filter) |
 
-SELECT updates the bank indicator and all four labels, including when the keys
-are idle. Returning to a bank recalls its settings and last-touched knob.
+The silver 303 faceplate puts a 240 × 176 live scope above the six sound knobs.
+Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
+[Roland TB-03][tb03]. Attack and Drive sit beside the display. Turn SELECT to
+switch banks. The encoder numbers move and the knobs stay in place.
+
+Each cap points to its saved setting. During pattern playback a separate red
+mark on the Cutoff, Resonance and Drive scales follows the sequencer. Those
+marks disappear when you play the 303 live, mute its pattern or stop playback.
+The scope opens on the selected 303’s pre-fader signal (SRC). Automatic
+sensitivity fits each sweep to the display and stops boosting below −36 dBFS
+so tails fade to a flat line. Press SEL to see the master mix (DAC) at its
+fixed scale.
 
 Hold a bass note on channel one, turn PRESETS to channel two, and play the
 upper voice. Each key keeps the channel it was pressed on. The 303 and
@@ -412,6 +422,7 @@ The firmware source is available under the [Apache License, Version 2.0](LICENSE
 or the [MIT License](LICENSE-MIT).
 
 [sh101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
+[tb03]: https://static.roland.com/assets/media/pdf/TB-03_e02_W.pdf
 [korg-m1]: https://www.korg.com/us/products/software/kc_m1/
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
