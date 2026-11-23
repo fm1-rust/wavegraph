@@ -3,7 +3,7 @@
 A WaveGraph instrument is a stateful patch object that generates audio. It
 implements [`wavegraph_core::Process<M, S>`](../wavegraph-core/src/lib.rs),
 where the patch chooses the message type `M` and sample type `S`. The instruments
-below all take note and parameter messages on inlet 0 and write mono audio to
+below all take control messages on inlet 0 and write mono audio to
 outlet 0. Each instance keeps its voice state between blocks.
 
 | Crate | What to look at |
@@ -11,6 +11,8 @@ outlet 0. Each instance keeps its voice state between blocks.
 | [`wavegraph-monosynth`](wavegraph-monosynth/) | A single oscillator with a filter and a gate-controlled ADSR envelope. |
 | [`wavegraph-organ`](wavegraph-organ/) | Polyphony with four preallocated voices and a note-stealing policy. |
 | [`wavegraph-303`](wavegraph-303/) | A TB-303 voice that handles accent, slide and live parameter changes. |
+| [`wavegraph-sampler`](wavegraph-sampler/) | One-shot PCM playback from borrowed sample data. |
+| [`wavegraph-909`](wavegraph-909/) | Six-voice 909 kit with modeled drums, sampled cymbals, individual outputs and hi-hat choke. |
 
 ## Implement a new instrument
 

@@ -5,13 +5,14 @@ edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Three WaveGraph instruments (monosynth, house organ, 303) and oscilloscope for FM-1"
+description = "WaveGraph synthesizers, a sequenced 909 drum machine and an oscilloscope for FM-1"
 
 [dependencies]
 heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303" }
+wavegraph-909 = { path = "../instruments/wavegraph-909" }
 wavegraph-adsr.workspace = true
 wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
@@ -23,7 +24,7 @@ embedded-graphics = "0.8.2"
 fm1-audio = "0.1"
 fm1-controls = "0.1.1"
 fm1-graphics = { version = "0.1", features = ["async-display"] }
-fm1-rticx = { version = "0.1.1", features = ["audio", "async-display"] }
+fm1-rticx = { version = "0.1.1", features = ["audio", "async-display", "async-usb", "usb-log"] }
 static_cell = "2.1.1"
 
 [lints]

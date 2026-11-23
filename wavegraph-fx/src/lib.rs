@@ -57,7 +57,7 @@ impl SendMixer {
 
 #[allow(
     clippy::arithmetic_side_effects,
-    reason = "Q23 gains use widened intermediates with saturation"
+    reason = "Two Q23 samples at max gain 128 sum to a signed i32 before shifting."
 )]
 impl Process<Message, I24> for SendMixer {
     fn inlets(&self) -> &[Port] {
@@ -74,8 +74,8 @@ impl Process<Message, I24> for SendMixer {
             while events.peek().is_some_and(|e| e.frame == frame) {
                 self.control(events.next().expect("peeked event").message);
             }
-            let a = i64::from(cx.inputs[0][frame].inner()) * i64::from(self.a);
-            let b = i64::from(cx.inputs[1][frame].inner()) * i64::from(self.b);
+            let a = cx.inputs[0][frame].inner() * i32::from(self.a);
+            let b = cx.inputs[1][frame].inner() * i32::from(self.b);
             cx.outputs[0][frame] = pcm((a + b) >> 7);
         }
         if cx.frames == 0 {
@@ -164,28 +164,29 @@ impl<'a> Reverb<'a> {
 
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "Bounded Q23 delay-line arithmetic uses i64 intermediates"
+        clippy::cast_possible_truncation,
+        reason = "Four Q23 taps fit in i32. The Q23 × Q15 feedback fits Q23 after shifting."
     )]
     fn sample(&mut self, input: i32) -> I24 {
-        let mut sum = 0_i64;
+        let mut sum = 0_i32;
         for comb in &mut self.combs {
             let delayed = comb.read();
             // One-pole HF damping in the feedback path.
             comb.lowpass += (delayed - comb.lowpass) >> 1;
-            let echoed = (i64::from(comb.lowpass) * i64::from(self.feedback)) >> 15;
-            comb.write(clamp_pcm(i64::from(input) / 8 + echoed));
-            sum += i64::from(delayed);
+            let echoed = ((i64::from(comb.lowpass) * i64::from(self.feedback)) >> 15) as i32;
+            comb.write(clamp_pcm(input / 8 + echoed));
+            sum += delayed;
         }
         let mut wet = clamp_pcm(sum >> 2);
         // Two all-pass diffusers, with gain 0.5, following the parallel combs.
         for allpass in &mut self.diffusion {
             let delayed = allpass.read();
-            let v = clamp_pcm(i64::from(wet) + (i64::from(delayed) >> 1));
+            let v = clamp_pcm(wet + (delayed >> 1));
             allpass.write(v);
-            wet = clamp_pcm(i64::from(delayed) - (i64::from(v) >> 1));
+            wet = clamp_pcm(delayed - (v >> 1));
         }
         if self.enabled {
-            pcm((i64::from(wet) * i64::from(self.wet)) >> 7)
+            pcm((wet * i32::from(self.wet)) >> 7)
         } else {
             I24::default()
         }
@@ -201,15 +202,11 @@ fn feedback(decay: u8) -> i32 {
     23_000 + i32::from(decay) * 70
 }
 
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "Clamped to the signed 24-bit range first"
-)]
-fn clamp_pcm(value: i64) -> i32 {
-    value.clamp(i64::from(i24::MIN.inner()), i64::from(i24::MAX.inner())) as i32
+fn clamp_pcm(value: i32) -> i32 {
+    value.clamp(i24::MIN.inner(), i24::MAX.inner())
 }
 
-fn pcm(value: i64) -> I24 {
+fn pcm(value: i32) -> I24 {
     I24::new_unchecked(clamp_pcm(value))
 }
 
@@ -269,6 +266,29 @@ mod tests {
             emit: &mut |e| Err(e),
         });
         assert_eq!(out.map(I24::inner), [1024, 1024, 2048, 2048]);
+    }
+
+    #[test]
+    fn full_scale_sends_saturate_after_the_sum() {
+        let mut mixer = SendMixer::new();
+        let a = [i24::MIN, i24::MAX, i24::MIN, i24::MAX];
+        let b = [i24::MIN, i24::MAX, i24::MAX, i24::MIN];
+        let mut out = [I24::default(); 4];
+        mixer.process(&mut ProcessContext {
+            frames: 4,
+            inputs: &[&a, &b],
+            outputs: &mut [&mut out],
+            events: &[Message::SendA(128), Message::SendB(128)].map(|message| Event {
+                frame: 0,
+                port: 0,
+                message,
+            }),
+            emit: &mut Err,
+        });
+        assert_eq!(
+            out.map(I24::inner),
+            [i24::MIN.inner(), i24::MAX.inner(), -1, -1]
+        );
     }
 
     #[test]

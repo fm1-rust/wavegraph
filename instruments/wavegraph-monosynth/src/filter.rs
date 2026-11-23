@@ -15,6 +15,12 @@ impl LowPass {
         target: 1.0,
     };
 
+    pub(super) fn skip_silent(&mut self, frames: usize) {
+        let distance =
+            f32::from(u8::try_from(frames.min(128)).expect("up to one DMA half")) / 128.0;
+        self.gain += (self.target - self.gain).clamp(-distance, distance);
+    }
+
     pub(super) fn set_cutoff(&mut self, hz: u16, sample_period: f32) {
         let cycles = f32::from(hz.max(1)) * sample_period;
         self.target = if cycles >= 0.5 {

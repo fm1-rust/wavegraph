@@ -456,6 +456,10 @@ impl Organ {
         reason = "Four bounded 16-bit voices in Q31 cannot overflow i32."
     )]
     fn render<S: FromSample<i32>>(&mut self, output: &mut [S]) {
+        if self.voices.iter().all(|voice| voice.note.is_none()) {
+            output.fill_with(|| S::from_sample_(0));
+            return;
+        }
         for sample in output {
             let sum: i32 = self
                 .voices

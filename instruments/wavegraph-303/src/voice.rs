@@ -70,6 +70,8 @@ struct DiodeLadder {
     rate: f32,
     state: [f32; 4],
     coeff: [f32; 4],
+    sigma_weights: [f32; 4],
+    gamma: f32,
     hp: f32,
     hp_coef: f32,
     stage_drive: f32,
@@ -105,6 +107,8 @@ impl Voice {
                 rate: 2.0 * sample_rate,
                 state: [0.0; 4],
                 coeff: [0.5; 4],
+                sigma_weights: [0.0; 4],
+                gamma: 0.0,
                 hp: 0.0,
                 hp_coef: tau_to_coef(
                     1.0 / (2.0 * core::f32::consts::PI * 12.0),
@@ -133,6 +137,10 @@ impl DiodeLadder {
             let g = crate::dsp::filter_tan(core::f32::consts::PI * f / self.rate);
             *coeff = g / (1.0 + g);
         }
+        let [a, b, c, d] = self.coeff;
+        let cd = c * d;
+        self.gamma = (a * b) * cd;
+        self.sigma_weights = [b * cd * (1.0 - a), cd * (1.0 - b), d * (1.0 - c), 1.0 - d];
     }
 
     fn saturate(&self, x: f32) -> f32 {
@@ -156,14 +164,9 @@ impl DiodeLadder {
         // solves for this step's output directly. (Feeding back the last
         // step's output instead made the resonance run away above ~6 kHz.)
         // The input saturation is then applied to the solved input.
-        let g01 = self.coeff[0] * self.coeff[1];
-        let g23 = self.coeff[2] * self.coeff[3];
-        let gamma = g01 * g23;
-        let sigma = self.coeff[1] * g23 * (1.0 - self.coeff[0]) * self.state[0]
-            + g23 * (1.0 - self.coeff[1]) * self.state[1]
-            + self.coeff[3] * (1.0 - self.coeff[2]) * self.state[2]
-            + (1.0 - self.coeff[3]) * self.state[3];
-        let y_est = (gamma * (x + k * self.hp) + sigma) / (1.0 + k * gamma);
+        let [a, b, c, d] = self.sigma_weights;
+        let sigma = a * self.state[0] + b * self.state[1] + c * self.state[2] + d * self.state[3];
+        let y_est = (self.gamma * (x + k * self.hp) + sigma) / (1.0 + k * self.gamma);
         let input = fast_tanh(x - k * (y_est - self.hp));
         let a = Self::stage(self.saturate(input), self.coeff[0], &mut self.state[0]);
         let b = Self::stage(self.saturate(a), self.coeff[1], &mut self.state[1]);
@@ -181,6 +184,7 @@ impl Voice {
         self.ladder.reset();
         self.until_cutoff = 0;
         self.envelopes.reset();
+        self.pitch = self.target;
         self.sliding = false;
     }
 
@@ -220,6 +224,14 @@ impl Voice {
         self.render_with(p, out, |dst, sample| *dst += sample);
     }
 
+    pub(crate) fn skip_silence(&mut self, p: &VoiceParams, frames: usize) -> bool {
+        if self.envelopes.silent() {
+            self.envelopes.advance_silence(p, frames);
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn render_with<S>(
         &mut self,
         p: &VoiceParams,
@@ -243,9 +255,14 @@ impl Voice {
             0.0
         };
         let base_oct = p.base_octaves();
+        let fixed_inc = midi_to_hz(self.target + p.tuning_st) / self.sr;
         for sample in out {
-            self.pitch += (self.target - self.pitch) * glide;
-            let inc = midi_to_hz(self.pitch + p.tuning_st) / self.sr;
+            let inc = if self.sliding {
+                self.pitch += (self.target - self.pitch) * glide;
+                midi_to_hz(self.pitch + p.tuning_st) / self.sr
+            } else {
+                fixed_inc
+            };
             self.envelopes.step(&envelopes);
             // Cutoff, at 2x the sample rate; the four stages' coefficients
             // are worked out every fourth sample (the envelope moves slowly).
@@ -311,5 +328,38 @@ impl Voice {
             return t * t + t + t + 1.0;
         }
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silent_voice_suspends_the_ladder_but_discharges_accent() {
+        let p = VoiceParams::default();
+        let mut voice = Voice::new(44_100.0);
+        let mut block = [0.0; 128];
+        assert!(voice.skip_silence(&p, block.len()));
+        assert_eq!(voice.phase, 0.0);
+        voice.note_on(36, true, false);
+        assert!(!voice.skip_silence(&p, block.len()));
+        voice.render_add(&p, &mut block);
+        voice.note_off();
+        assert!(!voice.skip_silence(&p, block.len()));
+        for _ in 0..40 {
+            voice.render_add(&p, &mut block);
+        }
+        let phase = voice.phase;
+        let before = voice.envelopes.advance(&p, 0).accent_octaves;
+        assert!(before > 0.01);
+        assert!(voice.skip_silence(&p, 44_100));
+        assert_eq!(voice.phase, phase);
+        assert!(voice.envelopes.advance(&p, 0).accent_octaves < before / 2.0);
+        voice.note_on(48, false, false);
+        assert!(!voice.skip_silence(&p, block.len()));
+        block.fill(0.0);
+        voice.render_add(&p, &mut block);
+        assert!(block.iter().any(|v| v.abs() > 0.001));
     }
 }

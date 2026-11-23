@@ -55,7 +55,7 @@ unused_qualifications = "warn"
 
 [profile.firmware]
 inherits = "release"
-opt-level = "s"
+opt-level = 3
 codegen-units = 1
 lto = true
 panic = "abort"

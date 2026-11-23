@@ -4,6 +4,7 @@ use crate::{
     bass::Controls,
     envelope::EnvelopeControls,
     organ::{Controls as OrganControls, OrganKey},
+    sequencer::Transport,
 };
 use heapless::Vec;
 use wavegraph::{
@@ -454,6 +455,8 @@ pub(super) enum Message {
     Organ(OrganMessage),
     Bass(BassMessage),
     Fx(FxMessage),
+    Transport(Transport),
+    BeatPhase(Option<u8>),
 }
 
 impl From<MonoMessage> for Message {
@@ -585,8 +588,8 @@ fn dispatch<M>(
     });
 }
 
-pub(super) const BUS_COUNT: usize = 10;
-type Plan = Program<'static, 10, 2>;
+pub(super) const BUS_COUNT: usize = 12;
+type Plan = Program<'static, BUS_COUNT, 2>;
 pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
@@ -602,7 +605,9 @@ impl Programs {
             1, 1, 0, 1, // CALL organ -> 6
             3, 3, 6, // MIX all three dry voices -> 7
             3, 7, 5, // MIX dry+wet -> 8
-            2, 8, 64, // GAIN optional headroom -> 9
+            1, 5, 0, 1, // CALL sequenced 909 -> 9
+            3, 8, 9, // MIX drum bus with synths and reverb -> 10
+            2, 10, 64, // GAIN optional headroom -> 11
         ];
         const DRY_LEN: usize = ROUTE.len() - 3;
         Ok(Self([
@@ -621,6 +626,9 @@ impl Programs {
             half_gain: false,
             fx: Fx::DRY,
             previous_fx: None,
+            transport: Transport::INITIAL,
+            previous_transport: None,
+            beat_phase: None,
             previous: None,
         })
     }
@@ -632,6 +640,9 @@ pub(super) struct Instrument<'a> {
     pub(super) half_gain: bool,
     fx: Fx,
     previous_fx: Option<Fx>,
+    pub(super) transport: Transport,
+    previous_transport: Option<Transport>,
+    pub(super) beat_phase: Option<u8>,
     previous: Option<Parts>,
 }
 
@@ -660,6 +671,8 @@ impl Instrument<'_> {
             .bass
             .events(old.bass, bass, old.voices[Part::Bass as usize]);
         let fx_events = self.fx.events(self.previous_fx);
+        let transport_event = (self.previous_transport != Some(self.transport))
+            .then(|| at(Message::Transport(self.transport)));
         self.patch.render(
             &mut Software,
             buses,
@@ -669,12 +682,20 @@ impl Instrument<'_> {
                 &bass_events,
                 &fx_events,
                 &fx_events,
+                transport_event.as_slice(),
             ],
-            |_, e| Err(e),
+            |_, event| match event.message {
+                Message::BeatPhase(phase) => {
+                    self.beat_phase = phase;
+                    Ok(())
+                }
+                _ => Err(event),
+            },
         )?;
         self.previous = Some(parts);
         self.previous_fx = Some(self.fx);
-        Ok(&buses[if self.half_gain { 9 } else { 8 }])
+        self.previous_transport = Some(self.transport);
+        Ok(&buses[if self.half_gain { 11 } else { 10 }])
     }
 }
 
@@ -693,15 +714,22 @@ mod tests {
     ) -> Result<(), Error> {
         let programs = Programs::decode()?;
         let tuning = Tuning::new(mono_rate, 1).expect("audio sample clock");
-        let mut mono = Node::Mono(Monosynth::new(&tuning));
+        let mut mono = Node::Mono(Monosynth::new(&tuning).with_idle_suspension());
         let mut organ_state = Organ::new(mono_rate, 1).expect("organ sample clock");
         let mut organ = Node::Organ(&mut organ_state);
-        let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0));
+        let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0).with_idle_suspension());
         let mut send = FxSend(SendMixer::new());
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxReverb(Reverb::new(&mut storage));
-        let mut nodes: [&mut dyn Process<Message, I24>; 5] =
-            [&mut mono, &mut organ, &mut bass, &mut send, &mut reverb];
+        let mut drums = crate::sequencer::DrumMachine::new((24_000_000, 544));
+        let mut nodes: [&mut dyn Process<Message, I24>; 6] = [
+            &mut mono,
+            &mut organ,
+            &mut bass,
+            &mut send,
+            &mut reverb,
+            &mut drums,
+        ];
         test(&mut programs.bind(&mut nodes)?)
     }
 
@@ -929,6 +957,32 @@ mod tests {
             assert!(release[0].abs() > release[14].abs());
             assert_ne!(release[14], 0);
             assert_eq!(release[15..], [0; 17]);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn transport_plays_the_drum_bus_alongside_a_held_synth_note() -> Result<(), Error> {
+        with_instrument(44_100, |instrument| {
+            let mut parts = Parts::INITIAL;
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let silence = instrument.render(parts, &mut buses)?.map(I24::inner);
+            assert_eq!(silence, [0; 128]);
+            assert_eq!(instrument.beat_phase, None);
+            instrument.transport.toggle();
+            let beat = *instrument.render(parts, &mut buses)?;
+            assert_eq!(instrument.beat_phase, Some(1));
+            assert_eq!(beat, buses[9]);
+            assert!(beat.iter().any(|s| s.inner() != 0));
+            parts.voices[0].gate.note = Some(note(69, 96));
+            instrument.render(parts, &mut buses)?;
+            assert_ne!(buses[10], buses[8]);
+            instrument.transport.toggle();
+            let tail = *instrument.render(parts, &mut buses)?;
+            assert_eq!(instrument.beat_phase, None);
+            assert_eq!(buses[9], [I24::default(); 128]);
+            assert_eq!(tail, buses[8]);
+            assert!(tail.iter().any(|s| s.inner() != 0));
             Ok(())
         })
     }

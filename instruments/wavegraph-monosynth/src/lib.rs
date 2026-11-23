@@ -148,6 +148,7 @@ pub struct Monosynth<'a> {
     timing: Timing,
     note: u8,
     velocity: u8,
+    suspend_idle: bool,
     phase: u32,
     step: u32,
 }
@@ -164,9 +165,18 @@ impl<'a> Monosynth<'a> {
             timing: Adsr::GATE.at_sample_period(tuning.sample_period),
             note: 69,
             velocity: 0,
+            suspend_idle: false,
             phase: 0,
             step: tuning.steps[69],
         }
+    }
+
+    /// Skip oscillator and filter rendering while the VCA is closed.
+    /// The free-running oscillator phase still advances between notes.
+    #[must_use]
+    pub const fn with_idle_suspension(mut self) -> Self {
+        self.suspend_idle = true;
+        self
     }
 
     fn apply(&mut self, message: Message) {
@@ -201,6 +211,15 @@ impl<'a> Monosynth<'a> {
         reason = "The velocity product fits in i32. The scaled Q23 level fits exactly in f32 and envelope gain is in 0..=1."
     )]
     fn render<S: FromSample<i32>>(&mut self, output: &mut [S]) {
+        if self.suspend_idle && self.envelope.is_idle() {
+            // Only the low 32 bits of elapsed frames affect the wrapping oscillator.
+            self.phase = self
+                .phase
+                .wrapping_add(self.step.wrapping_mul(output.len() as u32));
+            self.filter.skip_silent(output.len());
+            output.fill_with(|| S::from_sample_(0));
+            return;
+        }
         for sample in output {
             // Preserve the FM-1 demo's Q23 level (about -24 dBFS at full velocity).
             let oscillator = self.waveform.sample(self.phase) << 8;
