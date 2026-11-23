@@ -1,12 +1,14 @@
 //! Allocation-free shared effects for signed Q23 WaveGraph patches.
 //!
-//! Connect any instrument buses to [`SendMixer`], call one [`Reverb`] on
-//! its output, then mix the 100%-wet return with the dry bus. State survives
-//! graph edits because processors live outside the bytecode program.
+//! Route independent post-fader [`ChannelMixer`] sends through a [`Reverb`]
+//! and a [`Delay`]. Add their wet-only returns to the dry mix. Each processor
+//! keeps its state across graph edits.
 #![no_std]
 #![forbid(unsafe_code)]
 
+mod delay;
 mod mixer;
+pub use delay::Delay;
 pub use mixer::{ChannelMixer, MixerMessage};
 
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -29,9 +31,13 @@ pub enum Message {
     SendB(u8),
     /// Reverberation decay, 0..=127.
     Decay(u8),
+    /// Digital delay time in milliseconds, limited by the caller's delay line.
+    TimeMs(u16),
+    /// Digital delay feedback in percent, clamped to 95. Zero gives one echo.
+    Feedback(u8),
     /// Wet return level, 0..=128; dry audio is never attenuated here.
     Wet(u8),
-    /// Mute or unmute the wet return; the tank keeps running when muted.
+    /// Mute or unmute this wet return. The repeats or reverb tail keep decaying.
     Enabled(bool),
 }
 

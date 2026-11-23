@@ -1,8 +1,7 @@
 //! Allocation-free per-track level controls and post-fader global-effect sends.
 //!
-//! The mixer emits two buses: the dry sum and one shared effect send. Add
-//! another output when a second global effect is introduced. Control messages
-//! are sample-offset-aware; all arithmetic uses Q23 with bounded i32 products.
+//! Outlet zero carries the dry sum. Each further outlet carries an independent
+//! post-fader send. Control messages take effect at their sample offsets.
 
 use super::pcm;
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -18,56 +17,67 @@ pub enum MixerMessage {
         /// Track gain in units of 1/128; values above 128 are clamped.
         level: u8,
     },
-    /// Post-fader send to the shared effect, 0..=128.
+    /// Post-fader level for the first send, 0..=128.
     Send {
         /// Zero-based track index; out-of-range indices are ignored.
         track: u8,
         /// Post-fader send gain in units of 1/128; values above 128 are clamped.
         level: u8,
     },
+    /// Set the level on a specific post-fader send.
+    SendTo {
+        /// Zero-based send index. Send 0 is outlet 1. Unavailable sends are ignored.
+        send: u8,
+        /// Zero-based track index. Unavailable tracks are ignored.
+        track: u8,
+        /// Gain in units of 1/128. Values above 128 are clamped.
+        level: u8,
+    },
 }
 
-/// Fixed-size mixer with one dry and one post-fader send output.
+/// Fixed-size mixer with one dry output and `OUTPUTS - 1` post-fader sends.
+/// The default layout has one send.
 ///
 /// Keep the instruments upstream of this node so their persistent DSP state
 /// is independent of mixer page changes and graph replacements.
 #[derive(Clone, Copy, Debug)]
-pub struct ChannelMixer<const TRACKS: usize> {
-    levels: [u8; TRACKS],
-    sends: [u8; TRACKS],
+pub struct ChannelMixer<const TRACKS: usize, const OUTPUTS: usize = 2> {
+    gains: [[u8; TRACKS]; OUTPUTS],
 }
 
-impl<const TRACKS: usize> ChannelMixer<TRACKS> {
+impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
     /// Start with unity track levels and zero effect sends.
     ///
     /// # Panics
-    /// A compile-time assertion rejects sizes outside 1..=4.
+    /// A compile-time assertion requires 1–4 tracks and at least two outputs.
     #[must_use]
     pub const fn new() -> Self {
         const { assert!(TRACKS > 0 && TRACKS <= 4, "mixer supports 1..=4 tracks") };
-        Self {
-            levels: [128; TRACKS],
-            sends: [0; TRACKS],
-        }
+        const { assert!(OUTPUTS >= 2, "mixer needs a dry output and a send") };
+        let mut gains = [[0; TRACKS]; OUTPUTS];
+        gains[0] = [128; TRACKS];
+        Self { gains }
     }
 
     fn control(&mut self, message: MixerMessage) {
-        match message {
-            MixerMessage::Level { track, level } => {
-                if let Some(gain) = self.levels.get_mut(usize::from(track)) {
-                    *gain = level.min(128);
-                }
+        let (outlet, track, level) = match message {
+            MixerMessage::Level { track, level } => (0, track, level),
+            MixerMessage::Send { track, level } => (1, track, level),
+            MixerMessage::SendTo { send, track, level } => {
+                (usize::from(send).saturating_add(1), track, level)
             }
-            MixerMessage::Send { track, level } => {
-                if let Some(gain) = self.sends.get_mut(usize::from(track)) {
-                    *gain = level.min(128);
-                }
-            }
+        };
+        if let Some(gain) = self
+            .gains
+            .get_mut(outlet)
+            .and_then(|g| g.get_mut(usize::from(track)))
+        {
+            *gain = level.min(128);
         }
     }
 }
 
-impl<const TRACKS: usize> Default for ChannelMixer<TRACKS> {
+impl<const TRACKS: usize, const OUTPUTS: usize> Default for ChannelMixer<TRACKS, OUTPUTS> {
     fn default() -> Self {
         Self::new()
     }
@@ -77,13 +87,15 @@ impl<const TRACKS: usize> Default for ChannelMixer<TRACKS> {
     clippy::arithmetic_side_effects,
     reason = "Each Q23 sample times a gain <=128 fits i32; sum is bounded for four tracks"
 )]
-impl<const TRACKS: usize> Process<MixerMessage, I24> for ChannelMixer<TRACKS> {
+impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
+    for ChannelMixer<TRACKS, OUTPUTS>
+{
     fn inlets(&self) -> &[Port] {
         &[Port::Signal; TRACKS]
     }
 
     fn outlets(&self) -> &[Port] {
-        &[Port::Signal; 2]
+        &[Port::Signal; OUTPUTS]
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, MixerMessage, I24>) {
@@ -92,15 +104,17 @@ impl<const TRACKS: usize> Process<MixerMessage, I24> for ChannelMixer<TRACKS> {
             while events.peek().is_some_and(|event| event.frame == frame) {
                 self.control(events.next().expect("peeked mixer event").message);
             }
-            let mut dry = 0_i32;
-            let mut send = 0_i32;
+            let mut sums = [0_i32; OUTPUTS];
             for (track, input) in cx.inputs.iter().enumerate().take(TRACKS) {
-                let post_fader = (input[frame].inner() * i32::from(self.levels[track])) >> 7;
-                dry += post_fader;
-                send += (post_fader * i32::from(self.sends[track])) >> 7;
+                let post_fader = (input[frame].inner() * i32::from(self.gains[0][track])) >> 7;
+                sums[0] += post_fader;
+                for (sum, gains) in sums[1..].iter_mut().zip(&self.gains[1..]) {
+                    *sum += (post_fader * i32::from(gains[track])) >> 7;
+                }
             }
-            cx.outputs[0][frame] = pcm(dry);
-            cx.outputs[1][frame] = pcm(send);
+            for (out, sum) in cx.outputs.iter_mut().zip(sums) {
+                out[frame] = pcm(sum);
+            }
         }
         // Match other WaveGraph processors: an empty block still updates state.
         if cx.frames == 0 {
@@ -200,5 +214,49 @@ mod tests {
         });
         assert_eq!(dry[0].inner(), 1 << 22);
         assert_eq!(send[0].inner(), 1 << 22);
+    }
+
+    #[test]
+    fn four_tracks_can_feed_both_sends_at_different_levels() {
+        let mut mixer = ChannelMixer::<4, 3>::new();
+        let inputs = [1024, -2048, 4096, -8192].map(|n| [I24::new_unchecked(n); 4]);
+        let mut dry = [I24::default(); 4];
+        let mut reverb = dry;
+        let mut delay = dry;
+        for track in 0..4 {
+            let events = [
+                event(0, MixerMessage::Level { track, level: 64 }),
+                event(0, MixerMessage::Send { track, level: 32 }),
+                event(
+                    0,
+                    MixerMessage::SendTo {
+                        send: 1,
+                        track,
+                        level: 128,
+                    },
+                ),
+                event(
+                    1,
+                    MixerMessage::SendTo {
+                        send: 1,
+                        track,
+                        level: 64,
+                    },
+                ),
+                event(2, MixerMessage::Level { track, level: 0 }),
+            ];
+            let i = usize::from(track);
+            mixer.process(&mut ProcessContext {
+                frames: 4,
+                inputs: &inputs.each_ref().map(|s| &s[..]),
+                outputs: &mut [&mut dry, &mut reverb, &mut delay],
+                events: &events,
+                emit: &mut |e| Err(e),
+            });
+            let post = inputs[i][0].inner() >> 1;
+            assert_eq!(delay.map(I24::inner), [post, post >> 1, 0, 0]);
+            assert_eq!(reverb.map(I24::inner), [post >> 2, post >> 2, 0, 0]);
+            assert_eq!(dry[0].inner() - dry[2].inner(), post);
+        }
     }
 }

@@ -8,7 +8,8 @@ use crate::{
     bass::Controls,
     capture::Trace,
     envelope::EnvelopeControls,
-    instrument::{Fx, Mixer, MixerBank, Part, Parts, Voice},
+    fx::{Fx, FxPage},
+    instrument::{Mixer, MixerBank, Part, Parts, Voice},
     organ::{Controls as OrganControls, OrganKey},
     sequencer::Sequencer,
 };
@@ -20,6 +21,7 @@ pub struct Settings {
     focus: Part,
     env_mode: bool,
     fx_view: bool,
+    fx_page: FxPage,
     mixer_view: bool,
     mixer_bank: MixerBank,
     mixer: Mixer,
@@ -36,6 +38,7 @@ impl Settings {
         focus: Part::Mono,
         env_mode: false,
         fx_view: false,
+        fx_page: FxPage::Reverb,
         mixer_view: false,
         mixer_bank: MixerBank::Volume,
         mixer: Mixer::INITIAL,
@@ -56,6 +59,7 @@ impl Settings {
             menu_since: self.menu_since,
             env_mode: self.env_mode,
             fx_view: self.fx_view,
+            fx_page: self.fx_page,
             mixer_view: self.mixer_view,
             mixer_bank: self.mixer_bank,
             mixer: self.mixer,
@@ -78,6 +82,7 @@ pub(super) struct Labels {
     pub(super) menu_since: Option<u32>,
     pub(super) env_mode: bool,
     pub(super) fx_view: bool,
+    pub(super) fx_page: FxPage,
     pub(super) mixer_view: bool,
     pub(super) mixer_bank: MixerBank,
     pub(super) mixer: Mixer,
@@ -100,7 +105,7 @@ mod app {
     use crate::{
         capture::{Capture, FLAT},
         instrument::{
-            BUS_COUNT, FxMixer, FxReverb, Gate, Instrument, Keyboard, Message, Node, Note, Part,
+            BUS_COUNT, FxMixer, FxReturn, Gate, Instrument, Keyboard, Message, Node, Note, Part,
             Programs,
         },
         overload::Overloads,
@@ -129,7 +134,7 @@ mod app {
         control::{Controller, EditQueue, Host},
     };
     use wavegraph_303::Tb303;
-    use wavegraph_fx::{ChannelMixer, REVERB_SAMPLES, Reverb};
+    use wavegraph_fx::{ChannelMixer, Delay, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::{Monosynth, Tuning};
     use wavegraph_organ::Organ;
 
@@ -142,6 +147,7 @@ mod app {
         [crate::organ::OrganKey; wavegraph_organ::POLYPHONY],
     );
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
+    const RATE_HZ: u32 = (FRAME_RATE.0 + FRAME_RATE.1 / 2) / FRAME_RATE.1;
 
     pub struct ScopeBlock {
         samples: [i32; OUTPUT_FRAMES],
@@ -182,9 +188,12 @@ mod app {
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
-        static EFFECTS: StaticCell<(FxMixer, FxReverb<'static>)> = StaticCell::new();
+        static DELAY_STORAGE: ConstStaticCell<[i16; RATE_HZ as usize]> =
+            ConstStaticCell::new([0; RATE_HZ as usize]);
+        type Effects = (FxMixer, FxReturn<Reverb<'static>>, FxReturn<Delay<'static>>);
+        static EFFECTS: StaticCell<Effects> = StaticCell::new();
         static DRUMS: StaticCell<DrumMachine> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 6];
+        type Nodes = [&'static mut dyn Process<Message, I24>; 7];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
         let [mono, organ, bass] = PLAYERS.init_with(|| {
@@ -196,14 +205,15 @@ mod app {
                 ),
             ]
         });
-        let (mixer, reverb) = EFFECTS.init_with(|| {
+        let (mixer, reverb, delay) = EFFECTS.init_with(|| {
             (
                 FxMixer(ChannelMixer::new()),
-                FxReverb(Reverb::new(REVERB_STORAGE.take())),
+                FxReturn(Reverb::new(REVERB_STORAGE.take())),
+                FxReturn(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("one-second delay line")),
             )
         });
         let drums = DRUMS.init_with(|| DrumMachine::new(FRAME_RATE));
-        let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums]);
+        let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums, delay]);
         let instrument = programs.bind(nodes).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
@@ -446,10 +456,12 @@ mod app {
                         .turn_knobs(self.settings.mixer_bank, knobs);
                     false
                 } else if self.settings.fx_view {
-                    self.settings.fx.turn_knobs(knobs);
-                    if scan.pressed(Button::Sel) {
-                        self.settings.fx.enabled = !self.settings.fx.enabled;
-                    }
+                    self.settings
+                        .fx_page
+                        .turn(scan.encoder_delta(Encoder::Select));
+                    self.settings
+                        .fx
+                        .edit(self.settings.fx_page, knobs, scan.pressed(Button::Sel));
                     // Retain the asynchronous graph-edit demonstration.
                     scan.encoder_delta(Encoder::Algorithm) != 0
                 } else {
@@ -484,13 +496,14 @@ mod app {
                     || before.env_mode != self.settings.env_mode
                     || before.fx_view != self.settings.fx_view
                     || before.mixer_view != self.settings.mixer_view
-                    || before.fx.enabled != self.settings.fx.enabled
+                    || before.fx.output(before.fx_page).enabled
+                        != self.settings.fx.output(self.settings.fx_page).enabled
                 {
                     let env = self.settings.env_mode;
                     let fx_view = self.settings.fx_view;
                     let mixer_view = self.settings.mixer_view;
                     let sel = if fx_view {
-                        self.settings.fx.enabled
+                        self.settings.fx.output(self.settings.fx_page).enabled
                     } else if mixer_view {
                         false
                     } else {
