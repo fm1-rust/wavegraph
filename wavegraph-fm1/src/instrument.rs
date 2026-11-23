@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 use crate::panel::Navigation;
-use crate::wavetable::Controls as WaveControls;
+use crate::wavetable::Program as WaveProgram;
 use crate::{
     bass::Controls,
     bumper::Cue,
@@ -33,7 +33,7 @@ use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
 use wavegraph_supersaw::{Message as SawMessage, Supersaw};
-use wavegraph_wavetable::{Message as WaveMessage, Wavetable};
+use wavegraph_wavetable::{Message as WaveMessage, Scan, Wavetable};
 
 const _: () = assert!(wavegraph_wavetable::POLYPHONY == POLYPHONY);
 
@@ -259,7 +259,6 @@ pub(super) struct SawControls {
     pub(super) resonance: u8,
     pub(super) detune: u8,
     pub(super) mix: u8,
-    pub(super) target: EnvelopeTarget,
     pub(super) filter_envelope: EnvelopeControls,
 }
 
@@ -271,9 +270,10 @@ pub(super) struct Track {
     pub(super) bass_fx: BassFx,
     pub(super) organ: OrganControls,
     pub(super) saw: SawControls,
-    pub(super) wave: WaveControls,
+    wave_programs: [WaveProgram; 2],
     pub(super) poly_keys: [PolyKey; POLYPHONY],
     pub(super) voice_envelope: EnvelopeControls,
+    pub(super) envelope_target: EnvelopeTarget,
     pub(super) voice_tap: bool,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) panel_hits: HitLog<8>,
@@ -294,12 +294,15 @@ impl Track {
                 Part::Wavetable => EnvelopeControls::WAVETABLE,
                 _ => EnvelopeControls::INITIAL,
             },
-            wave: WaveControls::INITIAL,
+            wave_programs: [
+                WaveProgram::new(Scan::RESONANT),
+                WaveProgram::new(Scan::VOCAL),
+            ],
+            envelope_target: EnvelopeTarget::Amp,
             saw: SawControls {
                 resonance: 0,
                 detune: wavegraph_supersaw::DEFAULT_DETUNE,
                 mix: wavegraph_supersaw::DEFAULT_MIX,
-                target: EnvelopeTarget::Amp,
                 filter_envelope: EnvelopeControls::SUPER_SAW_FILTER,
             },
             voice_tap: matches!(
@@ -370,7 +373,7 @@ impl Track {
                 self.saw.mix = self.saw.mix.saturating_add_signed(mix).min(127);
             }
             Part::Organ => self.organ.turn_knobs(detents),
-            Part::Wavetable => self.wave.turn(self.voice.waveform, detents),
+            Part::Wavetable => self.wave_programs[usize::from(self.voice.waveform)].turn(detents),
             Part::Bass => self.bass.turn_knobs(detents),
             Part::Tr808 => {
                 let c = &mut self.drums808;
@@ -392,20 +395,26 @@ impl Track {
 
     pub(super) fn edit_panel(&mut self, view: View, select: i8, knobs: [i8; 4], sel: bool) {
         match (view, self.assignment.part) {
-            (View::Envelope, Part::Supersaw) => {
+            (View::Envelope, part @ (Part::Supersaw | Part::Wavetable)) => {
                 if select % 2 != 0 || sel {
-                    self.saw.target = match self.saw.target {
-                        EnvelopeTarget::Amp => EnvelopeTarget::Filter,
-                        EnvelopeTarget::Filter => EnvelopeTarget::Amp,
+                    self.envelope_target = match self.envelope_target {
+                        EnvelopeTarget::Amp => EnvelopeTarget::Modulation,
+                        EnvelopeTarget::Modulation => EnvelopeTarget::Amp,
                     };
                 }
-                match self.saw.target {
+                match self.envelope_target {
                     EnvelopeTarget::Amp => self.voice_envelope.turn(knobs),
-                    EnvelopeTarget::Filter => self.saw.filter_envelope.turn(knobs),
+                    EnvelopeTarget::Modulation if part == Part::Supersaw => {
+                        self.saw.filter_envelope.turn(knobs)
+                    }
+                    EnvelopeTarget::Modulation => self.wave_programs
+                        [usize::from(self.voice.waveform)]
+                    .position_envelope
+                    .turn(knobs),
                 }
                 return;
             }
-            (View::Envelope, Part::Mono | Part::Wavetable) => self.voice_envelope.turn(knobs),
+            (View::Envelope, Part::Mono) => self.voice_envelope.turn(knobs),
             (View::Envelope, Part::Organ) => self.organ.envelope.turn_organ(knobs),
             _ => {
                 self.turn_select(select);
@@ -544,15 +553,29 @@ impl Track {
         }
         events
     }
+    pub(super) fn wave_program(&self) -> WaveProgram {
+        self.wave_programs[usize::from(self.voice.waveform % 2)]
+    }
+
     fn wave_events(self, previous: Option<Self>) -> EventBatch {
         let mut events = EventBatch::new();
         let bank = self.voice.waveform;
-        let scan = self.wave.scan(bank);
+        let program = self.wave_program();
+        let old_program = previous.map(|p| p.wave_program());
         if previous.is_none_or(|p| p.voice.waveform != bank) {
             events.push(at(WaveMessage::Bank(bank))).expect("one bank");
         }
-        if previous.is_none_or(|p| p.wave.scan(p.voice.waveform) != scan) {
-            events.push(at(WaveMessage::Scan(scan))).expect("one scan");
+        if old_program.is_none_or(|p| p.scan != program.scan) {
+            events
+                .push(at(WaveMessage::Scan(program.scan)))
+                .expect("one scan");
+        }
+        if old_program.is_none_or(|p| p.position_envelope != program.position_envelope) {
+            events
+                .push(at(WaveMessage::PositionEnvelope(
+                    program.position_envelope.adsr(),
+                )))
+                .expect("one position envelope");
         }
         if previous.is_none_or(|p| p.voice_envelope != self.voice_envelope) {
             events
@@ -2798,7 +2821,7 @@ mod tests {
         nav.press(crate::panel::PageButton::Env);
         assert_eq!(nav.view, View::Envelope);
         track.edit_panel(nav.view, -1, [1, 2, 3, 4], false);
-        assert_eq!(track.saw.target, EnvelopeTarget::Filter);
+        assert_eq!(track.envelope_target, EnvelopeTarget::Modulation);
         assert_eq!(track.voice_envelope, initial.voice_envelope);
         assert_eq!(track.voice, initial.voice);
         assert_eq!(
@@ -2809,7 +2832,7 @@ mod tests {
         );
         let filter = track;
         track.edit_panel(nav.view, 0, [2, 3, -4, 5], true);
-        assert_eq!(track.saw.target, EnvelopeTarget::Amp);
+        assert_eq!(track.envelope_target, EnvelopeTarget::Amp);
         assert_eq!(track.saw.filter_envelope, filter.saw.filter_envelope);
         assert_eq!(track.voice_tap, initial.voice_tap);
         assert_eq!(
@@ -2826,6 +2849,54 @@ mod tests {
             (nav.view, track.voice.transpose, track.voice_tap),
             (View::Scope, -1, false)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wavetable_position_edits_follow_the_selected_program_and_leave_amp_independent()
+    -> Result<(), Error> {
+        let mut track = Track::new(Assignment::new(Part::Wavetable));
+        let initial = track;
+        // One click left from STEP wraps to ENV. Knob 3 now edits its attack.
+        track.edit_panel(View::Scope, 0, [0, 0, 1, -1], false);
+        let quick = track.wave_program();
+        assert_eq!(quick.scan.mode, wavegraph_wavetable::Mode::Envelope);
+        assert_eq!(quick.scan.travel_ms, Scan::RESONANT.travel_ms);
+        assert_eq!(quick.position_envelope.adsr().attack_us, 100_000);
+        track.edit_panel(View::Envelope, -1, [0, 2, -4, 1], false);
+        let resonant = track.wave_program();
+        assert_ne!(quick.position_envelope, resonant.position_envelope);
+        assert_eq!(track.voice_envelope, initial.voice_envelope);
+        assert_eq!(track.voice_tap, initial.voice_tap);
+        assert_eq!(track.voice.transpose, initial.voice.transpose);
+        assert_eq!(
+            track.events(Some(initial))?.as_slice(),
+            &[
+                at(WaveMessage::Scan(resonant.scan)),
+                at(WaveMessage::PositionEnvelope(
+                    resonant.position_envelope.adsr()
+                )),
+            ]
+        );
+        let before = track;
+        track.voice.turn_waveform(Part::Wavetable, 1);
+        assert_eq!(track.wave_program(), WaveProgram::new(Scan::VOCAL));
+        assert!(
+            track
+                .events(Some(before))?
+                .contains(&at(WaveMessage::PositionEnvelope(
+                    EnvelopeControls::WAVETABLE_POSITION.adsr()
+                )))
+        );
+        track.voice.turn_waveform(Part::Wavetable, -1);
+        assert_eq!(track.wave_program(), resonant);
+        let before = track;
+        track.edit_panel(View::Envelope, 0, [2, 0, 0, 0], true);
+        assert_eq!(
+            track.events(Some(before))?.as_slice(),
+            &[at(WaveMessage::Envelope(track.voice_envelope.adsr()))]
+        );
+        assert_eq!(track.wave_program(), resonant);
         Ok(())
     }
 
@@ -2848,7 +2919,7 @@ mod tests {
                 *track = Track::factory(channel, nav.assignments[i]);
                 track.turn_knobs([5, -10, -2, 1]);
                 assert_eq!(
-                    track.wave.scan(0),
+                    track.wave_program().scan,
                     Scan {
                         start: 41,
                         end: 117,
@@ -2857,7 +2928,7 @@ mod tests {
                     }
                 );
                 track.voice.turn_waveform(nav.part(), 1);
-                assert_eq!(track.wave.scan(track.voice.waveform), Scan::VOCAL);
+                assert_eq!(track.wave_program().scan, Scan::VOCAL);
                 track.turn_knobs([0, 0, -127, 0]); // One traversal in 50 ms.
                 for key in [57, 60, 64] {
                     keys.midi(channel, MidiAction::On(note(key, 108)), track);
@@ -2889,7 +2960,10 @@ mod tests {
             keys.snapshot(Channel::One, &mut tracks[0]);
             instrument.render(tracks, &mut buses)?;
             assert!(instrument.events[0].contains(&at(WaveMessage::NoteOff(60))));
-            assert!(instrument.events[0].contains(&at(WaveMessage::Scan(tracks[0].wave.scan(0)))));
+            assert!(
+                instrument.events[0]
+                    .contains(&at(WaveMessage::Scan(tracks[0].wave_program().scan)))
+            );
             assert_eq!(instrument.wave_frames[0], 20);
             assert!(
                 instrument.events[1..]

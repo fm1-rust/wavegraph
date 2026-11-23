@@ -44,12 +44,16 @@ for (const [path, extension] of [
     ["../../instruments/wavegraph-909/samples/", ".s16le"],
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
     ["../assets/", ".2bpp"],
+    ["../assets/fonts/", ".raw"],
 ]) {
     const dir = new URL(path, import.meta.url);
     const names = readdirSync(dir).filter(name => name.endsWith(extension));
     assert.ok(names.length, path);
     for (const name of names) {
         const bytes = readFileSync(new URL(name, dir));
-        assert.ok(upper.includes(bytes) && !code.includes(bytes), name);
+        const at = upper.indexOf(bytes);
+        assert.ok(at >= 0, `${name} missing from assets.bin`);
+        assert.equal(upper.indexOf(bytes, at + 1), -1, `${name} repeated in assets.bin`);
+        assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
     }
 }

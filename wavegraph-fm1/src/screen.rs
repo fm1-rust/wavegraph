@@ -11,6 +11,11 @@ use crate::{
     scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
     sequencer::{BankPosition, Position, SeqPage, Sequencer},
 };
+use core::{
+    future::{Future, poll_fn},
+    pin::{Pin, pin},
+    task::{Context, Poll},
+};
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
 use fm1_rticx::{
@@ -79,6 +84,13 @@ type Lane = Waveform<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
 
+// Keep the envelope DMA state machine out of paint_page's poll function.
+// The combined function exceeds the pi32v2 conditional branch range.
+#[inline(never)]
+fn poll_envelope<F: Future>(page: Pin<&mut F>, cx: &mut Context<'_>) -> Poll<F::Output> {
+    page.poll(cx)
+}
+
 fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
     if y == WIDTH / 2 {
         style.center
@@ -96,7 +108,7 @@ enum Page {
     MasterFx,
     Mixer,
     Sequencer(SeqPage, Channel, Part),
-    Envelope(Part, EnvelopeTarget, EnvelopeControls),
+    Envelope(Part, EnvelopeTarget, EnvelopeControls, bool),
     BassEnvelope(Controls),
 }
 
@@ -203,11 +215,13 @@ impl Screen {
         focus: Part,
         target: EnvelopeTarget,
         controls: EnvelopeControls,
+        show_mode_hint: bool,
     ) -> Result<(), Error> {
-        let page = Page::Envelope(focus, target, controls);
+        let page = Page::Envelope(focus, target, controls, show_mode_hint);
         let previous = self.page.replace(page);
         if previous != Some(page) {
             let entering = !matches!(previous, Some(Page::Envelope(part, ..)) if part == focus);
+            let rack = matches!(focus, Part::Supersaw | Part::Wavetable);
             let (style, title, ink) = if focus == Part::Organ {
                 (
                     WaveformStyle {
@@ -220,22 +234,20 @@ impl Screen {
             } else if focus == Part::Supersaw {
                 (jp8080::STYLE, b"".as_slice(), jp8080::AMBER)
             } else if focus == Part::Wavetable {
-                (
-                    microwave::STYLE,
-                    b"WAVETABLE / VCA".as_slice(),
-                    microwave::PRINT,
-                )
+                (microwave::STYLE, b"".as_slice(), microwave::LIME)
             } else {
                 (ENV_STYLE, b"VCA ENVELOPE".as_slice(), palette::GREEN)
             };
             let (face, label, unit, header) = if focus == Part::Supersaw {
                 (jp8080::FACE, jp8080::PRINT, jp8080::EDGE, 32)
+            } else if focus == Part::Wavetable {
+                (microwave::FACE, microwave::PRINT, microwave::PRINT, 32)
             } else {
                 (style.background, palette::WHITE, palette::MUTED, 16)
             };
             if entering {
                 self.change_view(style);
-                if focus == Part::Supersaw {
+                if rack {
                     self.dot_background = face;
                     *self.text = TextGrid::with_background(face);
                 }
@@ -247,13 +259,19 @@ impl Screen {
                 lcd.fill_rect(0, 0, SIZE, header, background)?;
                 lcd.fill_rect(0, 192, SIZE, SIZE - 192, background)?;
             }
-            if focus == Part::Supersaw {
-                if entering || !matches!(previous, Some(Page::Envelope(_, old, _)) if old == target)
-                {
-                    jp8080::envelope_header(lcd, clock, self.strip, target, entering).await?;
+            if entering
+                || !matches!(previous, Some(Page::Envelope(_, old, _, hint)) if old == target && hint == show_mode_hint)
+            {
+                match focus {
+                    Part::Wavetable => {
+                        microwave::envelope_header(lcd, clock, self.strip, target, show_mode_hint)
+                            .await?
+                    }
+                    Part::Supersaw => {
+                        jp8080::envelope_header(lcd, clock, self.strip, target, entering).await?
+                    }
+                    _ => self.text.text(0, 0, title, ink),
                 }
-            } else {
-                self.text.text(0, 0, title, ink);
             }
             let adsr = controls.adsr();
             let colors = [label, ink, unit];
@@ -578,14 +596,26 @@ impl Screen {
                 Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable => {
                     let (target, controls) = match labels.focus {
                         Part::Organ => (EnvelopeTarget::Amp, labels.organ.envelope),
-                        Part::Supersaw if labels.saw.target == EnvelopeTarget::Filter => {
-                            (EnvelopeTarget::Filter, labels.saw.filter_envelope)
+                        Part::Supersaw if labels.envelope_target == EnvelopeTarget::Modulation => {
+                            (labels.envelope_target, labels.saw.filter_envelope)
+                        }
+                        Part::Wavetable if labels.envelope_target == EnvelopeTarget::Modulation => {
+                            (labels.envelope_target, labels.wave.position_envelope)
                         }
                         _ => (EnvelopeTarget::Amp, labels.voice_envelope),
                     };
-                    return self
-                        .paint_envelope(lcd, clock, labels.focus, target, controls)
-                        .await;
+                    let show_mode_hint = labels.focus == Part::Wavetable
+                        && target == EnvelopeTarget::Modulation
+                        && labels.wave.scan.mode != wavegraph_wavetable::Mode::Envelope;
+                    let mut page = pin!(self.paint_envelope(
+                        lcd,
+                        clock,
+                        labels.focus,
+                        target,
+                        controls,
+                        show_mode_hint
+                    ));
+                    return poll_fn(|cx| poll_envelope(page.as_mut(), cx)).await;
                 }
                 Part::Tr808 | Part::Tr909 => (),
             }

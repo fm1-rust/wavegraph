@@ -38,10 +38,10 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
-| Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. |
+| Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. In ENV mode knob 3 sets position attack. |
 | Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
 | ENV | Open or close the monosynth, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
-| Knobs 1–4 in monosynth, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. On Super Saw, turn SELECT or press SEL to switch between AMP and FILTER. |
+| Knobs 1–4 in monosynth, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to switch between AMP and FILTER on Super Saw, or AMP and POSITION on wavetable. |
 | Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
@@ -135,7 +135,7 @@ attack. Lengthening AMP release also lets you hear the filter close after key-up
 Press **GLO**, turn **SELECT** to highlight a channel and turn **PRESETS** to
 **WAVETABLE**, one detent past **SUPER SAW**. Press **GLO** again to play it.
 **ALGORITHM** switches between two 64-frame programs. Each remembers its
-scan settings for as long as the instrument occupies the strip.
+scan settings and position envelope for as long as the instrument occupies the strip.
 
 | Program | Try it |
 | --- | --- |
@@ -147,14 +147,24 @@ ONCE holds the end frame and PINGPONG returns through the same frames.
 The red dial and FRAME readout show the newest sounding voice's position
 (0–63). The 240 × 168 scope shows its channel's complete polyphonic output,
 with automatic gain. **SEL** switches to the master mix at fixed gain.
-**ENV** edits the shared amplitude contour. **PLAY** brings in a four-bar
-chord part with space for each voicing to evolve.
+**PLAY** brings in a four-bar chord part with space for each voicing to evolve.
+
+For a vowel that opens on each keystroke, select **Vocal Formants** and turn
+knob 4 one click clockwise from **PINGPONG** to **ENV**. Knob 3 now sets
+**ATTACK**. Hold a chord and turn it up to hear each note take longer to
+reach END. Press **ENV**, then turn **SELECT** or press **SEL** to switch
+between the strip's **AMP** envelope and the program's **POSITION** envelope.
+Knobs 1–4 edit attack, decay, sustain and release on the displayed curve.
+At 50% position sustain, each held key settles halfway between START and END.
+Lengthen AMP release to hear the sweep return to START after key-up.
 
 The blue face, red encoder and green readout draw on the original
 [Waldorf Microwave panel][microwave]. The [instrument guide][wavetable]
 covers the scan engine and the sources of both banks.
 
-![Wavetable on channel one during a held vocal chord](assets/wavetable.png)
+| Vocal Formants on the scope | Wavetable position envelope |
+| --- | --- |
+| ![A held vocal chord on channel one](assets/wavetable.png) | ![The Microwave-blue editor with POSITION selected and sustain at 50%](assets/wavetable-envelope.png) |
 
 [microwave]: https://waldorfmusic.com/microwave-1/
 [wavetable]: ../instruments/wavegraph-wavetable/
@@ -553,7 +563,7 @@ read the factory assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | `0x04000..0x93000` | Application directory and `app.bin` (entry at physical `0x04120`). Unused space here is available for code growth. |
-| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks, the boot cue and its seek table, both splash bitmaps, and the 32 compiled MIDI patterns. |
+| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, five display font atlases, and the 32 compiled MIDI patterns. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can

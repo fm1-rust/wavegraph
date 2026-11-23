@@ -15,6 +15,7 @@ use crate::{
     organ::Controls as OrganControls,
     panel::{CHANNELS, Channel, Navigation, View},
     sequencer::{BankPosition, DrumLamp, Position, Sequencer, pattern::Automation},
+    wavetable::Program as WaveProgram,
 };
 use fm1_audio::MasterLevel;
 
@@ -50,7 +51,8 @@ impl Settings {
             organ: track.organ,
             drums808: track.drums808,
             saw: track.saw,
-            wave_scan: track.wave.scan(track.voice.waveform % 2),
+            wave: track.wave_program(),
+            envelope_target: track.envelope_target,
             poly_keys: track.poly_keys,
             preset_since: self.nav.preset_since,
             view: self.nav.view,
@@ -71,8 +73,8 @@ impl Settings {
                 self.nav.bass_insert() && self.tracks[self.nav.focus.index()].bass_fx.enabled
             }
             View::MasterFx(Some(row)) => self.fx.enabled(row),
-            View::Envelope if self.nav.part() == Part::Supersaw => {
-                self.tracks[self.nav.focus.index()].saw.target == EnvelopeTarget::Filter
+            View::Envelope if matches!(self.nav.part(), Part::Supersaw | Part::Wavetable) => {
+                self.tracks[self.nav.focus.index()].envelope_target == EnvelopeTarget::Modulation
             }
             View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
             View::Sequencer => self.seq.enabled[self.seq.channel.index()],
@@ -91,7 +93,8 @@ pub(super) struct Labels {
     pub(super) organ: OrganControls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) saw: SawControls,
-    pub(super) wave_scan: wavegraph_wavetable::Scan,
+    pub(super) wave: WaveProgram,
+    pub(super) envelope_target: EnvelopeTarget,
     pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
     pub(super) preset_since: Option<u32>,
     pub(super) view: View,

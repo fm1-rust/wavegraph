@@ -27,6 +27,14 @@ pub const DEFAULT_ENVELOPE: Adsr = Adsr {
     release_us: 160_000,
 };
 
+/// Factory frame sweep in envelope mode. A held note settles halfway back.
+pub const DEFAULT_POSITION_ENVELOPE: Adsr = Adsr {
+    attack_us: 80_000,
+    decay_us: 320_000,
+    sustain_percent: 50,
+    release_us: 125_000,
+};
+
 /// Sample-timed controls accepted on inlet zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
@@ -45,6 +53,8 @@ pub enum Message {
     Scan(Scan),
     /// Change the amplitude envelope, including on sounding voices.
     Envelope(Adsr),
+    /// Shape the frame position in [`Mode::Envelope`], including on sounding voices.
+    PositionEnvelope(Adsr),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +66,7 @@ struct Voice {
     gain: f32,
     cursor: Cursor,
     envelope: Envelope,
+    position_envelope: Envelope,
 }
 
 impl Voice {
@@ -68,6 +79,7 @@ impl Voice {
             gain: 0.0,
             cursor: Cursor::default(),
             envelope: Envelope::IDLE,
+            position_envelope: Envelope::IDLE,
         }
     }
 }
@@ -83,6 +95,7 @@ pub struct Wavetable<'a> {
     scan: Scan,
     travel: Travel,
     timing: Timing,
+    position_timing: Timing,
     voices: [Voice; POLYPHONY],
 }
 
@@ -102,6 +115,7 @@ impl<'a> Wavetable<'a> {
             scan: Scan::RESONANT,
             travel: Travel::new(Scan::RESONANT, bank.last, tuning.sample_period()),
             timing: DEFAULT_ENVELOPE.at_sample_period(tuning.sample_period()),
+            position_timing: DEFAULT_POSITION_ENVELOPE.at_sample_period(tuning.sample_period()),
             voices: [Voice::idle(); POLYPHONY],
         })
     }
@@ -110,18 +124,26 @@ impl<'a> Wavetable<'a> {
     /// when idle. Fractional positions report their lower neighbor.
     #[must_use]
     pub fn frame(&self) -> u8 {
-        let cursor = self
+        let (cursor, level) = self
             .voices
             .iter()
             .find(|v| !v.envelope.is_idle())
-            .map_or(Cursor::default(), |v| v.cursor);
-        self.travel.position(cursor).to_be_bytes()[0]
+            .map_or((Cursor::default(), 0.0), |v| {
+                (v.cursor, v.position_envelope.level())
+            });
+        self.travel.position(cursor, level).to_be_bytes()[0]
     }
 
     fn scan(&mut self, scan: Scan) {
         let travel = Travel::new(scan, self.bank.last, self.tuning.sample_period());
         for voice in &mut self.voices {
             travel.retime(&mut voice.cursor, self.travel);
+            if scan.mode == Mode::Envelope && self.scan.mode != Mode::Envelope {
+                voice.position_envelope = Envelope::IDLE;
+                if voice.envelope.is_gated() {
+                    voice.position_envelope.gate_on(&self.position_timing);
+                }
+            }
         }
         self.scan = scan;
         self.travel = travel;
@@ -143,6 +165,15 @@ impl<'a> Wavetable<'a> {
                 }
                 self.timing = timing;
             }
+            Message::PositionEnvelope(adsr) => {
+                let timing = adsr.at_sample_period(self.tuning.sample_period());
+                for voice in &mut self.voices {
+                    voice
+                        .position_envelope
+                        .retime(&self.position_timing, &timing);
+                }
+                self.position_timing = timing;
+            }
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
                 if let Some(v) = self
                     .voices
@@ -150,6 +181,7 @@ impl<'a> Wavetable<'a> {
                     .find(|v| v.note == note && !v.envelope.is_idle())
                 {
                     v.envelope.gate_off(&self.timing);
+                    v.position_envelope.gate_off(&self.position_timing);
                 }
             }
             Message::NoteOn { note, velocity } => {
@@ -165,8 +197,6 @@ impl<'a> Wavetable<'a> {
                     .or_else(|| self.voices.iter().rposition(|v| !v.envelope.is_gated()))
                     .unwrap_or(POLYPHONY - 1);
                 self.voices[..=index].rotate_right(1);
-                let mut envelope = Envelope::IDLE;
-                envelope.gate_on(&self.timing);
                 self.voices[0] = Voice {
                     note,
                     phase: 0,
@@ -174,8 +204,15 @@ impl<'a> Wavetable<'a> {
                     level: Level::for_step(step),
                     gain: f32::from(velocity.min(127)) / (127.0 * 4.0 * 32768.0),
                     cursor: Cursor::default(),
-                    envelope,
+                    envelope: Envelope::IDLE,
+                    position_envelope: Envelope::IDLE,
                 };
+                self.voices[0].envelope.gate_on(&self.timing);
+                if self.scan.mode == Mode::Envelope {
+                    self.voices[0]
+                        .position_envelope
+                        .gate_on(&self.position_timing);
+                }
             }
         }
     }
@@ -193,9 +230,13 @@ impl<'a> Wavetable<'a> {
             let mut sum = 0.0;
             for v in &mut self.voices {
                 if !v.envelope.is_idle() {
-                    let value = self
-                        .bank
-                        .sample(v.level, v.phase, self.travel.position(v.cursor));
+                    let level = if self.scan.mode == Mode::Envelope {
+                        v.position_envelope.advance(&self.position_timing)
+                    } else {
+                        0.0
+                    };
+                    let position = self.travel.position(v.cursor, level);
+                    let value = self.bank.sample(v.level, v.phase, position);
                     sum += value as f32 * v.gain * v.envelope.advance(&self.timing);
                     v.phase = v.phase.wrapping_add(v.step);
                     self.travel.advance(&mut v.cursor);

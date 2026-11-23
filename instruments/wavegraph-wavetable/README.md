@@ -12,11 +12,15 @@ on each key.
 | Smooth | START crossfades adjacent frames at the same oscillator phase. |
 | OneShot | Each strike travels from START to END over TIME and holds there. |
 | PingPong | Each strike travels from START to END over TIME and reverses at each endpoint. |
+| Envelope | Each strike sweeps from START to END on attack, decays to its sustain position, and returns toward START on release. |
 
 Positions use 0–127 across the bank. Swap START and END for a reverse sweep.
 Editing TIME during a sweep preserves its progress. Re-striking a pitch
-restarts its oscillator and scan. The amplitude ADSR and scan remain
-independent through release.
+restarts its oscillator and scan. In Envelope mode, send
+`Message::PositionEnvelope(Adsr)` to shape the sweep. A 50% sustain holds
+halfway between the endpoints. `Message::Envelope(Adsr)` sets amplitude
+independently, so a longer amp release lets the return sweep ring out.
+Editing either envelope preserves the progress of sounding notes.
 
 ```rust
 use wavegraph_core::{Event, Process, ProcessContext, Tuning};

@@ -1,14 +1,12 @@
 //! Drum faceplates and per-voice activity beneath the live kit scope.
 
 use super::{selector::Selector, tr808};
+use crate::assets::fonts::{FONT_5X8, FONT_6X10, FONT_9X15_BOLD};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_5X8, FONT_6X10, FONT_9X15_BOLD},
-    },
+    mono_font::MonoTextStyle,
     pixelcolor::{
         BinaryColor, IntoStorage,
         raw::{BigEndian, RawU1, RawU16, ToBytes},

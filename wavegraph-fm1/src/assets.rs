@@ -17,12 +17,42 @@ macro_rules! flash_asset {
 }
 pub(crate) use flash_asset;
 
+#[cfg(target_os = "none")]
+pub(crate) mod fonts {
+    use embedded_graphics::{
+        image::ImageRaw,
+        mono_font::{MonoFont, ascii},
+    };
+
+    // The ASCII atlases have 16 glyphs per row. Reuse the upstream font metrics
+    // and glyph mapping with the bitmap stored in the FM-1 asset partition.
+    macro_rules! font {
+        ($name:ident, $file:literal) => {
+            pub(crate) const $name: MonoFont<'static> = MonoFont {
+                image: ImageRaw::new(
+                    super::flash_asset!(u8, include_bytes!(concat!("../assets/fonts/", $file))),
+                    16 * ascii::$name.character_size.width,
+                ),
+                ..ascii::$name
+            };
+        };
+    }
+
+    font!(FONT_5X8, "font_5x8.raw");
+    font!(FONT_6X9, "font_6x9.raw");
+    font!(FONT_6X10, "font_6x10.raw");
+    font!(FONT_7X13_BOLD, "font_7x13_bold.raw");
+    font!(FONT_9X15_BOLD, "font_9x15_bold.raw");
+}
+
 pub(crate) const CYMBALS: Samples<'static> = Samples {
     closed_hat: flash_asset!(u8, Samples::X0XPROC1.closed_hat),
     open_hat: flash_asset!(u8, Samples::X0XPROC1.open_hat),
     ride: flash_asset!(u8, Samples::X0XPROC1.ride),
 };
 
+// SAFETY: the catalog contains immutable references to the upper-flash banks.
+#[cfg_attr(target_os = "none", unsafe(link_section = ".wavegraph_assets"))]
 pub(crate) static WAVETABLES: [Bank<'static>; 2] = [
     Bank::from_packed12(flash_asset!(u8, BANKS[0].as_packed12())).expect("resonant frames"),
     Bank::from_packed12(flash_asset!(u8, BANKS[1].as_packed12())).expect("vocal frames"),

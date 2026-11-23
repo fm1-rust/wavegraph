@@ -1,6 +1,7 @@
 //! Six fixed sound knobs below the scope and two auxiliary knobs beside the wordmark.
 
 use super::{OXIDE_RED, mixer::Band, selector::Selector};
+use crate::assets::fonts::FONT_6X10;
 use crate::{
     bass::{Bank, Controls, Knob, cutoff_detent},
     firmware::Labels,
@@ -12,7 +13,7 @@ use core::{fmt::Write, str};
 use embedded_graphics::{
     Drawable,
     framebuffer::Framebuffer,
-    mono_font::{MonoTextStyle, ascii::FONT_6X10},
+    mono_font::MonoTextStyle,
     pixelcolor::{
         BinaryColor,
         raw::{BigEndian, RawU1},

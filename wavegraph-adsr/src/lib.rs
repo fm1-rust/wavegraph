@@ -28,6 +28,8 @@ impl Adsr {
     /// Durations round to the nearest frame. A nonpositive or nonfinite
     /// period gives instantaneous segments.
     #[must_use]
+    // Multiple instrument editors share this control-rate conversion in flash.
+    #[cfg_attr(target_os = "none", inline(never))]
     #[allow(clippy::cast_lossless, reason = "From is not const on the MSRV.")]
     pub const fn at_sample_period(self, sample_period: f32) -> Timing {
         let frames_per_us = if sample_period > 0.0 && sample_period.is_finite() {
@@ -121,6 +123,12 @@ impl Envelope {
         inv_frames: 0.0,
     };
 
+    /// Current envelope level in 0..=1, without advancing the clock.
+    #[must_use]
+    pub const fn level(&self) -> f32 {
+        self.level
+    }
+
     /// Whether the key is still held, including at zero sustain.
     #[must_use]
     pub fn is_gated(&self) -> bool {
@@ -153,6 +161,8 @@ impl Envelope {
     /// Apply an edit before advancing with the new timing. Preserve the
     /// current gain and the fraction of the active segment still to run.
     /// A sustain edit on a held plateau slews over four milliseconds.
+    // Keep one copy of the live-edit path across voices and instruments.
+    #[cfg_attr(target_os = "none", inline(never))]
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
