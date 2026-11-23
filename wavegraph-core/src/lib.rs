@@ -5,6 +5,7 @@
 mod tuning;
 
 pub mod bytecode;
+pub mod midi;
 pub use bytecode::Op;
 pub use tuning::Tuning;
 

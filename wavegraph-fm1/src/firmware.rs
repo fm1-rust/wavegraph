@@ -14,7 +14,7 @@ use crate::{
     mixer::Mixer,
     organ::Controls as OrganControls,
     panel::{CHANNELS, Channel, Navigation, View},
-    sequencer::{DrumLamp, Position, Sequencer},
+    sequencer::{BankPosition, DrumLamp, Position, Sequencer, pattern::Automation},
 };
 use fm1_audio::MasterLevel;
 
@@ -108,7 +108,8 @@ pub(super) struct Labels {
 #[derive(Clone, Copy, Default)]
 pub struct Motion {
     pub(super) position: Option<Position>,
-    pub(super) bass_automation: Option<(Channel, u8, u8)>,
+    pub(super) bass_automation: Option<(Channel, Automation)>,
+    pub(super) banks: [BankPosition; CHANNELS],
     pub(super) peaks: [u8; CHANNELS],
     pub(super) reduction: u8,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
@@ -133,12 +134,14 @@ mod app {
             Part, Programs, RoutedEvents, STRIP_BUS, Track,
         },
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
+        midi_out::{Batch, OutputQueue},
         mixer::Meter,
         overload::Overloads,
         panel::{Assignment, CHANNELS, Channel, Navigation, PageButton, View, preset_age},
         screen::Screen,
-        sequencer::{DrumKits, SeqPage, Sequencer},
+        sequencer::{DrumKits, SeqPage, Sequencer, pattern::Slot},
     };
+    use core::pin::pin;
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
     use fm1_rticx::{
@@ -155,6 +158,7 @@ mod app {
         },
         time::{Clock, ExtU32, Timebase, Timer5},
     };
+    use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
     use wavegraph::{
@@ -203,6 +207,7 @@ mod app {
         overloads: Overloads,
         motion: Motion,
         midi_epoch: u32,
+        outbox: OutputQueue,
     }
 
     // RTICX keeps its main frame while interrupt tasks run. Initialize the graph
@@ -289,6 +294,7 @@ mod app {
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
         let (editor, host) = EDITS.take().split();
         let (scans, input) = make_channel!(PanelFrame, SCANS);
+        let (wake_usb, outbound) = make_channel!((), 1);
         let (midi_out, midi_in) = make_channel!(MidiEvent, MIDI_EVENTS);
         static KEYS: ConstStaticCell<Keys<PIANO_KEYS>> = ConstStaticCell::new(Keys::new());
         static PIANO: ConstStaticCell<Piano<PIANO_KEYS>> = ConstStaticCell::new(Piano::new());
@@ -309,9 +315,12 @@ mod app {
                 overloads: Overloads::default(),
                 motion: Motion::default(),
                 midi_epoch: 0,
+                outbox: OutputQueue::default(),
             },
             TaskInits {
                 audio: Audio {
+                    wire: Batch::default(),
+                    wake_usb,
                     output: Output::start(board.audio).expect("audio clock"),
                     instrument,
                     host,
@@ -328,7 +337,6 @@ mod app {
                     timer,
                     controls: board.panel.into_touch_controls(),
                     piano: PIANO.take(),
-                    last_melodic: Channel::One,
                     nav: Navigation::INITIAL,
                     seq: Sequencer::INITIAL,
                     scans,
@@ -354,6 +362,7 @@ mod app {
                     device: usb,
                     clock,
                     midi: midi_out,
+                    outbound,
                 },
                 draw: Draw {
                     port: Some(board.display),
@@ -373,12 +382,11 @@ mod app {
 
     // The upper seven keys share an LED line with the velocity probe. End its
     // 100 µs column slot on time even when the audio graph is rendering.
-    #[task(binds = TIMER5, priority = 4, shared = [leds])]
+    #[task(binds = TIMER5, priority = 4, shared = [leds, motion])]
     struct Panel {
         timer: Timer5,
         controls: TouchControls,
         piano: &'static mut Piano<PIANO_KEYS>,
-        last_melodic: Channel,
         nav: Navigation,
         seq: Sequencer,
         scans: Sender<'static, PanelFrame, SCANS>,
@@ -457,7 +465,8 @@ mod app {
             }
             if self.nav.view == View::Sequencer {
                 self.seq.channel = self.nav.focus;
-                self.seq.turn_bar(scan.encoder_delta(Encoder::Knob2));
+                self.seq
+                    .turn_bar(self.nav.part(), scan.encoder_delta(Encoder::Knob2));
                 if scan.pressed(Button::Sel) {
                     self.seq.toggle_track();
                 }
@@ -508,28 +517,47 @@ mod app {
             };
             self.leds.set(Button::OctaveDown, octave < 0 && lit);
             self.leds.set(Button::OctaveUp, octave > 0 && lit);
-            // Release first so a key swap in the same sweep can start a new phrase.
-            for key in PianoKey::all().filter(|&key| scan.released(key)) {
-                self.piano.release(53 + key.index());
-            }
-            let channel = self.nav.piano_channel(&mut self.last_melodic);
+            let channel = self.nav.focus;
             let assignment = self.nav.assignments[channel.index()];
-            for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
-                self.leds.set(key, true);
-                if scan.pressed(key) {
-                    let velocity = match touch.velocity(key) {
-                        Some(velocity) => velocity,
-                        None if assignment.part.is_kit() => 127,
-                        None => continue,
-                    };
-                    self.piano.press(
-                        channel,
-                        assignment,
-                        Note {
-                            number: 53 + key.index(),
-                            velocity,
-                        },
-                    );
+            // Releases always reach their original owners, including across page changes.
+            for key in PianoKey::all().filter(|&key| scan.released(key)) {
+                self.piano
+                    .event(channel, assignment, MidiAction::Off(53 + key.index()));
+            }
+            if self.seq.page == Some(SeqPage::Pattern) {
+                for (key, slot) in Slot::KEYS {
+                    if scan.pressed(PianoKey::new(key).expect("physical bank key")) {
+                        self.seq.choose(assignment.part, slot);
+                    }
+                }
+                let active = if self.seq.transport.playing() {
+                    self.shared().motion.lock(|m| m.banks[channel.index()].slot)
+                } else {
+                    self.seq.slot(channel, assignment.part)
+                };
+                for (key, slot) in Slot::KEYS {
+                    let lamp = slot != active || (now & (1 << 22)) == 0;
+                    self.leds
+                        .set(PianoKey::new(key).expect("physical bank key"), lamp);
+                }
+            } else {
+                for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
+                    self.leds.set(key, true);
+                    if scan.pressed(key) {
+                        let velocity = match touch.velocity(key) {
+                            Some(velocity) => velocity,
+                            None if assignment.part.is_kit() => 127,
+                            None => continue,
+                        };
+                        self.piano.event(
+                            channel,
+                            assignment,
+                            MidiAction::On(Note {
+                                number: 53 + key.index(),
+                                velocity,
+                            }),
+                        );
+                    }
                 }
             }
             if !self.scans.is_full() {
@@ -588,6 +616,9 @@ mod app {
                 let epoch = self.shared().midi_epoch.lock(|epoch| *epoch);
                 if epoch != self.midi_epoch {
                     self.keys.clear_midi();
+                    for track in &mut self.settings.tracks {
+                        track.bass.slide = false;
+                    }
                     self.midi_epoch = epoch;
                 }
                 while let Ok(event) = self.midi.try_recv() {
@@ -656,8 +687,10 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, motion, bumper])]
+    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, motion, bumper, outbox])]
     struct Audio {
+        wire: Batch,
+        wake_usb: Sender<'static, (), 1>,
         output: Output,
         instrument: &'static mut Instrument<'static>,
         buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
@@ -677,6 +710,7 @@ mod app {
             let settings = self.shared().settings.lock(|s| *s);
             let mut bumper = self.shared().bumper;
             let mut revision = None;
+            self.wire.clear();
             let result = self.output.render(settings.master, |out| {
                 revision = Some(
                     self.host
@@ -686,16 +720,26 @@ mod app {
                 self.instrument.set_fx(settings.fx);
                 self.instrument.transport = settings.seq.transport;
                 self.instrument.sequences = settings.seq.enabled;
+                self.instrument.select_patterns(Channel::ALL.map(|c| {
+                    settings
+                        .seq
+                        .slot(c, settings.tracks[c.index()].assignment.part)
+                }));
                 self.instrument.cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
                 let mono = self
                     .instrument
-                    .render(settings.tracks, self.buses)
+                    .render_with_midi(settings.tracks, self.buses, |c, e| {
+                        self.wire.push(c, e.message)
+                    })
                     .expect("fixed patch");
                 for (frame, sample) in out.iter_mut().zip(mono) {
                     *frame = [sample.inner(); 2];
                 }
             });
-            let Some(revision) = revision else { return }; // No DMA half was ready.
+            let Some(revision) = revision else { return };
+            if self.shared().outbox.lock(|queue| queue.append(&self.wire)) {
+                let _ = self.wake_usb.try_send(());
+            } // No DMA half was ready.
             if result == Refill::Written {
                 self.host.submitted(revision, self.first_frame);
                 // Keep metering and the visual clock current even when scope capture drops a block.
@@ -720,6 +764,7 @@ mod app {
                 self.shared().motion.lock(|motion| {
                     *motion = Motion {
                         position,
+                        banks: self.instrument.banks(),
                         bass_automation,
                         peaks,
                         reduction,
@@ -831,16 +876,18 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [overloads, settings, midi_epoch])]
+    #[async_task(priority = 1, shared = [overloads, settings, midi_epoch, outbox])]
     struct Usb {
         device: MidiDevice,
         clock: Clock,
         midi: Sender<'static, MidiEvent, MIDI_EVENTS>,
+        outbound: Receiver<'static, (), 1>,
     }
     impl RticAsyncTask for Usb {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
             let mut rx = PacketBuffer::default();
+            let mut tx = PacketBuffer::default();
             let mut log = UsbLog::new();
             log.record("WaveGraph ready").expect("short ASCII line");
             let mut logged = 0;
@@ -848,14 +895,17 @@ mod app {
             let mut epoch = 0_u32;
             loop {
                 if session.is_some() {
-                    // Some cable removals raise no IRQ, so sample host frame progress.
-                    if Clock::timeout_after(
-                        100.millis(),
-                        self.device.wait_for_activity(&mut self.clock),
-                    )
-                    .await
-                    .is_err()
-                    {
+                    // Wake on the first outgoing block as well as on incoming USB.
+                    // Poll frame progress periodically for cable pulls without an IRQ.
+                    let poll = {
+                        let activity = pin!(Clock::timeout_after(
+                            100.millis(),
+                            self.device.wait_for_activity(&mut self.clock)
+                        ));
+                        let output = pin!(self.outbound.recv());
+                        !matches!(select(activity, output).await, Either::Left((Ok(()), _)))
+                    };
+                    if poll {
                         self.device.poll();
                     }
                 } else {
@@ -865,6 +915,7 @@ mod app {
                 let active = self.device.session();
                 if session != active {
                     session = active;
+                    self.shared().outbox.lock(|q| q.connect(active.is_some()));
                     epoch = epoch.wrapping_add(1);
                     self.shared().midi_epoch.lock(|current| *current = epoch);
                 }
@@ -899,6 +950,13 @@ mod app {
                     }
                 }
                 log.service(&mut self.device, packets);
+                if active.is_some() {
+                    let (revision, count) = self.shared().outbox.lock(|q| q.peek(&mut tx));
+                    if count != 0 {
+                        let sent = self.device.send(&tx[..count]);
+                        self.shared().outbox.lock(|q| q.sent(revision, sent));
+                    }
+                }
             }
         }
     }

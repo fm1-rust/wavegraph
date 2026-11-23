@@ -119,6 +119,14 @@ impl<const KEYS: usize> Piano<KEYS> {
         self.octave = self.octave.saturating_add(delta).clamp(-3, 3);
     }
 
+    pub(super) fn event(&mut self, channel: Channel, assignment: Assignment, event: MidiAction) {
+        match event {
+            MidiAction::On(note) => self.press(channel, assignment, note),
+            MidiAction::Off(key) => self.release(key),
+            MidiAction::Control(..) => (),
+        }
+    }
+
     pub(super) fn press(&mut self, channel: Channel, assignment: Assignment, key: Note) {
         self.release(key.number);
         if assignment.part.is_kit() {
@@ -162,26 +170,14 @@ impl<const KEYS: usize> Piano<KEYS> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MidiAction {
-    On(Note),
-    Off(u8),
-    Clear,
-}
+pub(super) use wavegraph::midi::MidiMessage as MidiAction;
 
 pub(super) fn decode_midi([header, status, key, value]: [u8; 4]) -> Option<(Channel, MidiAction)> {
-    let kind = status >> 4;
-    if header != kind || (key | value) >= 128 {
+    if header != status >> 4 {
         return None;
     }
     let channel = *Channel::ALL.get(usize::from(status & 0x0f))?;
-    let action = match (kind, key, value) {
-        (9, number, velocity @ 1..) => MidiAction::On(Note { number, velocity }),
-        (8 | 9, number, _) => MidiAction::Off(number),
-        (11, 123, _) => MidiAction::Clear,
-        _ => return None,
-    };
-    Some((channel, action))
+    Some((channel, MidiAction::decode([status, key, value])?))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -254,6 +250,14 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
         }
     }
 
+    fn event(&mut self, source: Key, event: MidiAction) {
+        match event {
+            MidiAction::On(note) => self.press(source, note),
+            MidiAction::Off(_) => self.release(source),
+            MidiAction::Control(..) => (),
+        }
+    }
+
     fn latest(&self) -> [PolyKey; POLYPHONY] {
         let mut midi = self.midi.iter().rev().peekable();
         let mut panel = self.panel.iter().rev().peekable();
@@ -293,14 +297,15 @@ impl<const PANEL: usize> Keys<PANEL> {
     pub(super) fn panel(&mut self, before: &[Press], now: &[Press], tracks: &[Track; CHANNELS]) {
         // A complete snapshot recovers held and released keys after a dropped sweep.
         for old in before.iter().filter(|old| !now.contains(old)) {
-            self.channels[old.channel.index()].release(Key::Panel(old.key));
+            self.channels[old.channel.index()]
+                .event(Key::Panel(old.key), MidiAction::Off(old.note.number));
         }
         for new in now.iter().filter(|new| !before.contains(new)) {
             let track = &tracks[new.channel.index()];
             if new.generation != track.assignment.generation {
                 continue;
             }
-            self.channels[new.channel.index()].press(Key::Panel(new.key), new.note);
+            self.channels[new.channel.index()].event(Key::Panel(new.key), MidiAction::On(new.note));
         }
     }
 
@@ -308,20 +313,20 @@ impl<const PANEL: usize> Keys<PANEL> {
         let keys = &mut self.channels[channel.index()];
         match action {
             MidiAction::On(note) if track.assignment.part.is_kit() => {
-                let part = track.assignment.part;
-                let voice = if part == Part::Tr808 {
-                    wavegraph_808::Voice::from_midi_note(note.number)
-                        .map(|v| part.pads()[v as usize])
-                } else {
-                    Drum::from_midi_note(note.number)
-                };
-                if let Some(voice) = voice {
+                if let Some(voice) = track.assignment.part.drum(note.number) {
                     track.midi_hits.push(voice, note.velocity);
                 }
             }
-            MidiAction::On(note) => keys.press(Key::Midi(note.number), note),
-            MidiAction::Off(note) => keys.release(Key::Midi(note)),
-            MidiAction::Clear => keys.midi.clear(),
+            MidiAction::On(note) => keys.event(Key::Midi(note.number), action),
+            MidiAction::Off(note) => keys.event(Key::Midi(note), action),
+            MidiAction::Control(123, _) => {
+                keys.midi.clear();
+                track.bass.slide = false;
+            }
+            MidiAction::Control(cc, value) if track.assignment.part == Part::Bass => {
+                track.bass.set_midi(cc, value, &mut track.voice);
+            }
+            MidiAction::Control(..) => (),
         }
     }
 

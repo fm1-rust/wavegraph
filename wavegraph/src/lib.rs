@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-pub use wavegraph_core::{Event, Op, Port, Process, ProcessContext, Tuning};
+pub use wavegraph_core::{Event, Op, Port, Process, ProcessContext, Tuning, midi};
 
 pub mod bytecode;
 #[cfg(feature = "async")]

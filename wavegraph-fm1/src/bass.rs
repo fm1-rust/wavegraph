@@ -5,6 +5,23 @@ use wavegraph_303::{Message, VoiceParams, Waveform};
 
 pub(super) mod envelope;
 
+pub(super) const CC_SLIDE: u8 = 102;
+pub(super) const CC_WAVE: u8 = 70;
+/// In Knob order, followed by the waveform switch. Attack and waveform are WaveGraph extensions.
+pub(super) const CONTROLLERS: [u8; 9] = [74, 71, 12, 75, 104, 73, 16, 17, CC_WAVE];
+
+/// MIDI cutoff follows the same seven octaves as the panel, at seven-bit resolution.
+const MIDI_CUTOFF: [u16; 128] = [
+    62, 65, 67, 70, 73, 76, 79, 82, 85, 88, 92, 95, 99, 103, 107, 111, 115, 120, 124, 129, 134,
+    139, 145, 150, 156, 162, 169, 175, 182, 189, 197, 204, 212, 221, 229, 238, 247, 257, 267, 277,
+    288, 299, 311, 323, 336, 349, 362, 376, 391, 406, 422, 439, 456, 473, 492, 511, 531, 552, 573,
+    595, 619, 643, 668, 694, 721, 749, 778, 808, 840, 872, 906, 942, 978, 1017, 1056, 1097, 1140,
+    1184, 1230, 1278, 1328, 1380, 1434, 1489, 1547, 1608, 1670, 1735, 1803, 1873, 1946, 2022, 2101,
+    2183, 2267, 2356, 2448, 2543, 2642, 2745, 2852, 2963, 3078, 3198, 3323, 3452, 3586, 3726, 3871,
+    4022, 4179, 4341, 4510, 4686, 4868, 5058, 5255, 5460, 5672, 5893, 6123, 6361, 6609, 6866, 7134,
+    7411, 7700, 8000,
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Bank {
     Filter,
@@ -45,6 +62,48 @@ impl Knob {
         }
     }
 
+    pub(super) fn from_cc(cc: u8) -> Option<Self> {
+        Some(match cc {
+            74 => Self::Cutoff,
+            71 => Self::Resonance,
+            12 => Self::EnvMod,
+            75 => Self::Decay,
+            104 => Self::Tuning,
+            73 => Self::Attack,
+            16 => Self::Accent,
+            17 => Self::Overdrive,
+            _ => return None,
+        })
+    }
+
+    pub(super) fn from_message(message: Message) -> Option<u8> {
+        Some(match message {
+            Message::CutoffHz(_) => 74,
+            Message::Resonance(_) => 71,
+            Message::EnvOctaves(_) => 12,
+            Message::DecaySeconds(_) => 75,
+            Message::TuningSemitones(_) => 104,
+            Message::AttackSeconds(_) => 73,
+            Message::Accent(_) => 16,
+            Message::OverdriveDb(_) => 17,
+            Message::Waveform(_) => CC_WAVE,
+            _ => return None,
+        })
+    }
+
+    fn message(self, params: VoiceParams) -> Message {
+        match self {
+            Self::Cutoff => Message::CutoffHz(params.cutoff_hz),
+            Self::Resonance => Message::Resonance(params.resonance),
+            Self::EnvMod => Message::EnvOctaves(params.env_oct),
+            Self::Decay => Message::DecaySeconds(params.decay_s),
+            Self::Tuning => Message::TuningSemitones(params.tuning_st),
+            Self::Attack => Message::AttackSeconds(params.attack_s),
+            Self::Accent => Message::Accent(params.accent),
+            Self::Overdrive => Message::OverdriveDb(params.overdrive_db),
+        }
+    }
+
     pub(super) fn name(self) -> &'static [u8; 9] {
         match self {
             Self::Cutoff => b"CUTOFF   ",
@@ -68,16 +127,20 @@ const CUTOFF_HZ: [u16; 43] = [
 
 /// Closest panel detent for a cutoff set between detents by the sequencer.
 pub(super) fn cutoff_detent(hz: u16) -> u8 {
-    let upper = CUTOFF_HZ
-        .partition_point(|&frequency| frequency < hz)
-        .min(usize::from(Knob::Cutoff.limits().1));
+    nearest(&CUTOFF_HZ, hz)
+}
+
+fn nearest(table: &[u16], value: u16) -> u8 {
+    let upper = table
+        .partition_point(|&point| point < value)
+        .min(table.len().saturating_sub(1));
     let lower = upper.saturating_sub(1);
-    let nearest = if hz.abs_diff(CUTOFF_HZ[lower]) < hz.abs_diff(CUTOFF_HZ[upper]) {
+    let index = if value.abs_diff(table[lower]) < value.abs_diff(table[upper]) {
         lower
     } else {
         upper
     };
-    u8::try_from(nearest).expect("43 cutoff detents")
+    u8::try_from(index).expect("at most 128 entries")
 }
 
 // Finer steps around the stock 1.5 ms attack, then out to 60 ms.
@@ -89,6 +152,8 @@ const ATTACK_US: [u16; 18] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Controls {
     values: [u8; 8],
+    midi: [Option<u8>; 8],
+    pub(super) slide: bool,
     pub(super) bank: Bank,
     last: [Knob; 2],
 }
@@ -97,6 +162,8 @@ impl Controls {
     pub(super) const INITIAL: Self = Self {
         // 500 Hz, 50% resonance, 24 semitones, 600 ms, concert pitch, 1.5 ms, 50% accent, 0 dB.
         values: [18, 50, 24, 60, 120, 5, 50, 0],
+        midi: [None; 8],
+        slide: false,
         bank: Bank::Filter,
         last: [Knob::Cutoff, Knob::Tuning],
     };
@@ -115,6 +182,7 @@ impl Controls {
     };
 
     /// Hand the three automated controls back to their retained panel settings.
+    #[cfg(test)]
     pub(super) fn automation_reset(self) -> [Message; 3] {
         let params = self.voice_params();
         [
@@ -122,6 +190,77 @@ impl Controls {
             Message::Resonance(params.resonance),
             Message::OverdriveDb(params.overdrive_db),
         ]
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "A seven-bit value scaled to the panel range fits u16."
+    )]
+    pub(super) fn set_midi(&mut self, cc: u8, value: u8, voice: &mut Voice) {
+        if cc == CC_SLIDE {
+            self.slide = value >= 64;
+        } else if cc == CC_WAVE {
+            voice.waveform = u8::from(value >= 64);
+        } else if let Some(knob) = Knob::from_cc(cc) {
+            let (lo, hi) = knob.limits();
+            self.values[knob as usize] = match knob {
+                Knob::Cutoff => cutoff_detent(MIDI_CUTOFF[usize::from(value)]),
+                Knob::Attack => nearest(
+                    &ATTACK_US,
+                    u16::try_from(u32::from(value) * 60_000 / 127).expect("attack range"),
+                ),
+                _ => lo.saturating_add(
+                    u8::try_from((u16::from(hi - lo) * u16::from(value) + 63) / 127)
+                        .expect("panel detent"),
+                ),
+            };
+            self.midi[knob as usize] = Some(value);
+        }
+    }
+
+    /// MIDI value nearest to the retained panel setting when a clip releases this control.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "Panel detents and controller ranges are bounded."
+    )]
+    pub(super) fn midi_value(self, cc: u8, voice: Voice) -> Option<u8> {
+        if cc == CC_WAVE {
+            return Some(if voice.waveform == 0 { 0 } else { 127 });
+        }
+        let knob = Knob::from_cc(cc)?;
+        if let Some(v) = self.midi[knob as usize] {
+            return Some(v);
+        }
+        let detent = self.detent(knob);
+        let (lo, hi) = knob.limits();
+        Some(match knob {
+            Knob::Cutoff => nearest(&MIDI_CUTOFF, self.cutoff_hz()),
+            Knob::Attack => u8::try_from((u32::from(self.attack_us()) * 127 + 30_000) / 60_000)
+                .expect("7-bit attack"),
+            Knob::Tuning if detent <= 120 => {
+                u8::try_from((u16::from(detent) * 64 + 60) / 120).expect("negative tuning")
+            }
+            Knob::Tuning => {
+                64 + u8::try_from((u16::from(detent - 120) * 63 + 60) / 120)
+                    .expect("positive tuning")
+            }
+            _ => {
+                let range = u16::from(hi - lo);
+                u8::try_from((u16::from(detent - lo) * 127 + range / 2) / range)
+                    .expect("7-bit controller")
+            }
+        })
+    }
+
+    pub(super) fn restore(self, cc: u8, voice: Voice) -> Option<Message> {
+        if cc == CC_WAVE {
+            return Some(Message::Waveform(if voice.waveform == 0 {
+                Waveform::Sawtooth
+            } else {
+                Waveform::Square
+            }));
+        }
+        Some(Knob::from_cc(cc)?.message(self.voice_params()))
     }
 
     pub(super) fn turn_select(&mut self, detents: i8) {
@@ -151,6 +290,7 @@ impl Controls {
         if detents == 0 {
             return;
         }
+        self.midi[knob as usize] = None;
         let (min, max) = knob.limits();
         let value = &mut self.values[knob as usize];
         *value = value.saturating_add_signed(detents).clamp(min, max);
@@ -194,7 +334,7 @@ impl Controls {
 
     fn voice_params(self) -> VoiceParams {
         let value = |knob: Knob| f32::from(self.values[knob as usize]);
-        VoiceParams {
+        let mut params = VoiceParams {
             cutoff_hz: f32::from(self.cutoff_hz()),
             resonance: value(Knob::Resonance) / 100.0,
             env_oct: value(Knob::EnvMod) / 12.0,
@@ -204,29 +344,36 @@ impl Controls {
             accent: value(Knob::Accent) / 100.0,
             overdrive_db: value(Knob::Overdrive),
             ..VoiceParams::default()
+        };
+        for (cc, value) in CONTROLLERS.into_iter().zip(self.midi) {
+            if let Some(value) = value {
+                match midi_parameter(cc, value) {
+                    Some(Message::CutoffHz(v)) => params.cutoff_hz = v,
+                    Some(Message::Resonance(v)) => params.resonance = v,
+                    Some(Message::EnvOctaves(v)) => params.env_oct = v,
+                    Some(Message::DecaySeconds(v)) => params.decay_s = v,
+                    Some(Message::TuningSemitones(v)) => params.tuning_st = v,
+                    Some(Message::AttackSeconds(v)) => params.attack_s = v,
+                    Some(Message::Accent(v)) => params.accent = v,
+                    Some(Message::OverdriveDb(v)) => params.overdrive_db = v,
+                    _ => (),
+                }
+            }
         }
+        params
     }
 
     pub(super) fn events(self, previous: Self, voice: Voice, old_voice: Voice) -> EventBatch {
         let mut batch = EventBatch::new();
         // Edits to both banks can arrive between two audio blocks.
-        if self.values != previous.values {
+        if self.values != previous.values || self.midi != previous.midi {
             let params = self.voice_params();
             for knob in Bank::Filter.knobs().into_iter().chain(Bank::Voice.knobs()) {
                 let i = knob as usize;
-                if self.values[i] == previous.values[i] {
+                if self.values[i] == previous.values[i] && self.midi[i] == previous.midi[i] {
                     continue;
                 }
-                let message = match knob {
-                    Knob::Cutoff => Message::CutoffHz(params.cutoff_hz),
-                    Knob::Resonance => Message::Resonance(params.resonance),
-                    Knob::EnvMod => Message::EnvOctaves(params.env_oct),
-                    Knob::Decay => Message::DecaySeconds(params.decay_s),
-                    Knob::Tuning => Message::TuningSemitones(params.tuning_st),
-                    Knob::Attack => Message::AttackSeconds(params.attack_s),
-                    Knob::Accent => Message::Accent(params.accent),
-                    Knob::Overdrive => Message::OverdriveDb(params.overdrive_db),
-                };
+                let message = knob.message(params);
                 batch.push(at(message)).expect("eight panel controls");
             }
         }
@@ -246,8 +393,9 @@ impl Controls {
             let message = match (before, next) {
                 (_, Some(note)) => Message::NoteOn {
                     note: note.number,
-                    accent: note.velocity >= 96,
-                    slide: before.is_some() && voice.gate.phrase == old_voice.gate.phrase,
+                    accent: note.velocity >= 100,
+                    slide: self.slide
+                        || (before.is_some() && voice.gate.phrase == old_voice.gate.phrase),
                 },
                 (Some(old), None) => Message::NoteOff(old.number),
                 (None, None) => return batch,
@@ -256,6 +404,29 @@ impl Controls {
         }
         batch
     }
+}
+
+/// Translate the TB-03 voice controls at the graph boundary.
+pub(super) fn midi_parameter(cc: u8, value: u8) -> Option<Message> {
+    let unit = f32::from(value) / 127.0;
+    Some(match cc {
+        74 => Message::CutoffHz(f32::from(MIDI_CUTOFF[usize::from(value)])),
+        71 => Message::Resonance(unit),
+        12 => Message::EnvOctaves(unit * 6.0),
+        75 => Message::DecaySeconds(0.05 + unit * 1.95),
+        104 => Message::TuningSemitones(
+            (f32::from(value) - 64.0) * (12.0 / if value < 64 { 64.0 } else { 63.0 }),
+        ),
+        73 => Message::AttackSeconds(unit * 0.060),
+        16 => Message::Accent(unit),
+        17 => Message::OverdriveDb(unit * 36.0),
+        CC_WAVE => Message::Waveform(if value < 64 {
+            Waveform::Sawtooth
+        } else {
+            Waveform::Square
+        }),
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
