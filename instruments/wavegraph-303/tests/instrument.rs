@@ -1,5 +1,5 @@
 //! Render the 303 through the patch interpreter and compare it to the native voice.
-use wavegraph::{Event, Port, Process, bytecode::Program, dsp::Software};
+use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Program, dsp::Software};
 use wavegraph_303::{Message, Tb303, Voice, VoiceParams, Waveform};
 use wavegraph_sample::{I24, Sample, types::i24};
 
@@ -20,6 +20,32 @@ fn note(note: u8, accent: bool, slide: bool) -> Message {
         accent,
         slide,
     }
+}
+
+#[test]
+fn oscillator_wraps_are_relative_to_the_block_across_timed_events() {
+    // A4 advances by exactly 1/64 turn per sample at this rate.
+    let mut bass = Tb303::new(28_160.0).with_idle_suspension();
+    let mut render = |frames, events: &[Event<Message>]| {
+        let mut output = [0.0_f32; 160];
+        bass.process(&mut ProcessContext {
+            frames,
+            inputs: &[],
+            outputs: &mut [&mut output[..frames]],
+            events,
+            emit: &mut Err,
+        });
+        bass.last_cycle_start()
+    };
+    assert_eq!(render(128, &[]), None);
+    let events = [
+        at(11, note(69, true, false)),
+        at(81, Message::Resonance(1.0)),
+        at(145, Message::CutoffHz(500.0)),
+    ];
+    assert_eq!(render(160, &events), Some(138));
+    assert_eq!(render(40, &[]), None);
+    assert_eq!(render(4, &[]), Some(2));
 }
 
 #[test]

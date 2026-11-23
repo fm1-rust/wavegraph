@@ -602,6 +602,7 @@ pub(super) enum Message {
     WaveFrame(u8),
     Organ(OrganMessage),
     Bass(BassMessage),
+    BassCycle,
     Mixer(MixerMessage),
     Fx(FxMessage),
     Assign(Assignment),
@@ -774,10 +775,19 @@ impl Process<Message, I24> for Node<'_> {
                 Message::Organ(m) => Some(m),
                 _ => None,
             }),
-            Player::Bass(node) => dispatch(node, cx, |m| match m {
-                Message::Bass(m) => Some(m),
-                _ => None,
-            }),
+            Player::Bass(node) => {
+                dispatch(node, cx, |m| match m {
+                    Message::Bass(m) => Some(m),
+                    _ => None,
+                });
+                if let Some(frame) = node.last_cycle_start() {
+                    let _ = (cx.emit)(Event {
+                        frame,
+                        port: 2,
+                        message: Message::BassCycle,
+                    });
+                }
+            }
             Player::Drums(_) => unreachable!("kit rendered both outlets"),
         }
     }
@@ -988,6 +998,7 @@ impl Programs {
             position: None,
             drums: [[DrumLamp::Off; 6]; CHANNELS],
             wave_frames: [0; CHANNELS],
+            bass_cycles: [None; CHANNELS],
             reduction: 0,
             previous: None,
         })
@@ -1011,6 +1022,7 @@ pub(super) struct Instrument<'a> {
     pub(super) position: Option<Position>,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
     pub(super) wave_frames: [u8; CHANNELS],
+    pub(super) bass_cycles: [Option<usize>; CHANNELS],
     pub(super) reduction: u8,
     previous: Option<[Track; CHANNELS]>,
 }
@@ -1118,6 +1130,7 @@ impl Instrument<'_> {
         }
         let mut drums = [[DrumLamp::Off; 6]; CHANNELS];
         let mut wave_frames = [0; CHANNELS];
+        let mut bass_cycles = [None; CHANNELS];
         let mut reduction = 0;
         self.patch.render(
             &mut Software,
@@ -1142,6 +1155,10 @@ impl Instrument<'_> {
                     wave_frames[usize::from(object)] = index;
                     Ok(())
                 }
+                Message::BassCycle => {
+                    bass_cycles[usize::from(object)] = Some(event.frame);
+                    Ok(())
+                }
                 Message::DrumLamps(lamps) => {
                     drums[usize::from(object)] = lamps;
                     Ok(())
@@ -1154,6 +1171,7 @@ impl Instrument<'_> {
         self.automated = automated;
         self.drums = drums;
         self.wave_frames = wave_frames;
+        self.bass_cycles = bass_cycles;
         self.reduction = reduction;
         self.previous = Some(tracks);
         self.previous_mixer = Some(self.mixer);

@@ -70,7 +70,10 @@ switch banks. The encoder numbers move and the knobs stay in place.
 Each cap points to its saved setting. During pattern playback a separate red
 mark on the Cutoff, Resonance and Drive scales follows the sequencer. Those
 marks disappear when you play the 303 live, mute its pattern or stop playback.
-The scope opens on the selected 303’s pre-fader signal (SRC). Automatic
+The scope opens on the selected 303’s pre-fader signal (SRC). Each sweep starts
+at an oscillator phase wrap and shows 27.2 ms of filtered audio, about two
+cycles of the factory bass line’s low D. The fixed time scale lets you see the
+cycles draw closer together on an upward slide. Automatic
 sensitivity fits each sweep to the display and stops boosting below −36 dBFS
 so tails fade to a flat line. Press SEL to see the master mix (DAC) at its
 fixed scale.
@@ -449,7 +452,8 @@ FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
 
-The scope captures 240 consecutive samples starting at a rising zero crossing.
+The 303 SRC scope averages five consecutive audio samples per pixel. Other
+scope taps capture 240 consecutive samples starting at a rising zero crossing.
 A two-block queue feeds an async observer. Missing blocks and routing changes
 start a fresh trace. The trace labels travel with the samples. The cutoff
 readout follows the knob even while the scope waits for a trigger.

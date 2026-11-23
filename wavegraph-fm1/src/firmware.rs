@@ -189,6 +189,7 @@ mod app {
 
     pub struct ScopeBlock {
         samples: [i32; OUTPUT_FRAMES],
+        bass_cycle: Option<usize>,
         labels: Labels,
         gap: bool,
     }
@@ -735,6 +736,7 @@ mod app {
                         }
                         _ => core::array::from_fn(|i| self.output.block()[i][0]),
                     },
+                    bass_cycle: self.instrument.bass_cycles[labels.channel.index()],
                     labels,
                     gap: self.gap,
                 };
@@ -765,25 +767,34 @@ mod app {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
             while let Ok(block) = self.blocks.recv().await {
-                let previous = self.previous.replace(block.labels);
-                let changed = previous != Some(block.labels);
+                let labels = block.labels;
+                let previous = self.previous.replace(labels);
+                let changed = previous != Some(labels);
                 let source_changed = previous.is_none_or(|old| {
-                    old.view != block.labels.view
-                        || old.channel != block.labels.channel
-                        || old.focus != block.labels.focus
-                        || old.voice_tap != block.labels.voice_tap
+                    old.view != labels.view
+                        || old.channel != labels.channel
+                        || old.focus != labels.focus
+                        || old.voice_tap != labels.voice_tap
                 });
-                let scale = if block.labels.view == View::Scope
-                    && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
-                    && block.labels.voice_tap
+                let voice_scope = labels.view == View::Scope && labels.voice_tap;
+                let bass_scope = voice_scope && labels.focus == Part::Bass;
+                // Keep the 303 trigger and the post-insert FX trace continuous through knob edits.
+                if block.gap
+                    || source_changed
+                    || (changed && !bass_scope && labels.view != View::Fx)
                 {
-                    Scale::Auto
+                    self.capture.reset();
+                }
+                let trace = if bass_scope {
+                    self.capture.push_bass(&block.samples, block.bass_cycle)
                 } else {
-                    Scale::Fixed
+                    let scale = if voice_scope && labels.focus == Part::Wavetable {
+                        Scale::Auto
+                    } else {
+                        Scale::Fixed
+                    };
+                    self.capture.push(&block.samples, scale)
                 };
-                // Knob edits on the FX rack keep the same post-insert signal and vertical gain.
-                let reset = source_changed || (changed && block.labels.view != View::Fx);
-                let trace = self.capture.push(&block.samples, reset || block.gap, scale);
                 if changed || trace.is_some() {
                     self.shared().frame.lock(|frame| {
                         // Publish the new page even while waiting for its first trigger.
@@ -792,7 +803,7 @@ mod app {
                         } else if source_changed {
                             frame.trace = FLAT;
                         }
-                        frame.labels = block.labels;
+                        frame.labels = labels;
                     });
                 }
             }
