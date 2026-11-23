@@ -1,0 +1,18 @@
+[package]
+name = "wavegraph-wavetable"
+description = "Polyphonic wavetable scanning and per-note timbre sweeps for WaveGraph"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license = "(Apache-2.0 OR MIT) AND CC0-1.0"
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "dsp", "synthesizer", "wavetable"]
+
+[dependencies]
+wavegraph-adsr.workspace = true
+wavegraph-core.workspace = true
+wavegraph-sample.workspace = true
+
+[lints]
+workspace = true

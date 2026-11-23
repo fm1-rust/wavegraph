@@ -37,6 +37,8 @@ mod panel;
 mod screen;
 #[cfg(any(target_os = "none", test))]
 mod sequencer;
+#[cfg(any(target_os = "none", test))]
+mod wavetable;
 
 #[cfg(target_os = "none")]
 #[panic_handler]

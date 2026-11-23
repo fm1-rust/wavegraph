@@ -17,12 +17,13 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-909`](instruments/wavegraph-909/) | Six-voice hybrid 909 with a mono mix and individual outputs | Unpublished | [Instrument guide](instruments/wavegraph-909/README.md) | [![Build status][909-build]][909-ci] |
 | [`wavegraph-adsr`](wavegraph-adsr/) | Sample-clocked ADSR shared by the monosynth and organ | Unpublished | [Envelope guide](wavegraph-adsr/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
-| [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, three synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
+| [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
 | [`wavegraph-sampler`](instruments/wavegraph-sampler/) | One-shot mono PCM player | Unpublished | [Playback guide](instruments/wavegraph-sampler/README.md) | [![Build status][sampler-build]][sampler-ci] |
 | [`wavegraph-supersaw`](instruments/wavegraph-supersaw/) | JP-inspired seven-saw unison with detune and mix | Unpublished | [Instrument guide](instruments/wavegraph-supersaw/README.md) | [![Build status][supersaw-build]][supersaw-ci] |
+| [`wavegraph-wavetable`](instruments/wavegraph-wavetable/) | Four-voice wavetable scanning with resonant and vocal banks | Unpublished | [Instrument guide](instruments/wavegraph-wavetable/README.md) | [![Build status][wavetable-build]][wavetable-ci] |
 
 The libraries support Rust 1.88 and build without `std` or a heap allocator.
 To browse their API documentation locally, run `cargo doc --workspace --no-deps --open`.
@@ -59,3 +60,5 @@ cargo +stable test -p wavegraph --test patch --locked
 [sampler-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sampler.yml
 [supersaw-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-supersaw.yml/badge.svg?branch=main&event=push
 [supersaw-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-supersaw.yml
+[wavetable-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-wavetable.yml/badge.svg?branch=main&event=push
+[wavetable-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-wavetable.yml

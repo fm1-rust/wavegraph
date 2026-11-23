@@ -10,6 +10,7 @@ outlet 0. Each instance keeps its voice state between blocks.
 | --- | --- |
 | [`wavegraph-monosynth`](wavegraph-monosynth/) | A single oscillator with a filter and a gate-controlled ADSR envelope. |
 | [`wavegraph-supersaw`](wavegraph-supersaw/) | Seven detuned phase accumulators, a pitch-tracking high-pass and 2× oversampling. |
+| [`wavegraph-wavetable`](wavegraph-wavetable/) | Four independent scan clocks, stepped or interpolated frames, and two CC0 banks. |
 | [`wavegraph-organ`](wavegraph-organ/) | Polyphony with four preallocated voices and a note-stealing policy. |
 | [`wavegraph-303`](wavegraph-303/) | A TB-303 voice that handles accent, slide and live parameter changes. |
 | [`wavegraph-sampler`](wavegraph-sampler/) | One-shot PCM playback from borrowed sample data. |

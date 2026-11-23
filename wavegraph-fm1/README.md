@@ -13,8 +13,9 @@ four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
 
 All four patterns start enabled. GLO lets any channel host any instrument,
 including the [monosynth](../instruments/wavegraph-monosynth/),
-[M1-inspired organ](../instruments/wavegraph-organ/) and
-[Super Saw](../instruments/wavegraph-supersaw/).
+[M1-inspired organ](../instruments/wavegraph-organ/),
+[Super Saw](../instruments/wavegraph-supersaw/) and
+[wavetable synth](../instruments/wavegraph-wavetable/).
 The transport starts stopped. Keys and USB MIDI also work with it stopped.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
@@ -32,13 +33,14 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | PRESETS encoder | Cycle channels 1–4 and route new panel keys to the active channel. Held keys keep their channel. |
 | Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
-| SELECT encoder | Transpose the monosynth, organ or Super Saw by ±12 semitones, or switch the 303's knob bank. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. |
+| SELECT encoder | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
+| Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. |
 | Knobs 1–2 on the Super Saw | Adjust DETUNE and MIX, each from 0 to 127. |
-| ENV | Open or close the monosynth, organ or 303 envelope page. ENV stays lit while the page is open. |
-| Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
+| ENV | Open or close the monosynth, organ, 303 or wavetable envelope page. ENV stays lit while the page is open. |
+| Knobs 1–4 in monosynth, organ or wavetable ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
@@ -52,7 +54,7 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
-| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw, KIT for either drum machine) and the post-MASTER DAC mix. |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -77,7 +79,7 @@ Hold a bass note on channel one, turn PRESETS to channel two, and play the
 upper voice. Each key keeps the channel it was pressed on. The 303 and
 monosynth use last-note priority. On the 303, velocity 96+ triggers accent,
 overlapping notes slide, and a fresh strike after release restarts the
-envelopes. On the organ, the latest four physical keys take priority.
+envelopes. On the organ and wavetable synth, the latest four physical keys take priority.
 Releasing a newer key restores an older held key.
 
 ## M1-inspired organ
@@ -101,7 +103,7 @@ last turn.
 ## Super Saw
 
 Press **GLO**, turn **SELECT** to highlight a strip, then turn **PRESETS** to
-**SUPER SAW**, the last entry after TR-808. Press **GLO** again to play it.
+**SUPER SAW**, the entry after TR-808. Press **GLO** again to play it.
 The strip keeps its MIDI channel, level and sends. Each assigned instance has
 its own seven oscillators and panel settings.
 
@@ -114,6 +116,35 @@ key, or the pattern status during playback. The four-bar pattern leaves space
 between sustained upper notes so the beating is audible.
 
 ![Super Saw on channel one with the live waveform and panel controls](assets/supersaw.png)
+
+## Wavetable
+
+Press **GLO**, turn **SELECT** to highlight a channel and turn **PRESETS** to
+**WAVETABLE**, one detent past **SUPER SAW**. Press **GLO** again to play it.
+**ALGORITHM** switches between two 64-frame programs. Each remembers its
+scan settings for as long as the instrument occupies the strip.
+
+| Program | Try it |
+| --- | --- |
+| Resonant Saw | Hold a low note and turn knob 1 (**START**) to step through the resonances. Turn knob 4 (**MODE**) one click to SMOOTH for intermediate timbres. |
+| Vocal Formants | Roll a chord and let it ring. Each key starts its own sweep. Turn knob 3 (**TIME**) to slow the vowels down and knob 2 (**END**) to narrow the range. |
+
+START and END run from 0 to 127. TIME covers 50 ms to 8 s per traversal.
+ONCE holds the end frame and PINGPONG returns through the same frames.
+The red dial and FRAME readout show the newest sounding voice's position
+(0–63). The 240 × 168 scope shows its channel's complete polyphonic output,
+with automatic gain. **SEL** switches to the master mix at fixed gain.
+**ENV** edits the shared amplitude contour. **PLAY** brings in a four-bar
+chord part with space for each voicing to evolve.
+
+The blue face, red encoder and green readout draw on the original
+[Waldorf Microwave panel][microwave]. The [instrument guide][wavetable]
+covers the scan engine and the sources of both banks.
+
+![Wavetable on channel one during a held vocal chord](assets/wavetable.png)
+
+[microwave]: https://waldorfmusic.com/microwave-1/
+[wavetable]: ../instruments/wavegraph-wavetable/
 
 ## VCA envelope
 
@@ -297,7 +328,7 @@ SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
 Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the six instruments,
+the new assignment immediately. Any slot can run any of the seven instruments,
 including four independent TB-303s. The slot keeps its MIDI channel, fader,
 sends and sequence mute. The new processor starts from its factory settings.
 

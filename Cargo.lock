@@ -888,6 +888,7 @@ dependencies = [
  "wavegraph-organ",
  "wavegraph-sample",
  "wavegraph-supersaw",
+ "wavegraph-wavetable",
 ]
 
 [[package]]
@@ -935,6 +936,15 @@ name = "wavegraph-supersaw"
 version = "0.1.0"
 dependencies = [
  "micromath",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
+name = "wavegraph-wavetable"
+version = "0.1.0"
+dependencies = [
+ "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-sample",
 ]

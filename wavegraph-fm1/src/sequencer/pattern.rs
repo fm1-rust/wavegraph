@@ -89,6 +89,17 @@ const ORGAN: [Step; STEPS] = {
     pattern
 };
 
+// Open F and E minor voicings over the D / C bass. Hold them long enough
+// for the formants to cross most of the table at the factory travel time.
+const WAVETABLE: [Step; STEPS] = {
+    let mut p = [REST; STEPS];
+    p[0] = note(&[57, 65, 72], 90, 108, false);
+    p[18] = note(&[60, 65, 69], 79, 88, false);
+    p[32] = note(&[55, 64, 71], 92, 112, false);
+    p[50] = note(&[59, 64, 67], 80, 88, false);
+    p
+};
+
 // Each outgoing slide is followed by a real note, with no intervening gate-off.
 // Accents are deliberately sparse even when the automation gets aggressive.
 const BASS: [Step; STEPS] = {
@@ -150,6 +161,7 @@ pub(crate) fn step(part: Part, channel: Channel, index: usize) -> Step {
     match part {
         Part::Mono => MONO[index],
         Part::Supersaw => SUPER_SAW[index],
+        Part::Wavetable => WAVETABLE[index],
         Part::Organ => ORGAN[index],
         Part::Bass if channel == Channel::Two => HARMONY[index],
         Part::Bass => BASS[index],

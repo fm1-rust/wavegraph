@@ -10,8 +10,9 @@ use crate::{
     envelope::EnvelopeControls,
     fx::{Fx, FxPage},
     instrument::{Part, SawControls, Track, Voice},
+    keys::PolyKey,
     mixer::Mixer,
-    organ::{Controls as OrganControls, OrganKey},
+    organ::Controls as OrganControls,
     panel::{CHANNELS, Channel, Navigation, View},
     sequencer::{DrumLamp, Position, Sequencer},
 };
@@ -53,14 +54,15 @@ impl Settings {
             organ: track.organ,
             drums808: track.drums808,
             saw: track.saw,
-            organ_keys: track.organ_keys,
+            wave_scan: track.wave.scan(track.voice.waveform % 2),
+            poly_keys: track.poly_keys,
             menu_since: self.menu_since,
             view: self.nav.view,
             fx_page: self.fx_page,
             mixer: self.mixer,
             seq: self.seq,
             fx: self.fx,
-            mono_envelope: track.mono_envelope,
+            voice_envelope: track.voice_envelope,
             half_gain,
             voice_tap: track.voice_tap,
         }
@@ -86,14 +88,15 @@ pub(super) struct Labels {
     pub(super) organ: OrganControls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) saw: SawControls,
-    pub(super) organ_keys: [OrganKey; wavegraph_organ::POLYPHONY],
+    pub(super) wave_scan: wavegraph_wavetable::Scan,
+    pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
     pub(super) menu_since: Option<u32>,
     pub(super) view: View,
     pub(super) fx_page: FxPage,
     pub(super) mixer: Mixer,
     pub(super) seq: Sequencer,
     pub(super) fx: Fx,
-    pub(super) mono_envelope: EnvelopeControls,
+    pub(super) voice_envelope: EnvelopeControls,
     pub(super) half_gain: bool,
     pub(super) voice_tap: bool,
 }
@@ -104,6 +107,7 @@ pub struct Motion {
     pub(super) bass_automation: Option<(Channel, u8, u8)>,
     pub(super) peaks: [u8; CHANNELS],
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
+    pub(super) wave_frames: [u8; CHANNELS],
 }
 
 #[derive(Clone, Copy)]
@@ -575,7 +579,9 @@ mod app {
                         let part = track.assignment.part;
                         track.voice.turn_waveform(part, algorithm);
                         match (view, part) {
-                            (View::Envelope, Part::Mono) => track.mono_envelope.turn(knobs),
+                            (View::Envelope, Part::Mono | Part::Wavetable) => {
+                                track.voice_envelope.turn(knobs)
+                            }
                             (View::Envelope, Part::Organ) => track.organ.envelope.turn_organ(knobs),
                             _ => {
                                 track.turn_select(select);
@@ -674,12 +680,14 @@ mod app {
                 let position = self.instrument.position;
                 let bass_automation = self.instrument.bass_automation(settings.nav.focus);
                 let drums = self.instrument.drums;
+                let wave_frames = self.instrument.wave_frames;
                 self.shared().motion.lock(|motion| {
                     *motion = Motion {
                         position,
                         bass_automation,
                         peaks,
                         drums,
+                        wave_frames,
                     };
                 });
             }
@@ -726,7 +734,7 @@ mod app {
             while let Ok(block) = self.blocks.recv().await {
                 let changed = self.previous.replace(block.labels) != Some(block.labels);
                 let scale = if block.labels.view == View::Scope
-                    && block.labels.focus == Part::Bass
+                    && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
                     && block.labels.voice_tap
                 {
                     Scale::Auto

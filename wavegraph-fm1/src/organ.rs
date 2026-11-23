@@ -2,7 +2,7 @@
 
 use crate::{
     envelope::EnvelopeControls,
-    instrument::{EventBatch, Note, at},
+    instrument::{EventBatch, at},
 };
 use wavegraph_organ::{Message, Organ, Params};
 
@@ -10,20 +10,6 @@ pub(super) const fn instrument(numerator: u32, denominator: u32) -> Organ {
     Organ::new(numerator, denominator)
         .expect("organ sample clock")
         .with_voice_level(28)
-}
-
-/// A physical organ key and its strike generation, retained across dropped scans.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct OrganKey {
-    pub(super) note: Option<Note>,
-    pub(super) strike: u32,
-}
-
-impl OrganKey {
-    pub(super) const EMPTY: Self = Self {
-        note: None,
-        strike: 0,
-    };
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

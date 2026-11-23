@@ -2,7 +2,6 @@
 
 use crate::{
     instrument::{Gate, Message, Note, Part, RoutedEvents, Track, at},
-    organ::OrganKey,
     panel::{Assignment, CHANNELS, Channel},
     sequencer::DrumMessage,
 };
@@ -10,6 +9,20 @@ use heapless::Vec;
 use wavegraph::bytecode::Error;
 use wavegraph_909::Voice as Drum;
 use wavegraph_organ::POLYPHONY;
+
+/// A polyphonic key and its strike generation, retained across dropped scans.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PolyKey {
+    pub(super) note: Option<Note>,
+    pub(super) strike: u32,
+}
+
+impl PolyKey {
+    pub(super) const EMPTY: Self = Self {
+        note: None,
+        strike: 0,
+    };
+}
 
 const MIDI_NOTES: usize = 128;
 
@@ -241,7 +254,7 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
         }
     }
 
-    fn latest(&self) -> [OrganKey; POLYPHONY] {
+    fn latest(&self) -> [PolyKey; POLYPHONY] {
         let mut midi = self.midi.iter().rev().peekable();
         let mut panel = self.panel.iter().rev().peekable();
         core::array::from_fn(|_| {
@@ -250,7 +263,7 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
                 (Some(_), _) => midi.next(),
                 (None, _) => panel.next(),
             };
-            next.map_or(OrganKey::EMPTY, |held| OrganKey {
+            next.map_or(PolyKey::EMPTY, |held| PolyKey {
                 note: Some(held.note),
                 strike: held.strike,
             })
@@ -319,8 +332,8 @@ impl<const PANEL: usize> Keys<PANEL> {
             note: notes[0].note,
             phrase: keys.phrase,
         };
-        if track.assignment.part == Part::Organ {
-            track.organ_keys = notes;
+        if matches!(track.assignment.part, Part::Organ | Part::Wavetable) {
+            track.poly_keys = notes;
         }
     }
 }
