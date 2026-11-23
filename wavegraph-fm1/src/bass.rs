@@ -33,6 +33,18 @@ pub(super) enum Knob {
 }
 
 impl Knob {
+    pub(super) const fn limits(self) -> (u8, u8) {
+        match self {
+            Self::Cutoff => (0, 42),
+            Self::Resonance | Self::Accent => (0, 100),
+            Self::EnvMod => (0, 72),
+            Self::Decay => (5, 200),
+            Self::Tuning => (0, 240),
+            Self::Attack => (0, 17),
+            Self::Overdrive => (0, 36),
+        }
+    }
+
     pub(super) fn name(self) -> &'static [u8; 9] {
         match self {
             Self::Cutoff => b"CUTOFF   ",
@@ -53,6 +65,20 @@ const CUTOFF_HZ: [u16; 43] = [
     630, 707, 794, 891, 1000, 1122, 1260, 1414, 1587, 1782, 2000, 2245, 2520, 2828, 3175, 3564,
     4000, 4490, 5040, 5657, 6350, 7127, 8000,
 ];
+
+/// Closest panel detent for a cutoff set between detents by the sequencer.
+pub(super) fn cutoff_detent(hz: u16) -> u8 {
+    let upper = CUTOFF_HZ
+        .partition_point(|&frequency| frequency < hz)
+        .min(usize::from(Knob::Cutoff.limits().1));
+    let lower = upper.saturating_sub(1);
+    let nearest = if hz.abs_diff(CUTOFF_HZ[lower]) < hz.abs_diff(CUTOFF_HZ[upper]) {
+        lower
+    } else {
+        upper
+    };
+    u8::try_from(nearest).expect("43 cutoff detents")
+}
 
 // Finer steps around the stock 1.5 ms attack, then out to 60 ms.
 const ATTACK_US: [u16; 18] = [
@@ -111,6 +137,10 @@ impl Controls {
         self.last[self.bank as usize]
     }
 
+    pub(super) fn detent(self, knob: Knob) -> u8 {
+        self.values[knob as usize]
+    }
+
     pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
         for (knob, delta) in self.bank.knobs().into_iter().zip(detents) {
             self.turn(knob, delta);
@@ -121,15 +151,7 @@ impl Controls {
         if detents == 0 {
             return;
         }
-        let (min, max) = match knob {
-            Knob::Cutoff => (0, 42),
-            Knob::Resonance | Knob::Accent => (0, 100),
-            Knob::EnvMod => (0, 72),
-            Knob::Decay => (5, 200),
-            Knob::Tuning => (0, 240),
-            Knob::Attack => (0, 17),
-            Knob::Overdrive => (0, 36),
-        };
+        let (min, max) = knob.limits();
         let value = &mut self.values[knob as usize];
         *value = value.saturating_add_signed(detents).clamp(min, max);
         self.last[self.bank as usize] = knob;
@@ -150,7 +172,7 @@ impl Controls {
 
     pub(super) fn readout(self) -> (&'static [u8], i32, &'static [u8]) {
         let knob = self.last();
-        let value = i32::from(self.values[knob as usize]);
+        let value = i32::from(self.detent(knob));
         let (number, units): (_, &[u8; 5]) = match knob {
             Knob::Cutoff => (i32::from(self.cutoff_hz()), b"HZ   "),
             Knob::Resonance | Knob::Accent => (value, b"PCT  "),
@@ -233,5 +255,23 @@ impl Controls {
             batch.push(at(message)).expect("one note change");
         }
         batch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automation_uses_the_same_cutoff_scale_as_the_encoder() {
+        for (detent, hz) in CUTOFF_HZ.into_iter().enumerate() {
+            assert_eq!(usize::from(cutoff_detent(hz)), detent);
+        }
+        assert_eq!(cutoff_detent(0), 0);
+        assert_eq!(cutoff_detent(u16::MAX), 42);
+        assert_eq!(
+            cutoff_detent(316),
+            Controls::DEEP_HOUSE.detent(Knob::Cutoff)
+        );
     }
 }

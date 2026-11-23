@@ -99,6 +99,7 @@ pub(super) struct Labels {
 #[derive(Clone, Copy, Default)]
 pub struct Motion {
     pub(super) position: Option<Position>,
+    pub(super) bass_automation: Option<(Channel, u8, u8)>,
     pub(super) peaks: [u8; CHANNELS],
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
 }
@@ -114,7 +115,7 @@ mod app {
     use super::{Frame, Labels, Motion, Settings};
     use crate::{
         bumper::Bumper,
-        capture::{Capture, FLAT},
+        capture::{Capture, FLAT, Scale},
         inserts::BassInserts,
         instrument::{
             BUS_COUNT, FxMixer, FxNode, Instrument, Message, Node, Note, Part, Programs,
@@ -669,10 +670,12 @@ mod app {
                     [0; CHANNELS]
                 };
                 let position = self.instrument.position;
+                let bass_automation = self.instrument.bass_automation(settings.nav.focus);
                 let drums = self.instrument.drums;
                 self.shared().motion.lock(|motion| {
                     *motion = Motion {
                         position,
+                        bass_automation,
                         peaks,
                         drums,
                     };
@@ -720,10 +723,17 @@ mod app {
         async fn exec(&mut self, (): ()) {
             while let Ok(block) = self.blocks.recv().await {
                 let changed = self.previous.replace(block.labels) != Some(block.labels);
-                let silent = block.samples.iter().all(|&s| s == 0);
+                let scale = if block.labels.view == View::Scope
+                    && block.labels.focus == Part::Bass
+                    && block.labels.voice_tap
+                {
+                    Scale::Auto
+                } else {
+                    Scale::Fixed
+                };
                 let trace = self
                     .capture
-                    .push(&block.samples, silent, changed || block.gap);
+                    .push(&block.samples, changed || block.gap, scale);
                 if changed || trace.is_some() {
                     self.shared().frame.lock(|frame| {
                         // Publish the new page even while waiting for its first trigger.

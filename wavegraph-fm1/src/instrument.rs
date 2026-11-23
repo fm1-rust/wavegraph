@@ -212,7 +212,7 @@ impl Track {
             organ: OrganControls::INITIAL,
             organ_keys: [OrganKey::EMPTY; POLYPHONY],
             mono_envelope: EnvelopeControls::INITIAL,
-            voice_tap: assignment.part.is_kit(),
+            voice_tap: matches!(assignment.part, Part::Bass | Part::Tr808 | Part::Tr909),
             drums808: wavegraph_808::Controls::INITIAL,
             panel_hits: HitLog::EMPTY,
             midi_hits: HitLog::EMPTY,
@@ -734,6 +734,11 @@ impl Instrument<'_> {
             .replace(&self.programs.0[usize::from(enabled)], BUS_COUNT)?;
         self.half_gain = enabled;
         Ok(())
+    }
+
+    pub(super) fn bass_automation(&self, channel: Channel) -> Option<(Channel, u8, u8)> {
+        let (step, fraction) = self.player.automation_phase;
+        self.automated[channel.index()].then_some((channel, step, fraction))
     }
 
     pub(super) fn render<'b, const N: usize>(
@@ -1344,6 +1349,11 @@ mod tests {
             instrument.transport.toggle();
             instrument.render(parts, &mut buses)?;
             assert!(instrument.automated[2]);
+            assert_eq!(
+                instrument.bass_automation(Channel::Three),
+                Some((Channel::Three, 0, 0))
+            );
+            assert_eq!(instrument.bass_automation(Channel::One), None);
             check_sends(&buses);
             let pitch = instrument.events[2]
                 .iter()
@@ -1360,6 +1370,7 @@ mod tests {
             };
             instrument.render(parts, &mut buses)?;
             assert!(!instrument.automated[2]);
+            assert_eq!(instrument.bass_automation(Channel::Three), None);
             check_sends(&buses);
             let events = &instrument.events[2];
             assert_eq!(

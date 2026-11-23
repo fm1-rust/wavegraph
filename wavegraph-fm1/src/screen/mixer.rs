@@ -271,6 +271,23 @@ impl<'a> Band<'a> {
         max: u8,
         [face, rim, ink]: [Rgb565; 3],
     ) {
+        let tip = Self::knob_offset(value, max);
+        let body = PrimitiveStyleBuilder::new()
+            .fill_color(face)
+            .stroke_color(rim)
+            .stroke_width(1)
+            .build();
+        Circle::with_center(center, 21)
+            .into_styled(body)
+            .draw(self)
+            .expect("infallible strip");
+        Line::new(center, center + tip)
+            .into_styled(PrimitiveStyle::with_stroke(ink, 2))
+            .draw(self)
+            .expect("infallible strip");
+    }
+
+    pub(super) fn knob_offset(value: u8, max: u8) -> Point {
         const DIRECTIONS: [(i32, i32); 17] = [
             (-5, 5),
             (-6, 4),
@@ -292,19 +309,7 @@ impl<'a> Band<'a> {
         ];
         let position = usize::from(value) * (DIRECTIONS.len() - 1) / usize::from(max);
         let (x, y) = DIRECTIONS[position];
-        let body = PrimitiveStyleBuilder::new()
-            .fill_color(face)
-            .stroke_color(rim)
-            .stroke_width(1)
-            .build();
-        Circle::with_center(center, 21)
-            .into_styled(body)
-            .draw(self)
-            .expect("infallible strip");
-        Line::new(center, center + Point::new(x, y))
-            .into_styled(PrimitiveStyle::with_stroke(ink, 2))
-            .draw(self)
-            .expect("infallible strip");
+        Point::new(x, y)
     }
 
     pub(super) fn rect(&mut self, point: Point, size: Size, color: Rgb565) {
