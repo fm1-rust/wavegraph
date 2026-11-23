@@ -13,7 +13,7 @@ use wavegraph::{
     dsp::Software,
 };
 use wavegraph_303::{Message as BassMessage, Tb303};
-use wavegraph_fx::{Message as FxMessage, Reverb, SendMixer};
+use wavegraph_fx::{ChannelMixer, Message as FxMessage, MixerMessage, Reverb};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
@@ -60,7 +60,7 @@ impl Part {
     pub(super) const fn tap(self) -> usize {
         match self {
             Self::Mono => 0,
-            Self::Organ => 6,
+            Self::Organ => 1,
             Self::Bass => 2,
         }
     }
@@ -372,11 +372,81 @@ impl Parts {
     }
 }
 
-/// Global sends and return settings, independent of the active instrument.
+/// The global mixer page edits one parameter on all four strips at once.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum MixerBank {
+    #[default]
+    Volume,
+    Reverb,
+}
+
+impl MixerBank {
+    pub(super) fn turn(&mut self, detents: i8) {
+        if detents % 2 != 0 {
+            *self = match *self {
+                Self::Volume => Self::Reverb,
+                Self::Reverb => Self::Volume,
+            };
+        }
+    }
+}
+
+/// Four track levels and effect sends persist across instrument selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Mixer {
+    pub(super) volume: [u8; 4],
+    pub(super) reverb: [u8; 4],
+}
+
+impl Mixer {
+    // Preserve the existing 303 quarter-gain mix and original 303/mono sends.
+    // The organ joins the reverb bus at zero send by default.
+    pub(super) const DRY: Self = Self {
+        volume: [128, 128, 32, 128],
+        reverb: [0; 4],
+    };
+    pub(super) const INITIAL: Self = Self {
+        reverb: [32, 0, 24, 0],
+        ..Self::DRY
+    };
+
+    pub(super) fn turn_knobs(&mut self, bank: MixerBank, detents: [i8; 4]) {
+        let values = match bank {
+            MixerBank::Volume => &mut self.volume,
+            MixerBank::Reverb => &mut self.reverb,
+        };
+        for (value, delta) in values.iter_mut().zip(detents) {
+            *value = value.saturating_add_signed(delta).min(128);
+        }
+    }
+
+    fn events(self, previous: Option<Self>) -> EventBatch {
+        let mut events = EventBatch::new();
+        for track in 0..4 {
+            if previous.is_none_or(|old| old.volume[track] != self.volume[track]) {
+                events
+                    .push(at(MixerMessage::Level {
+                        track: u8::try_from(track).expect("four mixer tracks"),
+                        level: self.volume[track],
+                    }))
+                    .expect("at most eight mixer changes");
+            }
+            if previous.is_none_or(|old| old.reverb[track] != self.reverb[track]) {
+                events
+                    .push(at(MixerMessage::Send {
+                        track: u8::try_from(track).expect("four mixer tracks"),
+                        level: self.reverb[track],
+                    }))
+                    .expect("at most eight mixer changes");
+            }
+        }
+        events
+    }
+}
+
+/// Shared effect return settings. Sends live on the mixer page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Fx {
-    pub(super) mono: u8,
-    pub(super) bass: u8,
     pub(super) decay: u8,
     pub(super) wet: u8,
     pub(super) enabled: bool,
@@ -384,49 +454,22 @@ pub(super) struct Fx {
 
 impl Fx {
     pub(super) const DRY: Self = Self {
-        mono: 0,
-        bass: 0,
         decay: 80,
         wet: 64,
         enabled: true,
     };
-    pub(super) const INITIAL: Self = Self {
-        mono: 32,
-        bass: 24,
-        ..Self::DRY
-    };
+    pub(super) const INITIAL: Self = Self::DRY;
 
     #[cfg_attr(test, expect(dead_code))]
     pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
-        for (value, delta) in [
-            &mut self.mono,
-            &mut self.bass,
-            &mut self.decay,
-            &mut self.wet,
-        ]
-        .into_iter()
-        .zip(detents)
-        {
-            *value = value.saturating_add_signed(delta);
-        }
-        self.mono = self.mono.min(128);
-        self.bass = self.bass.min(128);
-        self.decay = self.decay.min(127);
-        self.wet = self.wet.min(128);
+        self.decay = self.decay.saturating_add_signed(detents[0]).min(127);
+        self.wet = self.wet.saturating_add_signed(detents[1]).min(128);
     }
 
     fn events(self, previous: Option<Self>) -> EventBatch {
         let mut events = EventBatch::new();
         let old = previous.unwrap_or(Self::DRY);
         for (changed, event) in [
-            (
-                previous.is_none_or(|_| old.mono != self.mono),
-                FxMessage::SendA(self.mono),
-            ),
-            (
-                previous.is_none_or(|_| old.bass != self.bass),
-                FxMessage::SendB(self.bass),
-            ),
             (
                 previous.is_none_or(|_| old.decay != self.decay),
                 FxMessage::Decay(self.decay),
@@ -441,19 +484,22 @@ impl Fx {
             ),
         ] {
             if changed {
-                events.push(at(event)).expect("five effect changes at most");
+                events
+                    .push(at(event))
+                    .expect("three effect changes at most");
             }
         }
         events
     }
 }
 
-// Instruments and global effects share one message vocabulary.
+// Instruments, mixer and global effects share one message vocabulary.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Message {
     Mono(MonoMessage),
     Organ(OrganMessage),
     Bass(BassMessage),
+    Mixer(MixerMessage),
     Fx(FxMessage),
     Transport(Transport),
     BeatPhase(Option<u8>),
@@ -472,6 +518,11 @@ impl From<OrganMessage> for Message {
 impl From<BassMessage> for Message {
     fn from(value: BassMessage) -> Self {
         Self::Bass(value)
+    }
+}
+impl From<MixerMessage> for Message {
+    fn from(value: MixerMessage) -> Self {
+        Self::Mixer(value)
     }
 }
 impl From<FxMessage> for Message {
@@ -523,10 +574,10 @@ impl Process<Message, I24> for Node<'_> {
     }
 }
 
-/// Stateful shared send node; its gains are updated by control events.
-pub(super) struct FxSend(pub(super) SendMixer);
+/// Stateful dry mixer and global send; no audio parameter changes rebuild the graph.
+pub(super) struct FxMixer(pub(super) ChannelMixer<4>);
 
-impl Process<Message, I24> for FxSend {
+impl Process<Message, I24> for FxMixer {
     fn inlets(&self) -> &[Port] {
         self.0.inlets()
     }
@@ -537,13 +588,13 @@ impl Process<Message, I24> for FxSend {
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         dispatch(&mut self.0, cx, |m| match m {
-            Message::Fx(m) => Some(m),
+            Message::Mixer(m) => Some(m),
             _ => None,
         });
     }
 }
 
-/// One reverb tank shared by the monosynth and 303; no storage on the ISR stack.
+/// One reverb tank shared by all instruments; no storage on the ISR stack.
 pub(super) struct FxReverb<'a>(pub(super) Reverb<'a>);
 
 impl Process<Message, I24> for FxReverb<'_> {
@@ -588,26 +639,22 @@ fn dispatch<M>(
     });
 }
 
-pub(super) const BUS_COUNT: usize = 12;
-type Plan = Program<'static, BUS_COUNT, 2>;
+pub(super) const BUS_COUNT: usize = 9;
+type Plan = Program<'static, 8, 4>;
 pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
     pub(super) fn decode() -> Result<Self, Error> {
-        // The organ joins the dry mix after the monosynth and 303 reverb sends.
+        // Four persistent sources feed a shared post-fader dry/send mixer.
         const ROUTE: &[u8] = &[
             VERSION, 1, 0, 0, 1, // CALL mono -> 0
-            1, 2, 0, 1, // CALL bass -> 1
-            2, 1, 32, // GAIN bass by 1/4 -> 2
-            3, 0, 2, // MIX mono and bass -> 3
-            1, 3, 2, 1, 0, 2, // CALL send mixer(0,2) -> 4
-            1, 4, 1, 1, 4, // CALL reverb(4) -> 5
-            1, 1, 0, 1, // CALL organ -> 6
-            3, 3, 6, // MIX all three dry voices -> 7
-            3, 7, 5, // MIX dry+wet -> 8
-            1, 5, 0, 1, // CALL sequenced 909 -> 9
-            3, 8, 9, // MIX drum bus with synths and reverb -> 10
-            2, 10, 64, // GAIN optional headroom -> 11
+            1, 1, 0, 1, // CALL organ -> 1
+            1, 2, 0, 1, // CALL bass -> 2
+            1, 5, 0, 1, // CALL sequenced 909 -> 3
+            1, 3, 4, 2, 0, 1, 2, 3, // CALL mixer(0,1,2,3) -> dry 4, send 5
+            1, 4, 1, 1, 5, // CALL reverb(5) -> 6
+            3, 4, 6, // MIX dry+wet -> 7
+            2, 7, 64, // GAIN optional headroom -> 8
         ];
         const DRY_LEN: usize = ROUTE.len() - 3;
         Ok(Self([
@@ -624,6 +671,8 @@ impl Programs {
             programs: self,
             patch: self.0[0].bind(nodes)?,
             half_gain: false,
+            mixer: Mixer::DRY,
+            previous_mixer: None,
             fx: Fx::DRY,
             previous_fx: None,
             transport: Transport::INITIAL,
@@ -636,8 +685,10 @@ impl Programs {
 
 pub(super) struct Instrument<'a> {
     programs: &'a Programs,
-    patch: Patch<'a, 'a, Message, I24, 2>,
+    patch: Patch<'a, 'a, Message, I24, 4>,
     pub(super) half_gain: bool,
+    mixer: Mixer,
+    previous_mixer: Option<Mixer>,
     fx: Fx,
     previous_fx: Option<Fx>,
     pub(super) transport: Transport,
@@ -647,6 +698,10 @@ pub(super) struct Instrument<'a> {
 }
 
 impl Instrument<'_> {
+    pub(super) fn set_mixer(&mut self, mixer: Mixer) {
+        self.mixer = mixer;
+    }
+
     pub(super) fn set_fx(&mut self, fx: Fx) {
         self.fx = fx;
     }
@@ -670,6 +725,7 @@ impl Instrument<'_> {
         let bass_events = parts
             .bass
             .events(old.bass, bass, old.voices[Part::Bass as usize]);
+        let mixer_events = self.mixer.events(self.previous_mixer);
         let fx_events = self.fx.events(self.previous_fx);
         let transport_event = (self.previous_transport != Some(self.transport))
             .then(|| at(Message::Transport(self.transport)));
@@ -680,7 +736,7 @@ impl Instrument<'_> {
                 &mono_events,
                 &organ_events,
                 &bass_events,
-                &fx_events,
+                &mixer_events,
                 &fx_events,
                 transport_event.as_slice(),
             ],
@@ -693,9 +749,10 @@ impl Instrument<'_> {
             },
         )?;
         self.previous = Some(parts);
+        self.previous_mixer = Some(self.mixer);
         self.previous_fx = Some(self.fx);
         self.previous_transport = Some(self.transport);
-        Ok(&buses[if self.half_gain { 11 } else { 10 }])
+        Ok(&buses[if self.half_gain { 8 } else { 7 }])
     }
 }
 
@@ -718,7 +775,7 @@ mod tests {
         let mut organ_state = Organ::new(mono_rate, 1).expect("organ sample clock");
         let mut organ = Node::Organ(&mut organ_state);
         let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0).with_idle_suspension());
-        let mut send = FxSend(SendMixer::new());
+        let mut mixer = FxMixer(ChannelMixer::new());
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxReverb(Reverb::new(&mut storage));
         let mut drums = crate::sequencer::DrumMachine::new((24_000_000, 544));
@@ -726,7 +783,7 @@ mod tests {
             &mut mono,
             &mut organ,
             &mut bass,
-            &mut send,
+            &mut mixer,
             &mut reverb,
             &mut drums,
         ];
@@ -972,16 +1029,16 @@ mod tests {
             instrument.transport.toggle();
             let beat = *instrument.render(parts, &mut buses)?;
             assert_eq!(instrument.beat_phase, Some(1));
-            assert_eq!(beat, buses[9]);
+            assert_eq!(beat, buses[3]);
             assert!(beat.iter().any(|s| s.inner() != 0));
             parts.voices[0].gate.note = Some(note(69, 96));
             instrument.render(parts, &mut buses)?;
-            assert_ne!(buses[10], buses[8]);
+            assert_ne!(buses[7], buses[3]);
             instrument.transport.toggle();
             let tail = *instrument.render(parts, &mut buses)?;
             assert_eq!(instrument.beat_phase, None);
-            assert_eq!(buses[9], [I24::default(); 128]);
-            assert_eq!(tail, buses[8]);
+            assert_eq!(buses[3], [I24::default(); 128]);
+            assert_eq!(tail, buses[4]);
             assert!(tail.iter().any(|s| s.inner() != 0));
             Ok(())
         })
@@ -1031,10 +1088,9 @@ mod tests {
                 assert!(mono.iter().any(|s| s.inner() != 0));
                 assert!(bass.iter().any(|s| s.inner() != 0));
                 for i in 0..mix.len() {
-                    assert_eq!(
-                        mix[i],
-                        (mono[i].inner() + bass[i].inner()) >> u8::from(half)
-                    );
+                    let bass_fader = bass[i].inner() >> 2;
+                    let dry = (mono[i].inner() + bass_fader).clamp(-(1 << 23), (1 << 23) - 1);
+                    assert_eq!(mix[i], dry >> u8::from(half));
                 }
             }
             keys.release(69);
@@ -1117,24 +1173,47 @@ mod tests {
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             let mut parts = Parts::INITIAL;
             parts.voices[0].gate.note = Some(note(69, 110));
+            instrument.set_mixer(Mixer::INITIAL);
             instrument.set_fx(Fx::INITIAL);
             let mut audible_wet = false;
             for _ in 0..30 {
                 instrument.render(parts, &mut buses)?;
-                audible_wet |= buses[5].iter().any(|sample| sample.inner() != 0);
+                audible_wet |= buses[6].iter().any(|sample| sample.inner() != 0);
             }
             assert!(audible_wet, "shared send must reach the reverb tank");
             instrument.set_fx(Fx {
-                mono: 0,
-                bass: 0,
                 enabled: false,
                 ..Fx::INITIAL
             });
             instrument.render(parts, &mut buses)?;
-            assert!(buses[5].iter().all(|sample| sample.inner() == 0));
-            assert_eq!(buses[8], buses[7], "muting FX preserves dry output");
+            assert!(buses[6].iter().all(|sample| sample.inner() == 0));
+            assert_eq!(buses[7], buses[4], "muting FX preserves dry output");
             Ok(())
         })
+    }
+
+    #[test]
+    fn mixer_controls_all_four_strips_and_sends_only_live_tracks() {
+        let mut mixer = Mixer::INITIAL;
+        let mut bank = MixerBank::Volume;
+        mixer.turn_knobs(bank, [i8::MIN, 1, 8, -1]);
+        assert_eq!(mixer.volume, [0, 128, 40, 127]);
+        bank.turn(1);
+        assert_eq!(bank, MixerBank::Reverb);
+        mixer.turn_knobs(bank, [0, 12, 0, 127]);
+        assert_eq!(mixer.reverb, [32, 12, 24, 127]);
+        assert_eq!(mixer.events(None).len(), 8);
+        let initial = mixer;
+        mixer.turn_knobs(bank, [0, 0, 0, 1]);
+        assert_eq!(
+            mixer.events(Some(initial)).as_slice(),
+            &[at(MixerMessage::Send {
+                track: 3,
+                level: 128
+            })]
+        );
+        bank.turn(-1);
+        assert_eq!(bank, MixerBank::Volume);
     }
 
     #[test]

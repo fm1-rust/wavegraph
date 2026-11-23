@@ -6,6 +6,9 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+mod mixer;
+pub use mixer::{ChannelMixer, MixerMessage};
+
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::{I24, types::i24};
 
