@@ -3,6 +3,7 @@
 use crate::{
     bass::Controls,
     envelope::EnvelopeControls,
+    fx::{Fx, FxPage},
     organ::{Controls as OrganControls, OrganKey},
     sequencer::Transport,
 };
@@ -13,7 +14,7 @@ use wavegraph::{
     dsp::Software,
 };
 use wavegraph_303::{Message as BassMessage, Tb303};
-use wavegraph_fx::{ChannelMixer, Message as FxMessage, MixerMessage, Reverb};
+use wavegraph_fx::{ChannelMixer, Message as FxMessage, MixerMessage};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
@@ -378,16 +379,20 @@ pub(super) enum MixerBank {
     #[default]
     Volume,
     Reverb,
+    Delay,
 }
 
 impl MixerBank {
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "A bank index plus an i8 delta fits i16"
+    )]
     pub(super) fn turn(&mut self, detents: i8) {
-        if detents % 2 != 0 {
-            *self = match *self {
-                Self::Volume => Self::Reverb,
-                Self::Reverb => Self::Volume,
-            };
-        }
+        *self = match (i16::from(*self as u8) + i16::from(detents)).rem_euclid(3) {
+            0 => Self::Volume,
+            1 => Self::Reverb,
+            _ => Self::Delay,
+        };
     }
 }
 
@@ -396,6 +401,7 @@ impl MixerBank {
 pub(super) struct Mixer {
     pub(super) volume: [u8; 4],
     pub(super) reverb: [u8; 4],
+    pub(super) delay: [u8; 4],
 }
 
 impl Mixer {
@@ -404,6 +410,7 @@ impl Mixer {
     pub(super) const DRY: Self = Self {
         volume: [128, 128, 32, 128],
         reverb: [0; 4],
+        delay: [0; 4],
     };
     pub(super) const INITIAL: Self = Self {
         reverb: [32, 0, 24, 0],
@@ -414,6 +421,7 @@ impl Mixer {
         let values = match bank {
             MixerBank::Volume => &mut self.volume,
             MixerBank::Reverb => &mut self.reverb,
+            MixerBank::Delay => &mut self.delay,
         };
         for (value, delta) in values.iter_mut().zip(detents) {
             *value = value.saturating_add_signed(delta).min(128);
@@ -423,70 +431,36 @@ impl Mixer {
     fn events(self, previous: Option<Self>) -> EventBatch {
         let mut events = EventBatch::new();
         for track in 0..4 {
-            if previous.is_none_or(|old| old.volume[track] != self.volume[track]) {
-                events
-                    .push(at(MixerMessage::Level {
-                        track: u8::try_from(track).expect("four mixer tracks"),
+            let id = u8::try_from(track).expect("four mixer tracks");
+            for (changed, message) in [
+                (
+                    previous.is_none_or(|old| old.volume[track] != self.volume[track]),
+                    MixerMessage::Level {
+                        track: id,
                         level: self.volume[track],
-                    }))
-                    .expect("at most eight mixer changes");
-            }
-            if previous.is_none_or(|old| old.reverb[track] != self.reverb[track]) {
-                events
-                    .push(at(MixerMessage::Send {
-                        track: u8::try_from(track).expect("four mixer tracks"),
+                    },
+                ),
+                (
+                    previous.is_none_or(|old| old.reverb[track] != self.reverb[track]),
+                    MixerMessage::Send {
+                        track: id,
                         level: self.reverb[track],
-                    }))
-                    .expect("at most eight mixer changes");
-            }
-        }
-        events
-    }
-}
-
-/// Shared effect return settings. Sends live on the mixer page.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Fx {
-    pub(super) decay: u8,
-    pub(super) wet: u8,
-    pub(super) enabled: bool,
-}
-
-impl Fx {
-    pub(super) const DRY: Self = Self {
-        decay: 80,
-        wet: 64,
-        enabled: true,
-    };
-    pub(super) const INITIAL: Self = Self::DRY;
-
-    #[cfg_attr(test, expect(dead_code))]
-    pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
-        self.decay = self.decay.saturating_add_signed(detents[0]).min(127);
-        self.wet = self.wet.saturating_add_signed(detents[1]).min(128);
-    }
-
-    fn events(self, previous: Option<Self>) -> EventBatch {
-        let mut events = EventBatch::new();
-        let old = previous.unwrap_or(Self::DRY);
-        for (changed, event) in [
-            (
-                previous.is_none_or(|_| old.decay != self.decay),
-                FxMessage::Decay(self.decay),
-            ),
-            (
-                previous.is_none_or(|_| old.wet != self.wet),
-                FxMessage::Wet(self.wet),
-            ),
-            (
-                previous.is_none_or(|_| old.enabled != self.enabled),
-                FxMessage::Enabled(self.enabled),
-            ),
-        ] {
-            if changed {
-                events
-                    .push(at(event))
-                    .expect("three effect changes at most");
+                    },
+                ),
+                (
+                    previous.is_none_or(|old| old.delay[track] != self.delay[track]),
+                    MixerMessage::SendTo {
+                        send: 1,
+                        track: id,
+                        level: self.delay[track],
+                    },
+                ),
+            ] {
+                if changed {
+                    events
+                        .push(at(message))
+                        .expect("at most twelve mixer changes");
+                }
             }
         }
         events
@@ -574,8 +548,8 @@ impl Process<Message, I24> for Node<'_> {
     }
 }
 
-/// Stateful dry mixer and global send; no audio parameter changes rebuild the graph.
-pub(super) struct FxMixer(pub(super) ChannelMixer<4>);
+/// One dry sum and two independent, post-fader sends.
+pub(super) struct FxMixer(pub(super) ChannelMixer<4, 3>);
 
 impl Process<Message, I24> for FxMixer {
     fn inlets(&self) -> &[Port] {
@@ -594,10 +568,10 @@ impl Process<Message, I24> for FxMixer {
     }
 }
 
-/// One reverb tank shared by all instruments; no storage on the ISR stack.
-pub(super) struct FxReverb<'a>(pub(super) Reverb<'a>);
+/// Adapt either wet-only processor to the firmware's message type.
+pub(super) struct FxReturn<T>(pub(super) T);
 
-impl Process<Message, I24> for FxReverb<'_> {
+impl<T: Process<FxMessage, I24>> Process<Message, I24> for FxReturn<T> {
     fn inlets(&self) -> &[Port] {
         self.0.inlets()
     }
@@ -639,8 +613,9 @@ fn dispatch<M>(
     });
 }
 
-pub(super) const BUS_COUNT: usize = 9;
-type Plan = Program<'static, 8, 4>;
+const MASTER_BUS: usize = 10;
+pub(super) const BUS_COUNT: usize = MASTER_BUS + 2;
+type Plan = Program<'static, 10, 4>;
 pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
@@ -651,14 +626,16 @@ impl Programs {
             1, 1, 0, 1, // CALL organ -> 1
             1, 2, 0, 1, // CALL bass -> 2
             1, 5, 0, 1, // CALL sequenced 909 -> 3
-            1, 3, 4, 2, 0, 1, 2, 3, // CALL mixer(0,1,2,3) -> dry 4, send 5
-            1, 4, 1, 1, 5, // CALL reverb(5) -> 6
-            3, 4, 6, // MIX dry+wet -> 7
-            2, 7, 64, // GAIN optional headroom -> 8
+            1, 3, 4, 3, 0, 1, 2, 3, // CALL mixer -> dry 4, reverb send 5, delay send 6
+            1, 4, 1, 1, 5, // CALL reverb(5) -> 7
+            1, 6, 1, 1, 6, // CALL delay(6) -> 8
+            3, 4, 7, // MIX dry + reverb -> 9
+            3, 9, 8, // MIX in delay -> master 10
+            2, 10, 64, // GAIN optional headroom -> 11
         ];
-        const DRY_LEN: usize = ROUTE.len() - 3;
+        const FULL_LEN: usize = ROUTE.len() - 3;
         Ok(Self([
-            Plan::decode(&ROUTE[..DRY_LEN])?,
+            Plan::decode(&ROUTE[..FULL_LEN])?,
             Plan::decode(ROUTE)?,
         ]))
     }
@@ -673,7 +650,7 @@ impl Programs {
             half_gain: false,
             mixer: Mixer::DRY,
             previous_mixer: None,
-            fx: Fx::DRY,
+            fx: Fx::INITIAL,
             previous_fx: None,
             transport: Transport::INITIAL,
             previous_transport: None,
@@ -726,7 +703,8 @@ impl Instrument<'_> {
             .bass
             .events(old.bass, bass, old.voices[Part::Bass as usize]);
         let mixer_events = self.mixer.events(self.previous_mixer);
-        let fx_events = self.fx.events(self.previous_fx);
+        let reverb = self.fx.events(self.previous_fx, FxPage::Reverb);
+        let delay = self.fx.events(self.previous_fx, FxPage::Delay);
         let transport_event = (self.previous_transport != Some(self.transport))
             .then(|| at(Message::Transport(self.transport)));
         self.patch.render(
@@ -737,8 +715,9 @@ impl Instrument<'_> {
                 &organ_events,
                 &bass_events,
                 &mixer_events,
-                &fx_events,
+                &reverb,
                 transport_event.as_slice(),
+                &delay,
             ],
             |_, event| match event.message {
                 Message::BeatPhase(phase) => {
@@ -752,13 +731,18 @@ impl Instrument<'_> {
         self.previous_mixer = Some(self.mixer);
         self.previous_fx = Some(self.fx);
         self.previous_transport = Some(self.transport);
-        Ok(&buses[if self.half_gain { 8 } else { 7 }])
+        Ok(&buses[if self.half_gain {
+            MASTER_BUS + 1
+        } else {
+            MASTER_BUS
+        }])
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wavegraph_fx::{Delay, Reverb};
     use wavegraph_monosynth::Tuning;
 
     fn note(number: u8, velocity: u8) -> Note {
@@ -777,15 +761,18 @@ mod tests {
         let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0).with_idle_suspension());
         let mut mixer = FxMixer(ChannelMixer::new());
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
-        let mut reverb = FxReverb(Reverb::new(&mut storage));
+        let mut reverb = FxReturn(Reverb::new(&mut storage));
+        let mut line = [0; 44_118];
+        let mut delay = FxReturn(Delay::new(&mut line, mono_rate).expect("delay sample clock"));
         let mut drums = crate::sequencer::DrumMachine::new((24_000_000, 544));
-        let mut nodes: [&mut dyn Process<Message, I24>; 6] = [
+        let mut nodes: [&mut dyn Process<Message, I24>; 7] = [
             &mut mono,
             &mut organ,
             &mut bass,
             &mut mixer,
             &mut reverb,
             &mut drums,
+            &mut delay,
         ];
         test(&mut programs.bind(&mut nodes)?)
     }
@@ -1033,7 +1020,7 @@ mod tests {
             assert!(beat.iter().any(|s| s.inner() != 0));
             parts.voices[0].gate.note = Some(note(69, 96));
             instrument.render(parts, &mut buses)?;
-            assert_ne!(buses[7], buses[3]);
+            assert_ne!(buses[MASTER_BUS], buses[3]);
             instrument.transport.toggle();
             let tail = *instrument.render(parts, &mut buses)?;
             assert_eq!(instrument.beat_phase, None);
@@ -1178,16 +1165,18 @@ mod tests {
             let mut audible_wet = false;
             for _ in 0..30 {
                 instrument.render(parts, &mut buses)?;
-                audible_wet |= buses[6].iter().any(|sample| sample.inner() != 0);
+                audible_wet |= buses[7].iter().any(|sample| sample.inner() != 0);
             }
             assert!(audible_wet, "shared send must reach the reverb tank");
-            instrument.set_fx(Fx {
-                enabled: false,
-                ..Fx::INITIAL
-            });
+            let mut fx = Fx::INITIAL;
+            fx.reverb.enabled = false;
+            instrument.set_fx(fx);
             instrument.render(parts, &mut buses)?;
-            assert!(buses[6].iter().all(|sample| sample.inner() == 0));
-            assert_eq!(buses[7], buses[4], "muting FX preserves dry output");
+            assert!(buses[7].iter().all(|sample| sample.inner() == 0));
+            assert_eq!(
+                buses[MASTER_BUS], buses[4],
+                "muting FX preserves dry output"
+            );
             Ok(())
         })
     }
@@ -1202,7 +1191,7 @@ mod tests {
         assert_eq!(bank, MixerBank::Reverb);
         mixer.turn_knobs(bank, [0, 12, 0, 127]);
         assert_eq!(mixer.reverb, [32, 12, 24, 127]);
-        assert_eq!(mixer.events(None).len(), 8);
+        assert_eq!(mixer.events(None).len(), 12);
         let initial = mixer;
         mixer.turn_knobs(bank, [0, 0, 0, 1]);
         assert_eq!(
@@ -1214,6 +1203,72 @@ mod tests {
         );
         bank.turn(-1);
         assert_eq!(bank, MixerBank::Volume);
+        bank.turn(-1);
+        assert_eq!(bank, MixerBank::Delay);
+        let original = mixer;
+        mixer.turn_knobs(bank, [2, 3, 4, 5]);
+        assert_eq!(mixer.delay, [2, 3, 4, 5]);
+        assert_eq!(mixer.reverb, original.reverb);
+        assert_eq!(mixer.volume, original.volume);
+        assert_eq!(mixer.events(Some(original)).len(), 4);
+        bank.turn(i8::MIN);
+        bank.turn(i8::MAX);
+        assert_eq!(bank, MixerBank::Reverb);
+    }
+
+    #[test]
+    fn delay_returns_after_the_drum_fader_goes_down_and_the_graph_changes() -> Result<(), Error> {
+        // Five milliseconds at 32 kHz is exactly one test block.
+        with_instrument(32_000, |instrument| {
+            let mut buses = [[I24::default(); 160]; BUS_COUNT];
+            let mut parts = Parts::INITIAL;
+            parts.voices[0].gate.note = Some(note(69, 100));
+            let mut mixer = Mixer::DRY;
+            mixer.reverb[0] = 128;
+            mixer.delay[3] = 128;
+            let mut fx = Fx::INITIAL;
+            let mut page = FxPage::Reverb;
+            page.turn(-1);
+            fx.edit(page, [-74, 15, 64, 0], false);
+            assert_eq!((fx.time_ms, fx.feedback, fx.delay.wet), (5, 50, 128));
+            assert_eq!(fx.reverb, Fx::INITIAL.reverb);
+            instrument.set_mixer(mixer);
+            instrument.set_fx(fx);
+            instrument.transport.toggle();
+            instrument.render(parts, &mut buses)?;
+            assert_eq!((buses[5], buses[6]), (buses[0], buses[3]));
+            assert_eq!(buses[8], [I24::default(); 160]);
+            let echo = buses[3].map(|s| (s.inner() / 256) << 8);
+            assert!(echo.iter().any(|&s| s != 0));
+
+            mixer.volume[3] = 0;
+            instrument.set_mixer(mixer);
+            instrument.set_half_gain(true)?;
+            let master = instrument.render(parts, &mut buses)?.map(I24::inner);
+            assert_eq!(buses[6], [I24::default(); 160]);
+            assert_eq!(buses[8].map(I24::inner), echo);
+            for (i, sample) in master.into_iter().enumerate() {
+                assert_eq!(
+                    sample,
+                    (buses[9][i].inner() + echo[i]).clamp(-(1 << 23), (1 << 23) - 1) >> 1
+                );
+            }
+            fx.edit(page, [0; 4], true);
+            instrument.set_fx(fx);
+            instrument.render(parts, &mut buses)?;
+            assert!(buses[8].iter().all(|s| s.inner() == 0));
+            fx.edit(page, [0; 4], true);
+            instrument.set_fx(fx);
+            instrument.render(parts, &mut buses)?;
+            assert_eq!(buses[8].map(I24::inner), echo.map(|s| (s / 1024) << 8));
+            // Both returns are now audible from different tracks.
+            for _ in 0..3 {
+                instrument.render(parts, &mut buses)?;
+            }
+            assert!(buses[7].iter().any(|s| s.inner() != 0));
+            assert!(buses[8].iter().any(|s| s.inner() != 0));
+            Ok(())
+        })
     }
 
     #[test]
