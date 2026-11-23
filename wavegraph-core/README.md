@@ -21,6 +21,7 @@ can represent bangs, numbers, symbols and lists. Signal samples default to
 `f32` and signed 24-bit PCM and stores messages in a fixed-capacity `heapless::Vec`.
 
 A board adapter can implement `Dsp<S>` to provide block gain and mix kernels.
+Oscillators can share a `Tuning` with MIDI phase increments and the output sample period.
 The core crate has no dependencies. The scalar implementations and interpreter
 live in `wavegraph`.
 

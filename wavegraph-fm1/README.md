@@ -12,8 +12,9 @@ four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
 | 4 | [TR-909](../instruments/wavegraph-909/) | Four-on-the-floor kick, backbeat snare and clap, and offbeat closed hats. |
 
 All four patterns start enabled. GLO lets any channel host any instrument,
-including the [monosynth](../instruments/wavegraph-monosynth/) and
-[M1-inspired organ](../instruments/wavegraph-organ/).
+including the [monosynth](../instruments/wavegraph-monosynth/),
+[M1-inspired organ](../instruments/wavegraph-organ/) and
+[Super Saw](../instruments/wavegraph-supersaw/).
 The transport starts stopped. Keys and USB MIDI also work with it stopped.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
@@ -32,10 +33,11 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
-| SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
+| SELECT encoder | Transpose the monosynth, organ or Super Saw by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
-| ENV | Open or close the selected melodic instrument’s envelope page. ENV stays lit while the page is open. |
+| Knobs 1–2 on the Super Saw | Adjust DETUNE and MIX, each from 0 to 127. |
+| ENV | Open or close the monosynth, organ or 303 envelope page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
@@ -50,7 +52,7 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
-| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, KIT for either drum machine) and the post-MASTER DAC mix. |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -95,6 +97,23 @@ list is inspired by the FM-1's stock patch-selector overlay. A bright outline
 and dark fill mark the selected row over the dimmed instrument page. The scope
 and controls stay live while browsing channels. The list closes one second after the
 last turn.
+
+## Super Saw
+
+Press **GLO**, turn **SELECT** to highlight a strip, then turn **PRESETS** to
+**SUPER SAW**, the last entry after TR-808. Press **GLO** again to play it.
+The strip keeps its MIDI channel, level and sends. Each assigned instance has
+its own seven oscillators and panel settings.
+
+On the blue JP-8080-style panel, knob 1 (**DETUNE**) sets the spread of the
+six side saws and knob 2 (**MIX**) sets their level around the center saw.
+Both dials track edits while a note is sounding. The 240 × 168 scope opens
+on the selected oscillator output (**OSC**). Press **SEL** to see the
+post-MASTER mix (**DAC**). The small display shows the channel and the held
+key, or the pattern status during playback. The four-bar pattern leaves space
+between sustained upper notes so the beating is audible.
+
+![Super Saw on channel one with the live waveform and panel controls](assets/supersaw.png)
 
 ## VCA envelope
 
@@ -278,7 +297,7 @@ SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
 Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the five instruments,
+the new assignment immediately. Any slot can run any of the six instruments,
 including four independent TB-303s. The slot keeps its MIDI channel, fader,
 sends and sequence mute. The new processor starts from its factory settings.
 

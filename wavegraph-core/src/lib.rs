@@ -2,8 +2,11 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod tuning;
+
 pub mod bytecode;
 pub use bytecode::Op;
+pub use tuning::Tuning;
 
 /// A target can implement these operations with its own DSP kernels. Each
 /// slice has the same frame count and the output is distinct from the inputs.

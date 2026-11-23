@@ -887,6 +887,7 @@ dependencies = [
  "wavegraph-monosynth",
  "wavegraph-organ",
  "wavegraph-sample",
+ "wavegraph-supersaw",
 ]
 
 [[package]]
@@ -925,6 +926,15 @@ name = "wavegraph-sampler"
 version = "0.1.0"
 dependencies = [
  "wavegraph",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
+name = "wavegraph-supersaw"
+version = "0.1.0"
+dependencies = [
+ "micromath",
  "wavegraph-core",
  "wavegraph-sample",
 ]
