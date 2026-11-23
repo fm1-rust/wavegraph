@@ -34,7 +34,7 @@ pub struct Settings {
 
 impl Settings {
     const INITIAL: Self = Self {
-        parts: Parts::INITIAL,
+        parts: Parts::DEEP_HOUSE,
         focus: Part::Mono,
         env_mode: false,
         fx_view: false,
@@ -110,7 +110,7 @@ mod app {
         },
         overload::Overloads,
         screen::Screen,
-        sequencer::{DrumMachine, Sequencer},
+        sequencer::{DrumMachine, Position, Sequencer, Track},
     };
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
@@ -133,7 +133,6 @@ mod app {
         Process,
         control::{Controller, EditQueue, Host},
     };
-    use wavegraph_303::Tb303;
     use wavegraph_fx::{ChannelMixer, Delay, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::{Monosynth, Tuning};
     use wavegraph_organ::Organ;
@@ -161,7 +160,7 @@ mod app {
         leds: Leds,
         frame: Frame,
         overloads: Overloads,
-        beat_phase: Option<u8>,
+        position: Option<Position>,
     }
 
     #[init]
@@ -200,9 +199,7 @@ mod app {
             [
                 Node::Mono(Monosynth::new(&TUNING).with_idle_suspension()),
                 Node::Organ(ORGAN.take()),
-                Node::Bass(
-                    Tb303::new(FRAME_RATE.0 as f32 / FRAME_RATE.1 as f32).with_idle_suspension(),
-                ),
+                Node::bass(FRAME_RATE.0 as f32 / FRAME_RATE.1 as f32),
             ]
         });
         let (mixer, reverb, delay) = EFFECTS.init_with(|| {
@@ -214,7 +211,7 @@ mod app {
         });
         let drums = DRUMS.init_with(|| DrumMachine::new(FRAME_RATE));
         let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums, delay]);
-        let instrument = programs.bind(nodes).expect("instrument ports");
+        let instrument = programs.bind(nodes, FRAME_RATE).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
         let (editor, host) = EDITS.take().split();
@@ -231,7 +228,7 @@ mod app {
                     labels: Settings::INITIAL.labels(false),
                 },
                 overloads: Overloads::default(),
-                beat_phase: None,
+                position: None,
             },
             TaskInits {
                 audio: Audio {
@@ -312,12 +309,14 @@ mod app {
                 PlayLedState::Red
             });
             if scan.pressed(Button::Seq) {
+                if self.seq.page.is_none() {
+                    self.seq.track = Track::from(self.keyboard.focus);
+                }
                 self.seq.toggle_page();
             } else if scan.pressed(Button::Home)
                 || scan.pressed(Button::Env)
                 || scan.pressed(Button::Fx)
                 || scan.pressed(Button::Glo)
-                || scan.encoder_delta(Encoder::Presets) != 0
             {
                 self.seq.page = None;
             }
@@ -325,6 +324,21 @@ mod app {
                 scan.encoder_delta(Encoder::Select),
                 scan.encoder_delta(Encoder::Knob3),
             );
+            let presets = scan.encoder_delta(Encoder::Presets);
+            if self.seq.page.is_some() {
+                self.seq.turn_track(presets);
+                self.seq.turn_bar(scan.encoder_delta(Encoder::Knob2));
+                if scan.pressed(Button::Sel) {
+                    self.seq.toggle_track();
+                }
+                // Browsing the drum pattern leaves the live keyboard on its
+                // last melodic instrument; held keys always retain ownership.
+                if let Some(part) = self.seq.track.part() {
+                    self.keyboard.focus = part;
+                }
+            } else {
+                self.keyboard.focus.turn_preset(presets);
+            }
             self.leds.set(Button::Seq, self.seq.page.is_some());
             let now = cycles();
             // Time the recovery chord against the crystal even if scan interrupts run late.
@@ -351,9 +365,6 @@ mod app {
             };
             self.leds.set(Button::OctaveDown, octave < 0 && lit);
             self.leds.set(Button::OctaveUp, octave > 0 && lit);
-            self.keyboard
-                .focus
-                .turn_preset(scan.encoder_delta(Encoder::Presets));
             // Release first so a key swap in the same sweep can start a new phrase.
             for key in PianoKey::all().filter(|&key| scan.released(key)) {
                 self.keyboard.release(53 + key.index());
@@ -402,7 +413,9 @@ mod app {
                     self.settings.mixer_view = false;
                     self.settings.menu_since = None;
                 }
-                if before.focus != focus || scan.encoder_delta(Encoder::Presets) != 0 {
+                if seq.page.is_none()
+                    && (before.focus != focus || scan.encoder_delta(Encoder::Presets) != 0)
+                {
                     self.settings.menu_since = Some(ticks());
                     self.settings.env_mode = false;
                 }
@@ -520,7 +533,7 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, beat_phase])]
+    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, position])]
     struct Audio {
         output: Output,
         instrument: Instrument<'static>,
@@ -546,6 +559,7 @@ mod app {
                 self.instrument.set_mixer(settings.mixer);
                 self.instrument.set_fx(settings.fx);
                 self.instrument.transport = settings.seq.transport;
+                self.instrument.tracks = settings.seq.enabled;
                 let mono = self
                     .instrument
                     .render(settings.parts, self.buses)
@@ -556,8 +570,8 @@ mod app {
             if result == Refill::Written {
                 self.host.submitted(revision, self.first_frame);
                 // Keep the visual clock current even when scope capture drops a block.
-                let phase = self.instrument.beat_phase;
-                self.shared().beat_phase.lock(|current| *current = phase);
+                let position = self.instrument.position;
+                self.shared().position.lock(|current| *current = position);
             }
             self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
             if result == Refill::Written && !self.tap.is_full() {
@@ -666,7 +680,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, beat_phase])]
+    #[async_task(priority = 1, shared = [frame, overloads, position])]
     struct Draw {
         port: Option<DisplayPort>,
         clock: Clock,
@@ -686,9 +700,9 @@ mod app {
             loop {
                 let frame = self.shared().frame.lock(|f| *f);
                 let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
-                let phase = self.shared().beat_phase.lock(|phase| *phase);
+                let position = self.shared().position.lock(|position| *position);
                 if screen
-                    .paint(&mut lcd, &mut self.clock, &frame, severity, phase)
+                    .paint(&mut lcd, &mut self.clock, &frame, severity, position)
                     .await
                     .is_err()
                 {

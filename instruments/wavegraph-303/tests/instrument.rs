@@ -1,7 +1,7 @@
 //! Render the 303 through the patch interpreter and compare it to the native voice.
 use wavegraph::{Event, Port, Process, bytecode::Program, dsp::Software};
 use wavegraph_303::{Message, Tb303, Voice, VoiceParams, Waveform};
-use wavegraph_sample::{I24, types::i24};
+use wavegraph_sample::{I24, Sample, types::i24};
 
 const RATE: f32 = 24_000_000.0 / 544.0;
 const PROGRAM: &[u8] = &[1, 1, 0, 0, 1]; // Call object 0 with one signal output.
@@ -154,5 +154,73 @@ fn pcm_output_saturates_at_both_rails() {
             pcm.inner(),
             quantized.clamp(i24::MIN.inner(), i24::MAX.inner())
         );
+    }
+}
+
+#[test]
+fn output_gain_preserves_hot_voice_shape_before_pcm_saturation() {
+    const GAIN: f32 = 0.0625;
+    const FRAMES: usize = 8192;
+    let mut unity = Tb303::new(RATE);
+    let mut quieter_float = Tb303::new(RATE).with_output_gain(GAIN);
+    let mut quieter_pcm = Tb303::new(RATE).with_output_gain(GAIN);
+    let params = VoiceParams {
+        cutoff_hz: 1200.0,
+        resonance: 0.94,
+        overdrive_db: 28.0,
+        accent: 0.9,
+        ..VoiceParams::default()
+    };
+    unity.params = params;
+    quieter_float.params = params;
+    quieter_pcm.params = params;
+    let events = [
+        at(0, note(38, true, false)),
+        at(4096, note(45, false, true)),
+    ];
+    let program = Program::<1>::decode(PROGRAM).expect("303 patch");
+    let mut raw = [[0.0_f32; FRAMES]];
+    let mut scaled = [[0.0_f32; FRAMES]];
+    let mut pcm = [[I24::default(); FRAMES]];
+    for (voice, output) in [(&mut unity, &mut raw), (&mut quieter_float, &mut scaled)] {
+        let mut objects: [&mut dyn Process<Message, f32>; 1] = [voice];
+        program
+            .bind(&mut objects)
+            .expect("float source")
+            .render(&mut Software, output, &[&events], |_, event| Err(event))
+            .expect("hot float phrase");
+    }
+    let mut objects: [&mut dyn Process<Message, I24>; 1] = [&mut quieter_pcm];
+    program
+        .bind(&mut objects)
+        .expect("PCM source")
+        .render(&mut Software, &mut pcm, &[&events], |_, event| Err(event))
+        .expect("hot PCM phrase");
+
+    assert!(raw[0].iter().any(|sample| sample.abs() > 1.0));
+    let peak = raw[0]
+        .iter()
+        .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+    assert!(
+        scaled[0].iter().all(|sample| sample.abs() < 1.0),
+        "raw peak {peak}"
+    );
+    for ((&raw, &scaled), &pcm) in raw[0].iter().zip(&scaled[0]).zip(&pcm[0]) {
+        assert_eq!(scaled, raw * GAIN);
+        assert_eq!(pcm, scaled.to_sample::<I24>());
+    }
+    // If gain were applied after clamping, every sample would remain at or below
+    // GAIN. These overrange raw samples retain their shape in the attenuated PCM.
+    assert!(
+        pcm[0]
+            .iter()
+            .any(|sample| sample.to_sample::<f32>().abs() > GAIN)
+    );
+}
+
+#[test]
+fn output_gain_rejects_invalid_values() {
+    for gain in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.01, 1.01] {
+        assert!(std::panic::catch_unwind(|| Tb303::new(RATE).with_output_gain(gain)).is_err());
     }
 }

@@ -52,6 +52,14 @@ impl Controls {
         last: Knob::Tone,
     };
 
+    /// Softer upper harmonics and a short tail around the factory chord stabs.
+    pub(super) const DEEP_HOUSE: Self = Self {
+        tone: 56,
+        percussion: 28,
+        envelope: EnvelopeControls::HOUSE_CHORDS,
+        ..Self::INITIAL
+    };
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "An i8 delta times five fits i16"

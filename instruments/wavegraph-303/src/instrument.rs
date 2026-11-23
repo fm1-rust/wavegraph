@@ -58,6 +58,7 @@ pub struct Tb303 {
     voice: Voice,
     held_note: Option<u8>,
     suspend_idle: bool,
+    output_gain: f32,
 }
 
 impl Tb303 {
@@ -69,6 +70,7 @@ impl Tb303 {
             voice: Voice::new(sample_rate),
             held_note: None,
             suspend_idle: false,
+            output_gain: 1.0,
         }
     }
 
@@ -119,6 +121,25 @@ impl Tb303 {
         self
     }
 
+    /// Attenuate the voice after its filter and overdrive, before output conversion.
+    ///
+    /// The default gain is `1.0`. A smaller gain reserves mixing headroom and
+    /// avoids clipping a hot resonant voice at the [`I24`] rails; it leaves the
+    /// filter's drive and internal signal unchanged. The same gain applies to
+    /// native `f32` output. A gain of `0.0` mutes the output while the voice runs.
+    ///
+    /// # Panics
+    /// Panics if `gain` is not finite or is outside `0.0..=1.0`.
+    #[must_use]
+    pub fn with_output_gain(mut self, gain: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&gain),
+            "303 output gain must be finite and in 0.0..=1.0"
+        );
+        self.output_gain = gain;
+        self
+    }
+
     fn render<S: OutputSample>(&mut self, output: &mut [S]) {
         if output.is_empty() {
             return;
@@ -128,7 +149,11 @@ impl Tb303 {
                 S::write(sample, 0.0);
             }
         } else {
-            self.voice.render_with(&self.params, output, S::write);
+            let gain = self.output_gain;
+            self.voice
+                .render_with(&self.params, output, |sample, value| {
+                    S::write(sample, value * gain);
+                });
         }
     }
 }

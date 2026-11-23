@@ -8,7 +8,7 @@ use crate::{
     firmware::Frame,
     fx::FxPage,
     instrument::{Mixer, MixerBank, Part},
-    sequencer::{SeqPage, Transport},
+    sequencer::{Position, SeqPage, Sequencer, Track},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
@@ -22,6 +22,7 @@ use fm1_rticx::{
 use static_cell::{ConstStaticCell, StaticCell};
 
 mod selector;
+mod sequencer;
 mod splash;
 
 use selector::Selector;
@@ -85,7 +86,7 @@ enum Page {
     Scope(Part),
     Fx(FxPage),
     Mixer,
-    Sequencer(SeqPage),
+    Sequencer(SeqPage, Track),
     Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
 }
@@ -96,6 +97,7 @@ pub(super) struct Screen {
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * HEIGHT],
     selector: &'static mut Selector,
+    sequence: sequencer::Grid,
     beam: Beam,
     dot: Option<Severity>,
     dot_background: Rgb565,
@@ -128,6 +130,7 @@ impl Screen {
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
             selector: SELECTOR.take(),
+            sequence: sequencer::Grid::new(),
             page: None,
             dot: None,
             dot_background: STYLE.background,
@@ -147,6 +150,7 @@ impl Screen {
         *self.text = TextGrid::with_background(style.background);
         self.beam.old_head = None;
         self.beam.old_trace = None;
+        self.sequence.invalidate();
     }
 
     #[allow(
@@ -322,62 +326,83 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         view: SeqPage,
-        transport: Transport,
+        seq: Sequencer,
+        position: Option<Position>,
     ) -> Result<(), Error> {
-        use wavegraph_909::{DEMO_PATTERN, Voice};
-
-        let page = Page::Sequencer(view);
+        let page = Page::Sequencer(view, seq.track);
         if self.page.replace(page) != Some(page) {
             self.change_view(STYLE);
             lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
-            self.text.text(0, 0, b"TR-909", palette::WHITE);
+            let title: &[u8] = match seq.track {
+                Track::Mono => b"SEQ MONO",
+                Track::Organ => b"SEQ M1 ORGAN",
+                Track::Bass => b"SEQ TB-303",
+                Track::Drums => b"SEQ TR-909",
+            };
+            self.text.text(0, 0, title, palette::WHITE);
             if view == SeqPage::Pattern {
-                self.text.text(8, 0, b"PATTERN 1/2", palette::MUTED);
-                for (bar, steps) in DEMO_PATTERN.chunks_exact(16).enumerate() {
-                    let y = 4 + bar * 4;
-                    self.text.text(0, y, b"BAR", palette::MUTED);
-                    self.text.number(4, y, 1, bar as u32 + 1, palette::WHITE);
-                    for (row, (name, voice)) in [(b"BD", Voice::Kick), (b"SD", Voice::Snare)]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        self.text.text(0, y + 1 + row, name, palette::MUTED);
-                        for (step, voices) in steps.iter().enumerate() {
-                            let hit = voices.contains(&voice);
-                            self.text.text(
-                                4 + step,
-                                y + row + 1,
-                                if hit { b"X" } else { b"." },
-                                if hit { palette::GREEN } else { palette::MUTED },
-                            );
-                        }
-                    }
-                }
-                self.text.text(0, 14, b"SELECT FOR TEMPO", palette::MUTED);
+                self.text.text(14, 0, b"B", palette::MUTED);
+                self.text.text(16, 1, b"S", palette::MUTED);
             } else {
-                self.text.text(10, 0, b"TEMPO 2/2", palette::MUTED);
+                self.text.text(0, 4, b"TEMPO 2/2", palette::MUTED);
                 self.text.text(0, 6, b"MASTER TEMPO", palette::WHITE);
                 self.text.text(0, 8, b"KNOB 3", palette::GREEN);
                 self.text.text(0, 14, b"SELECT FOR PATTERN", palette::MUTED);
             }
-            self.text.text(13, 2, b"BPM", palette::MUTED);
+            self.text.text(8, 1, b"BPM", palette::MUTED);
         }
         self.text.text(
             0,
-            2,
-            if transport.playing() {
+            1,
+            if seq.transport.playing() {
                 b"PLAY"
             } else {
                 b"STOP"
             },
-            if transport.playing() {
+            if seq.transport.playing() {
                 palette::GREEN
             } else {
                 palette::RED
             },
         );
         self.text
-            .number(9, 2, 3, u32::from(transport.bpm), palette::WHITE);
+            .number(5, 1, 3, u32::from(seq.transport.bpm), palette::WHITE);
+        let enabled = seq.enabled[seq.track as usize];
+        self.text.text(
+            12,
+            1,
+            if enabled { b"ON " } else { b"OFF" },
+            if enabled {
+                palette::GREEN
+            } else {
+                palette::MUTED
+            },
+        );
+        if view == SeqPage::Pattern {
+            self.text.text(
+                0,
+                13,
+                if seq.transport.playing() {
+                    b"PRESETS TRACK FOLLOW"
+                } else {
+                    b"PRESETS TRACK K2 BAR"
+                },
+                palette::MUTED,
+            );
+            self.text.text(
+                0,
+                14,
+                if enabled {
+                    b"SEL OFF  SELECT BPM"
+                } else {
+                    b"SEL ON   SELECT BPM"
+                },
+                palette::MUTED,
+            );
+            self.sequence
+                .paint(lcd, clock, self.text, self.strip, seq, position)
+                .await?;
+        }
         self.text.paint_async(lcd, clock).await
     }
 
@@ -387,9 +412,9 @@ impl Screen {
         clock: &mut Clock,
         frame: &Frame,
         severity: Option<Severity>,
-        beat_phase: Option<u8>,
+        position: Option<Position>,
     ) -> Result<(), Error> {
-        self.paint_page(lcd, clock, frame, beat_phase).await?;
+        self.paint_page(lcd, clock, frame, position).await?;
         if severity != self.dot {
             let color = match severity {
                 None => self.dot_background,
@@ -419,7 +444,7 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         frame: &Frame,
-        beat_phase: Option<u8>,
+        position: Option<Position>,
     ) -> Result<(), Error> {
         let labels = frame.labels;
         let browsing = labels.seq.page.is_none()
@@ -436,7 +461,7 @@ impl Screen {
         }
         if let Some(page) = labels.seq.page {
             return self
-                .paint_sequencer(lcd, clock, page, labels.seq.transport)
+                .paint_sequencer(lcd, clock, page, labels.seq, position)
                 .await;
         }
         if labels.mixer_view {
@@ -481,9 +506,13 @@ impl Screen {
         if changed_page {
             self.change_view(style);
         }
-        // Keep the silver trace and its halo between the knob legend and the readout.
+        // Keep traces, their halos and the plot's eight-pixel dirty tiles clear
+        // of the controls. Two footer rows begin at LCD y=208.
         let trace = if bass {
             frame.trace.map(|y| (25 + u16::from(y) * 3 / 4) as u8)
+        } else if organ || labels.fx_view {
+            // Preserve the center at y=120; the bottom tile ends at y=207.
+            frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
         } else {
             frame.trace
         };
@@ -508,8 +537,15 @@ impl Screen {
         } else {
             labels.focus
         };
-        self.paint_beam(lcd, clock, &trace, style, pulse_part, beat_phase)
-            .await?;
+        self.paint_beam(
+            lcd,
+            clock,
+            &trace,
+            style,
+            pulse_part,
+            position.map(|position| position.beat_phase),
+        )
+        .await?;
         if labels.fx_view {
             let output = labels.fx.output(labels.fx_page);
             self.text.text(
