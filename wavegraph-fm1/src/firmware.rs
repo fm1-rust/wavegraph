@@ -106,7 +106,7 @@ mod app {
         bumper::Bumper,
         capture::{Capture, FLAT},
         instrument::{
-            BUS_COUNT, FxMixer, FxReturn, Gate, Instrument, Keyboard, Message, Node, Note, Part,
+            BUS_COUNT, FxMixer, FxNode, Gate, Instrument, Keyboard, Message, Node, Note, Part,
             Programs,
         },
         overload::Overloads,
@@ -179,22 +179,24 @@ mod app {
             });
         let timer = Clock::start(board.timers.with_panel_scan_rate());
         let clock = timer.clock();
-        // Keep the twelve DMA-sized buses out of the task initializer and its stack.
+        // Keep the DMA-sized buses out of the task initializer and its stack.
         static BUSES: ConstStaticCell<[[I24; OUTPUT_FRAMES]; BUS_COUNT]> = ConstStaticCell::new(
             [[wavegraph_sample::types::i24::EQUILIBRIUM; OUTPUT_FRAMES]; BUS_COUNT],
         );
         static PLAYERS: StaticCell<[Node; 3]> = StaticCell::new();
         static ORGAN: ConstStaticCell<Organ> =
-            ConstStaticCell::new(Organ::new(FRAME_RATE.0, FRAME_RATE.1).expect("organ clock"));
+            ConstStaticCell::new(crate::organ::instrument(FRAME_RATE.0, FRAME_RATE.1));
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
         static DELAY_STORAGE: ConstStaticCell<[i16; RATE_HZ as usize]> =
             ConstStaticCell::new([0; RATE_HZ as usize]);
-        type Effects = (FxMixer, FxReturn<Reverb<'static>>, FxReturn<Delay<'static>>);
+        type Effects = (FxMixer, FxNode<Reverb<'static>>, FxNode<Delay<'static>>);
         static EFFECTS: StaticCell<Effects> = StaticCell::new();
         static DRUMS: StaticCell<DrumMachine> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 7];
+        static BASS_INSERT: StaticCell<FxNode<wavegraph_fx::SidechainDucker<5>>> =
+            StaticCell::new();
+        type Nodes = [&'static mut dyn Process<Message, I24>; 8];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
         let [mono, organ, bass] = PLAYERS.init_with(|| {
@@ -207,12 +209,13 @@ mod app {
         let (mixer, reverb, delay) = EFFECTS.init_with(|| {
             (
                 FxMixer(ChannelMixer::new()),
-                FxReturn(Reverb::new(REVERB_STORAGE.take())),
-                FxReturn(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("one-second delay line")),
+                FxNode(Reverb::new(REVERB_STORAGE.take())),
+                FxNode(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("one-second delay line")),
             )
         });
         let drums = DRUMS.init_with(|| DrumMachine::new(FRAME_RATE));
-        let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums, delay]);
+        let insert = BASS_INSERT.init_with(|| crate::instrument::bass_ducker(RATE_HZ));
+        let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums, delay, insert]);
         let instrument = programs.bind(nodes, FRAME_RATE).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
@@ -512,14 +515,14 @@ mod app {
                     || before.env_mode != self.settings.env_mode
                     || before.fx_view != self.settings.fx_view
                     || before.mixer_view != self.settings.mixer_view
-                    || before.fx.output(before.fx_page).enabled
-                        != self.settings.fx.output(self.settings.fx_page).enabled
+                    || before.fx.enabled(before.fx_page)
+                        != self.settings.fx.enabled(self.settings.fx_page)
                 {
                     let env = self.settings.env_mode;
                     let fx_view = self.settings.fx_view;
                     let mixer_view = self.settings.mixer_view;
                     let sel = if fx_view {
-                        self.settings.fx.output(self.settings.fx_page).enabled
+                        self.settings.fx.enabled(self.settings.fx_page)
                     } else if mixer_view {
                         false
                     } else {

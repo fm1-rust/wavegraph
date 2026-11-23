@@ -34,7 +34,10 @@ impl HandClap {
     /// Returns `None` for a zero clock.
     #[must_use]
     pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
-        let clock = Clock::new(numerator, denominator)?;
+        Some(Self::from_clock(Clock::new(numerator, denominator)?, 1.0))
+    }
+
+    pub(crate) fn from_clock(clock: Clock, decay: f32) -> Self {
         let rate = clock.hz();
         // IC26b: C42 = C43 = 4.7 nF, with 47k, 10k and 150k resistors.
         // Bilinear transform of the nominal 963 Hz band-pass (Q = 2.14).
@@ -42,7 +45,7 @@ impl HandClap {
         let a1 = 1.0 / (1.0 + g * (g + 1.0 / 2.14));
         let a2 = g * a1;
         // One-pole RC decay; all divisions happen when the voice is constructed.
-        Some(Self {
+        Self {
             band_state: 0.0,
             low_state: 0.0,
             direct_low: 0.0,
@@ -57,14 +60,14 @@ impl HandClap {
             direct: 0.0,
             tail: 0.0,
             burst_decay: clock.decay(0.0022),
-            body_decay: clock.decay(0.018),
-            tail_decay: clock.decay(0.095),
+            body_decay: clock.decay(0.018 * decay),
+            tail_decay: clock.decay(0.095 * decay),
             burst_spacing: clock.frames(0.0107),
             until_burst: 0,
             bursts_left: 0,
-            hit_frames: clock.frames(1.0).max(4),
+            hit_frames: clock.frames(0.04 + 0.96 * decay).max(4),
             remaining: 0,
-        })
+        }
     }
 
     /// Start the first of four noise bursts on the next frame.

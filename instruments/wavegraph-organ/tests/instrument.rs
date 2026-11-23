@@ -32,6 +32,19 @@ fn key(note: u8) -> Message {
 }
 
 #[test]
+fn voice_level_scales_the_polyphonic_sum_before_output_saturation() {
+    let mut stock = Organ::new(44_118, 1).expect("sample clock");
+    let mut loud = stock.clone().with_voice_level(255);
+    let mut silent = stock.clone().with_voice_level(0);
+    let chord = [60, 64, 67, 71].map(|note| event(0, key(note)));
+    let dry = render::<2048>(&mut stock, &chord);
+    let full = render::<2048>(&mut loud, &chord);
+    assert_eq!(full, dry.map(|s| (s << 4).clamp(-(1 << 23), (1 << 23) - 1)));
+    assert!(full.contains(&((1 << 23) - 1)));
+    assert_eq!(render::<64>(&mut silent, &chord), [0; 64]);
+}
+
+#[test]
 fn silent_until_note_and_event_offsets_are_exact() {
     assert!(Organ::new(0, 1).is_none());
     assert!(Organ::new(44_100, 0).is_none());

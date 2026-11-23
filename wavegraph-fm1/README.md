@@ -8,7 +8,7 @@ at a time, with a transient three-row patch-selection overlay. Each part
 keeps sounding when you select another. The default page is the green
 monosynth, with sine selected and the cutoff at 5 kHz. The shared transport
 starts stopped at 122 BPM. PLAY starts an original four-bar deep-house sketch:
-909 drums, soft organ chords, and an accented, sliding 303 with automated
+quarter-note 909 kicks, sustained M1-style chords, and an accented, sliding 303 with automated
 cutoff, resonance and overdrive. A sparse monosynth counterline is preloaded
 but muted initially.
 
@@ -38,11 +38,12 @@ but muted initially.
 | GLO | Open or close the four-strip mixer; its lamp stays on while the mixer is visible. HOME closes the page. |
 | SELECT encoder in mixer | Cycle through LEVEL, REVERB and DELAY for all four knobs. |
 | Knobs 1–4 in mixer | Set tracks 1–4 independently, 0–128: monosynth, organ, 303, and TR-909. |
-| FX | Open or close the global return view. Turn SELECT to choose reverb or delay. |
+| FX | Turn SELECT to choose REVERB, DELAY or 303 / COMP. |
 | Knobs 1–2 on FX / REVERB | Reverb decay (0–127) and wet return (0–128). |
 | Knobs 1–3 on FX / DELAY | Delay time (5–1,000 ms), feedback (0–95%) and wet return (0–128). |
+| Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
-| SEL button in FX | Mute or unmute the selected return. Its tail keeps decaying. |
+| SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
@@ -71,8 +72,7 @@ The modeling follows independent community recipes, not Korg's actual PCM
 multisample. No Korg ROM data is bundled. For a proper similarity check,
 compare a dry Organ 2 patch in the Korg M1 plug-in against both modes; a
 spectrum and envelope comparison would be more informative than a single
-house-music recording. The organ is initially **dry**; the global reverb
-continues to service the other two parts unchanged.
+house-music recording. The factory mix sends a little of the organ to the shared reverb.
 
 The organ's dark charcoal panel with lime accents and a cyan readout takes
 visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
@@ -141,8 +141,9 @@ The drum view shows all six voices: kick, snare, clap, closed/open hat and ride.
 Only changed playhead columns are redrawn between bar changes.
 
 The original factory sketch moves from D minor seventh to C major seventh.
-The organ uses quiet three-note voicings with the roots supplied by the 303.
-Its softened upper harmonics and 180 ms release leave space around the drums.
+The organ plays A3–C4–F4 and G3–B3–E4. The 303 supplies the roots below
+those voicings. The long offbeat chords have a 92% sustain level and 200 ms
+release. Shorter stabs answer them at the end of bars one and three.
 The monosynth has a separate, quiet counterline; enable it with SEL in its SEQ
 view. This spike provides fixed presets and track mutes, with no recording,
 step editing or pattern saving yet. Edit `src/sequencer/pattern.rs` to change
@@ -161,10 +162,10 @@ Pressing keys temporarily takes over that melodic track; the other tracks
 continue. After key-up, the track rejoins at its next scheduled note. Browsing
 the drum pattern leaves the live keyboard on the last selected melodic part.
 
-The 909 plays a fixed two-bar pattern with a kick on every quarter, snare and
-clap on the backbeat, closed and open hi-hats, and ride accents, repeated twice
-within the four-bar sketch. Its graph node consumes timestamped hits from the
-same player as the melodic instruments.
+The 909 repeats one bar. The kick hits all four beats, a short closed hat
+plays each offbeat, and snare and clap strike together on two and four.
+The kick blends its clean body with a saturated copy for extra low-mid
+harmonics. The kit runs its modeled amplitude decays at 55% of stock.
 
 The tempo control follows [the stock FM-1 sequencer][stock-seq]. Page 2 shows
 the current BPM and PLAY/STOP state. Tempo edits retain the position within
@@ -206,22 +207,43 @@ PRESETS continues to change the keyboard's selected instrument without
 changing the mixer page or its bank. All four strips are live, including
 the sequenced TR-909.
 
-All four volume faders start at 128 (unity). The hot 303 preset reserves its
-headroom inside the synth before PCM conversion, and the 909 is trimmed to
-half gain before the mixer. Reverb sends start at 32/0/24/0 (mono, organ, 303,
-909). All four delay sends start at zero. **Both sends are post-fader.**
+| Factory mix (128 = unity) | Mono | M1 organ | TB-303 | TR-909 |
+| --- | ---: | ---: | ---: | ---: |
+| Fader | 128 | 128 | 112 | 80 |
+| Reverb send | 32 | 36 | 24 | 0 |
+| Delay send | 0 | 0 | 92 | 0 |
+
+**Both sends are post-fader.**
 Lowering a track fader reduces the new signal it feeds to either effect.
 Existing tails continue to play. All gains are 0–128, with 128 representing unity.
 
-For echoes on just the 303, open GLO, turn SELECT to DELAY and raise knob 3.
+To change the 303 echo level, open GLO, turn SELECT to DELAY and turn knob 3.
 For the 909, raise knob 4. Open FX and turn SELECT to DELAY to adjust the
-shared echo. Knob 1 changes the time in 5 ms steps (initially 375 ms), knob 2
+shared echo. Knob 1 changes the time in 5 ms steps (initially 369 ms, a dotted
+eighth at 122 BPM). The delay time stays fixed when tempo changes. Knob 2
 sets feedback (initially 35%), and knob 3 sets the wet return (initially
 64/128). Zero feedback gives one repeat.
 
 On FX / REVERB, knobs 1 and 2 set decay and wet level. SEL mutes the displayed
 return, and its LED shows whether that return is enabled. Both effects keep
 their state across full/half gain edits. FX scopes the final DAC mix.
+
+### Hear the kick duck the bass
+
+Press PLAY, open FX, and turn SELECT to **303 / COMP**. Knob 1 starts on
+**909 KICK**, the isolated kick before its fader. Keep that source selected and
+turn knob 2 from 0% to 100%. At 0% the insert keeps its makeup gain, so you
+can compare depths at the same level between kicks. Listen to the bottom of
+the 303 dip on each quarter and come back between hits. Knob 3 moves the shelf
+up in frequency to duck more of the squelch as well. SEL compares the entire
+insert, including makeup gain, with the dry 303.
+
+Try **M1 ORGAN** as the key. The bass now makes room for chord stabs, even
+with the organ fader down. Muting its SEQ track lets its release finish and
+the ducking subside. **909 KIT** includes hats and claps in the detector.
+**MONO** follows the monosynth and **303 SELF** follows the acid line's own
+accents. Only the 303 is processed. The factory setting is 75% depth at
+180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
 
 ## Audio and display
 
@@ -234,10 +256,10 @@ both wet returns to the dry sum before output gain and stereo duplication.
 The delay borrows one second of PCM16 storage (88,236 bytes) and skips empty
 blocks once its line is silent.
 
-The hot 303 preset reserves 16-fold output headroom before converting to Q23;
-its drive and filter still run at full level internally. The 909 bus runs at
-half gain to leave room for bass and chord peaks. The GLO faders and sends
-apply to the complete track signal, including both live and sequenced notes.
+The hot 303 preset reserves 16-fold output headroom before converting to Q23.
+Its sidechain insert sits between the synth and the channel fader, so both
+post-fader sends hear the shaped acid line. The GLO faders and sends apply
+to live and sequenced notes.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.

@@ -547,18 +547,19 @@ impl Screen {
         )
         .await?;
         if labels.fx_view {
-            let output = labels.fx.output(labels.fx_page);
+            let enabled = labels.fx.enabled(labels.fx_page);
             self.text.text(
                 0,
                 0,
                 match labels.fx_page {
                     FxPage::Reverb => b"FX / REVERB".as_slice(),
                     FxPage::Delay => b"FX / DELAY".as_slice(),
+                    FxPage::BassComp => b"303 / COMP".as_slice(),
                 },
                 ink,
             );
             self.text
-                .text(12, 0, if output.enabled { b"ON " } else { b"OFF" }, bright);
+                .text(12, 0, if enabled { b"ON " } else { b"OFF" }, bright);
             self.text.text(
                 15,
                 0,
@@ -570,7 +571,8 @@ impl Screen {
                     self.text.text(0, 13, b"1 DECAY", muted);
                     self.text.number(8, 13, 3, u32::from(labels.fx.decay), ink);
                     self.text.text(12, 13, b"2 WET", muted);
-                    self.text.number(17, 13, 3, u32::from(output.wet), ink);
+                    self.text
+                        .number(17, 13, 3, u32::from(labels.fx.reverb.wet), ink);
                     self.text.text(0, 14, b"SENDS IN GLO MIXER", muted);
                 }
                 FxPage::Delay => {
@@ -582,7 +584,19 @@ impl Screen {
                     self.text
                         .number(7, 14, 2, u32::from(labels.fx.feedback), ink);
                     self.text.text(11, 14, b"3 WET", muted);
-                    self.text.number(17, 14, 3, u32::from(output.wet), ink);
+                    self.text
+                        .number(17, 14, 3, u32::from(labels.fx.delay.wet), ink);
+                }
+                FxPage::BassComp => {
+                    self.text.text(0, 13, b"1 KEY", muted);
+                    self.text.text(6, 13, labels.fx.key.name(), ink);
+                    self.text.text(0, 14, b"2 DEP", muted);
+                    self.text.number(5, 14, 3, u32::from(labels.fx.depth), ink);
+                    self.text.text(8, 14, b"%", muted);
+                    self.text.text(10, 14, b"3 EQ", muted);
+                    self.text
+                        .number(14, 14, 4, u32::from(labels.fx.split_hz), ink);
+                    self.text.text(18, 14, b"HZ", muted);
                 }
             }
             return self.text.paint_async(lcd, clock).await;

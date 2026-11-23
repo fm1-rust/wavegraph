@@ -160,6 +160,34 @@ fn all_six_voices_reach_their_own_stem_and_mono_render() {
 }
 
 #[test]
+fn short_decay_reduces_modeled_tails_and_preserves_the_cymbal_recordings() {
+    for voice in Voice::ALL {
+        let mut stock = Tr909::new(Samples::X0XPROC1).expect("44.1 kHz kit");
+        let mut short = Tr909::with_decay(Samples::X0XPROC1, 44_100, 1, 55).expect("short kit");
+        stock.trigger(voice);
+        short.trigger(voice);
+        let mut tail = [0_i64; 2];
+        for frame in 0..9000 {
+            let pair = [
+                stock.next_voices()[voice as usize],
+                short.next_voices()[voice as usize],
+            ];
+            if matches!(voice, ClosedHat | OpenHat | Ride) || frame == 0 {
+                assert_eq!(pair[0], pair[1]);
+            }
+            if frame >= 4410 {
+                for (energy, sample) in tail.iter_mut().zip(pair) {
+                    *energy += i64::from(sample).pow(2);
+                }
+            }
+        }
+        if matches!(voice, Kick | Snare | Clap) {
+            assert!(tail[1] < tail[0] / 2);
+        }
+    }
+}
+
+#[test]
 fn kick_settles_to_a_low_fundamental_and_decays() {
     let mut kick = wavegraph_909::BassDrum::new(48_000, 1).expect("clock");
     assert_eq!(kick.next_frame(), 0);

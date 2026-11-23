@@ -3,7 +3,7 @@
 use crate::instrument::{Message, Part};
 use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error};
 use wavegraph_303::Message as BassMessage;
-use wavegraph_909::{DEMO_PATTERN, Samples, Tr909};
+use wavegraph_909::{Samples, Tr909};
 use wavegraph_monosynth::Message as MonoMessage;
 use wavegraph_organ::Message as OrganMessage;
 use wavegraph_sample::I24;
@@ -442,7 +442,7 @@ impl PatternPlayer {
             }
         }
         if self.enabled[Track::Drums as usize] {
-            for &voice in DEMO_PATTERN[step % DEMO_PATTERN.len()] {
+            for &voice in pattern::drums(step) {
                 emit(
                     Track::Drums,
                     event(frame, Message::Drum(DrumMessage::Trigger(voice))),
@@ -545,16 +545,25 @@ pub(super) struct DrumMachine {
 impl DrumMachine {
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
-            kit: Tr909::with_sample_rate(Samples::X0XPROC1, rate.0, rate.1)
+            kit: Tr909::with_decay(Samples::X0XPROC1, rate.0, rate.1, 55)
                 .expect("909 clock and PCM"),
         }
     }
 
-    fn render(&mut self, out: &mut [I24]) {
-        for sample in out {
-            // Reserve mix headroom for the resonant bass and organ chord peaks.
-            *sample = I24::new(self.kit.next_mix_frame::<I24>().inner() >> 1)
-                .expect("half of a Q23 sample is representable");
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "The weighted sum of six i16 voices fits i32 before clamping to Q23."
+    )]
+    fn render(&mut self, out: &mut [I24], key: &mut [I24]) {
+        for (sample, key) in out.iter_mut().zip(key) {
+            let [kick, snare, clap, closed, open, ride] = self.kit.next_voices().map(i32::from);
+            *key = I24::new_unchecked(kick << 8);
+            // Blend a saturated copy into the clean kick. Its early harmonics
+            // carry the downbeat above the 50 Hz body on a small speaker.
+            let kick = kick + kick.clamp(-4096, 4096);
+            // Convert PCM16 to Q23 as we mix (256 is unity), with one final clamp.
+            let sum = kick * 256 + snare * 136 + clap * 176 + closed * 90 + open * 90 + ride * 90;
+            *sample = I24::new_unchecked(sum.clamp(-(1 << 23), (1 << 23) - 1));
         }
     }
 }
@@ -564,15 +573,18 @@ impl Process<Message, I24> for DrumMachine {
         &[Port::Message]
     }
     fn outlets(&self) -> &[Port] {
-        &[Port::Signal]
+        &[Port::Signal; 2]
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
-        let out = &mut cx.outputs[0];
+        let (mix, key) = cx.outputs.split_at_mut(1);
         let mut start = 0;
         for event in cx.events {
             if let Message::Drum(message) = event.message {
-                self.render(&mut out[start..event.frame]);
+                self.render(
+                    &mut mix[0][start..event.frame],
+                    &mut key[0][start..event.frame],
+                );
                 match message {
                     DrumMessage::Trigger(voice) => self.kit.trigger(voice),
                     DrumMessage::Stop => self.kit.stop(),
@@ -580,7 +592,7 @@ impl Process<Message, I24> for DrumMachine {
                 start = event.frame;
             }
         }
-        self.render(&mut out[start..cx.frames]);
+        self.render(&mut mix[0][start..cx.frames], &mut key[0][start..cx.frames]);
     }
 }
 
@@ -760,6 +772,38 @@ mod tests {
     }
 
     #[test]
+    fn factory_drums_repeat_only_the_four_house_voices() {
+        use wavegraph_909::Voice::{Clap, ClosedHat, Kick, Snare};
+        let mut player = PatternPlayer::new((48_000, 1));
+        let events = render(
+            &mut player,
+            384_000,
+            Transport {
+                bpm: 120,
+                ..playing()
+            },
+            [false, false, false, true],
+        );
+        let hits: Vec<_> = events
+            .into_iter()
+            .filter_map(|(_, e)| match e.message {
+                Message::Drum(DrumMessage::Trigger(v)) => Some((e.frame, v)),
+                _ => None,
+            })
+            .collect();
+        let mut expected = Vec::new();
+        for beat in 0..16 {
+            let start = beat * 24_000;
+            expected.push((start, Kick));
+            if beat % 2 == 1 {
+                expected.extend([(start, Snare), (start, Clap)]);
+            }
+            expected.push((start + 12_000, ClosedHat));
+        }
+        assert_eq!(hits, expected);
+    }
+
+    #[test]
     fn stop_mute_and_fast_restart_release_only_owned_sequence_gates() {
         let mut player = PatternPlayer::new((48_000, 1));
         let play = Transport {
@@ -843,25 +887,33 @@ mod tests {
     fn drum_trigger_and_stop_obey_the_shared_frame_offsets() {
         let mut drums = DrumMachine::new((44_100, 1));
         let mut out = [I24::default(); 256];
+        let mut key = out;
         drums.process(&mut ProcessContext {
             frames: 256,
             inputs: &[],
-            outputs: &mut [&mut out],
+            outputs: &mut [&mut out, &mut key],
             events: &[
                 event(
                     11,
                     Message::Drum(DrumMessage::Trigger(wavegraph_909::Voice::Kick)),
                 ),
                 event(100, Message::Drum(DrumMessage::Stop)),
+                event(
+                    128,
+                    Message::Drum(DrumMessage::Trigger(wavegraph_909::Voice::Clap)),
+                ),
             ],
             emit: &mut Err,
         });
         assert!(
             out[..11]
                 .iter()
-                .chain(&out[100..])
+                .chain(&out[100..128])
                 .all(|sample| sample.inner() == 0)
         );
         assert!(out[11..100].iter().any(|sample| sample.inner() != 0));
+        assert!(out[128..].iter().any(|sample| sample.inner() != 0));
+        assert!(key[11..100].iter().any(|sample| sample.inner() != 0));
+        assert!(key[..11].iter().chain(&key[100..]).all(|s| s.inner() == 0));
     }
 }

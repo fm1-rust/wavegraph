@@ -4,7 +4,13 @@ use crate::{
     envelope::EnvelopeControls,
     instrument::{EventBatch, Note, at},
 };
-use wavegraph_organ::{Message, Params};
+use wavegraph_organ::{Message, Organ, Params};
+
+pub(super) const fn instrument(numerator: u32, denominator: u32) -> Organ {
+    Organ::new(numerator, denominator)
+        .expect("organ sample clock")
+        .with_voice_level(28)
+}
 
 /// A physical organ key and its strike generation, retained across dropped scans.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,10 +58,10 @@ impl Controls {
         last: Knob::Tone,
     };
 
-    /// Softer upper harmonics and a short tail around the factory chord stabs.
+    /// Bring out the upper partials of the factory chords with a soft key attack.
     pub(super) const DEEP_HOUSE: Self = Self {
-        tone: 56,
-        percussion: 28,
+        tone: 90,
+        percussion: 40,
         envelope: EnvelopeControls::HOUSE_CHORDS,
         ..Self::INITIAL
     };

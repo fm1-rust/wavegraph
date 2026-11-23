@@ -7,8 +7,10 @@
 #![forbid(unsafe_code)]
 
 mod delay;
+mod ducker;
 mod mixer;
 pub use delay::Delay;
+pub use ducker::SidechainDucker;
 pub use mixer::{ChannelMixer, MixerMessage};
 
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -35,9 +37,15 @@ pub enum Message {
     TimeMs(u16),
     /// Digital delay feedback in percent, clamped to 95. Zero gives one echo.
     Feedback(u8),
+    /// Select a detector signal inlet on a sidechain insert. Inlet 0 keys from the program.
+    SidechainKey(u8),
+    /// Percentage of the insert's maximum gain reduction, 0..=100.
+    SidechainDepth(u8),
+    /// Low-shelf corner frequency, clamped to 40..=1000 Hz.
+    SidechainHz(u16),
     /// Wet return level, 0..=128; dry audio is never attenuated here.
     Wet(u8),
-    /// Mute or unmute this wet return. The repeats or reverb tail keep decaying.
+    /// Enable the effect. Disabling mutes a return or bypasses an insert.
     Enabled(bool),
 }
 

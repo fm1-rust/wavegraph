@@ -2,8 +2,19 @@
 //! playback and the SEQ view, so the display describes the events being played.
 
 use super::Track;
+use wavegraph_909::Voice;
 
 pub(crate) const STEPS: usize = 64;
+
+/// One bar of quarter-note kicks, a layered backbeat and short offbeat hats.
+pub(crate) fn drums(step: usize) -> &'static [Voice] {
+    match step % 8 {
+        0 => &[Voice::Kick],
+        4 => &[Voice::Kick, Voice::Snare, Voice::Clap],
+        2 | 6 => &[Voice::ClosedHat],
+        _ => &[],
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Step {
@@ -40,16 +51,16 @@ const MONO: [Step; STEPS] = {
     pattern
 };
 
-// Three-note voicings leave the root to the bass: Dm7, then Cmaj7.
-// Short, quiet offbeat stabs keep space around the drums and the acid line.
+// Rootless Dm7 and Cmaj7. Put the third on top, clear of the acid bass,
+// and alternate held chords with shorter answers.
 const ORGAN: [Step; STEPS] = {
     let mut pattern = [REST; STEPS];
-    pattern[2] = note(&[53, 57, 60], 55, 12, false);
-    pattern[11] = note(&[53, 57, 60], 47, 8, false);
-    pattern[21] = note(&[53, 57, 60], 60, 14, false);
-    pattern[34] = note(&[52, 55, 59], 55, 12, false);
-    pattern[43] = note(&[52, 55, 59], 47, 8, false);
-    pattern[57] = note(&[52, 55, 59], 59, 12, false);
+    pattern[2] = note(&[57, 60, 65], 118, 36, false);
+    pattern[11] = note(&[57, 60, 65], 104, 15, false);
+    pattern[21] = note(&[57, 60, 65], 116, 44, false);
+    pattern[34] = note(&[55, 59, 64], 118, 36, false);
+    pattern[43] = note(&[55, 59, 64], 104, 15, false);
+    pattern[57] = note(&[55, 59, 64], 116, 36, false);
     pattern
 };
 
