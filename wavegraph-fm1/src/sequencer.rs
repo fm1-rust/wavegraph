@@ -3,7 +3,7 @@
 use crate::instrument::{Message, Part};
 use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error};
 use wavegraph_303::Message as BassMessage;
-use wavegraph_909::{Samples, Tr909};
+use wavegraph_909::{Samples, Tr909, Voice};
 use wavegraph_monosynth::Message as MonoMessage;
 use wavegraph_organ::Message as OrganMessage;
 use wavegraph_sample::I24;
@@ -532,14 +532,25 @@ fn event(frame: usize, message: Message) -> Event<Message> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DrumMessage {
-    Trigger(wavegraph_909::Voice),
+    Trigger(Voice),
     Stop,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DrumLamp {
+    #[default]
+    Off,
+    Tail,
+    Strike,
 }
 
 /// The drum renderer has no private transport; it consumes the shared player's
 /// frame-stamped strikes just like every pitched instrument.
 pub(super) struct DrumMachine {
     kit: Tr909<'static>,
+    frame: u32,
+    struck_at: [u32; 6],
+    flash_frames: u32,
 }
 
 impl DrumMachine {
@@ -547,6 +558,9 @@ impl DrumMachine {
         Self {
             kit: Tr909::with_decay(Samples::X0XPROC1, rate.0, rate.1, 55)
                 .expect("909 clock and PCM"),
+            frame: 0,
+            struck_at: [0; 6],
+            flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16, // 62.5 ms at the kit's sample rate.
         }
     }
 
@@ -573,7 +587,7 @@ impl Process<Message, I24> for DrumMachine {
         &[Port::Message]
     }
     fn outlets(&self) -> &[Port] {
-        &[Port::Signal; 2]
+        &[Port::Signal, Port::Signal, Port::Message]
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
@@ -586,13 +600,39 @@ impl Process<Message, I24> for DrumMachine {
                     &mut key[0][start..event.frame],
                 );
                 match message {
-                    DrumMessage::Trigger(voice) => self.kit.trigger(voice),
+                    DrumMessage::Trigger(voice) => {
+                        self.kit.trigger(voice);
+                        self.struck_at[voice as usize] = self.frame.wrapping_add(
+                            u32::try_from(event.frame).expect("frame within one audio block"),
+                        );
+                    }
                     DrumMessage::Stop => self.kit.stop(),
                 }
                 start = event.frame;
             }
         }
         self.render(&mut mix[0][start..cx.frames], &mut key[0][start..cx.frames]);
+        if let Some(last) = cx.frames.checked_sub(1) {
+            self.frame = self
+                .frame
+                .wrapping_add(u32::try_from(cx.frames).expect("one audio block"));
+            let lamps = Voice::ALL.map(|voice| {
+                if !self.kit.voice_active(voice) {
+                    DrumLamp::Off
+                } else if self.frame.wrapping_sub(self.struck_at[voice as usize])
+                    <= self.flash_frames
+                {
+                    DrumLamp::Strike
+                } else {
+                    DrumLamp::Tail
+                }
+            });
+            let _ = (cx.emit)(Event {
+                frame: last,
+                port: 2,
+                message: Message::DrumLamps(lamps),
+            });
+        }
     }
 }
 
@@ -888,23 +928,24 @@ mod tests {
         let mut drums = DrumMachine::new((44_100, 1));
         let mut out = [I24::default(); 256];
         let mut key = out;
+        let mut observation = None;
         drums.process(&mut ProcessContext {
             frames: 256,
             inputs: &[],
             outputs: &mut [&mut out, &mut key],
             events: &[
-                event(
-                    11,
-                    Message::Drum(DrumMessage::Trigger(wavegraph_909::Voice::Kick)),
-                ),
+                event(11, Message::Drum(DrumMessage::Trigger(Voice::Kick))),
                 event(100, Message::Drum(DrumMessage::Stop)),
-                event(
-                    128,
-                    Message::Drum(DrumMessage::Trigger(wavegraph_909::Voice::Clap)),
-                ),
+                event(128, Message::Drum(DrumMessage::Trigger(Voice::Clap))),
             ],
-            emit: &mut Err,
+            emit: &mut |event| {
+                observation = Some((event.frame, event.port, event.message));
+                Ok(())
+            },
         });
+        let mut lamps = [DrumLamp::Off; 6];
+        lamps[Voice::Clap as usize] = DrumLamp::Strike;
+        assert_eq!(observation, Some((255, 2, Message::DrumLamps(lamps))));
         assert!(
             out[..11]
                 .iter()

@@ -49,6 +49,12 @@ impl<'a> Sampler<'a> {
         self.remaining = &[];
     }
 
+    /// Whether this one-shot still has frames to play.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        !self.remaining.is_empty()
+    }
+
     /// Read one mono frame for a containing instrument. An idle voice yields zero.
     pub fn next_frame(&mut self) -> i16 {
         let Some((&bytes, tail)) = self.remaining.split_first() else {
