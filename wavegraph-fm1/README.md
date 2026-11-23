@@ -543,7 +543,12 @@ To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
 [release workflow] checks the tag against the Cargo version, tests and builds
 the firmware, then attaches versioned `.fwsc` and `.bin` files to a GitHub
-Release. The package contains the application area for the hardware updater.
+Release. After publication, the workflow copies the raw image from the
+highest stable `wavegraph-fm1` release to `gh-pages` and requests a rebuild
+of the [WaveGraph browser emulator]. If the push or build request fails, rerun
+the `pages` job from the release workflow.
+
+The `.fwsc` package contains the application area for the hardware updater.
 For [fm1-emu]'s native `fm1-live`, place the raw application at offset
 0x120 within its XIP window. From the firmware output directory run
 
@@ -586,6 +591,7 @@ or the [MIT License](LICENSE-MIT).
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
+[WaveGraph browser emulator]: https://wavegraph.org/
 [flasher-install]: https://github.com/jvitkauskas/m-flasher/blob/8fbece7348d758ac284325eed455781675ac95ff/src/ops.rs#L360-L405
 [flash-layout]: https://sbegueria.github.io/fm1-dev-wiki/Flash-Storage.html
 [fm1-emu]: https://github.com/joakimeriksson/fm1-emu
