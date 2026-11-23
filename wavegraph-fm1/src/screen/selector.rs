@@ -20,7 +20,7 @@ use fm1_graphics::{Rgb565, WaveformStyle, palette};
 
 const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 21;
-const HEIGHT: usize = CHANNELS * ROW_HEIGHT;
+const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;
 pub(super) const RIGHT: usize = LEFT + WIDTH;
 pub(super) const TOP: usize = (crate::capture::WIDTH - HEIGHT) / 2;
@@ -66,12 +66,13 @@ impl Selector {
                 .stroke_color(Gray2::new(3))
                 .stroke_width(2)
                 .build();
-            let (parts, active, numbered) = match menu {
+            let (parts, active, numbered): (&[Part], _, _) = match &menu {
                 Menu::Channels { parts, focus } => (parts, focus.index(), true),
-                Menu::Instruments(part) => (Part::ALL, part as usize, false),
+                Menu::Instruments(part) => (&Part::ALL, *part as usize, false),
             };
-            for (row, part) in parts.into_iter().enumerate() {
-                let y = (row * ROW_HEIGHT) as i32;
+            let offset = (HEIGHT - parts.len() * ROW_HEIGHT) / 2;
+            for (row, part) in parts.iter().enumerate() {
+                let y = (offset + row * ROW_HEIGHT) as i32;
                 if row == active {
                     RoundedRectangle::with_equal_corners(
                         Rectangle::new(

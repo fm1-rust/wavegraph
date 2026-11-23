@@ -1,11 +1,13 @@
 //! Held-note ownership across panel keys, MIDI channels and instrument swaps.
 
 use crate::{
-    instrument::{Gate, Note, Part, Track},
+    instrument::{Gate, Message, Note, Part, RoutedEvents, Track, at},
     organ::OrganKey,
     panel::{Assignment, CHANNELS, Channel},
+    sequencer::DrumMessage,
 };
 use heapless::Vec;
+use wavegraph::bytecode::Error;
 use wavegraph_909::Voice as Drum;
 use wavegraph_organ::POLYPHONY;
 
@@ -20,11 +22,56 @@ pub(super) struct Press {
     strike: u32,
 }
 
-/// Strike counts survive a quick press and release between two UI snapshots.
-#[derive(Clone, Copy, Default)]
+/// Ordered strikes between audio snapshots. A generation change starts a fresh log.
+/// Capacity covers one full producer queue. If the consumer misses more than
+/// a whole history, it resumes with the newest N strikes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HitLog<const N: usize> {
+    total: u32,
+    hits: [(Drum, u8); N],
+}
+
+impl<const N: usize> HitLog<N> {
+    const MASK: usize = {
+        assert!(N.is_power_of_two());
+        N - 1
+    };
+
+    pub(super) const EMPTY: Self = Self {
+        total: 0,
+        hits: [(Drum::Kick, 0); N],
+    };
+
+    pub(super) fn total(&self) -> u32 {
+        self.total
+    }
+
+    pub(super) fn push(&mut self, drum: Drum, velocity: u8) {
+        self.hits[(self.total as usize) & Self::MASK] = (drum, velocity);
+        self.total = self.total.wrapping_add(1);
+    }
+
+    pub(super) fn append_since(
+        &self,
+        previous: u32,
+        events: &mut RoutedEvents,
+    ) -> Result<(), Error> {
+        let count = (self.total.wrapping_sub(previous) as usize).min(N);
+        let start = (self.total as usize).wrapping_sub(count);
+        for offset in 0..count {
+            let (voice, velocity) = self.hits[start.wrapping_add(offset) & Self::MASK];
+            events
+                .push(at(Message::Drum(DrumMessage::Trigger(voice, velocity))))
+                .map_err(|_| Error::Capacity)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct PanelPads {
     generation: u32,
-    strikes: [u8; 6],
+    strikes: HitLog<8>,
 }
 
 impl PanelPads {
@@ -48,7 +95,7 @@ impl<const KEYS: usize> Piano<KEYS> {
             octave: 0,
             pads: [PanelPads {
                 generation: 0,
-                strikes: [0; 6],
+                strikes: HitLog::EMPTY,
             }; CHANNELS],
             held: Vec::new(),
             serial: 0,
@@ -61,19 +108,20 @@ impl<const KEYS: usize> Piano<KEYS> {
 
     pub(super) fn press(&mut self, channel: Channel, assignment: Assignment, key: Note) {
         self.release(key.number);
-        if assignment.part == Part::Drums {
+        if assignment.part.is_kit() {
             if let Some(i) = [53, 55, 57, 59, 60, 62]
                 .iter()
                 .position(|&n| n == key.number)
+                && let Some(&drum) = assignment.part.pads().get(i)
             {
                 let pads = &mut self.pads[channel.index()];
                 if pads.generation != assignment.generation {
                     *pads = PanelPads {
                         generation: assignment.generation,
-                        ..PanelPads::default()
+                        strikes: HitLog::EMPTY,
                     };
                 }
-                pads.strikes[i] = pads.strikes[i].wrapping_add(1);
+                pads.strikes.push(drum, key.velocity);
             }
             return;
         }
@@ -246,9 +294,16 @@ impl<const PANEL: usize> Keys<PANEL> {
     pub(super) fn midi(&mut self, channel: Channel, action: MidiAction, track: &mut Track) {
         let keys = &mut self.channels[channel.index()];
         match action {
-            MidiAction::On(note) if track.assignment.part == Part::Drums => {
-                if let Some(voice) = Drum::from_midi_note(note.number) {
-                    track.hit(voice);
+            MidiAction::On(note) if track.assignment.part.is_kit() => {
+                let part = track.assignment.part;
+                let voice = if part == Part::Tr808 {
+                    wavegraph_808::Voice::from_midi_note(note.number)
+                        .map(|v| part.pads()[v as usize])
+                } else {
+                    Drum::from_midi_note(note.number)
+                };
+                if let Some(voice) = voice {
+                    track.midi_hits.push(voice, note.velocity);
                 }
             }
             MidiAction::On(note) => keys.press(Key::Midi(note.number), note),

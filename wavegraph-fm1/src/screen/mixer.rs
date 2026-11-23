@@ -167,8 +167,8 @@ impl ChannelStrip {
     }
 }
 
-struct Band<'a> {
-    pixels: &'a mut [[u8; 2]],
+pub(super) struct Band<'a> {
+    pub(super) pixels: &'a mut [[u8; 2]],
     x: u16,
     y: u16,
     width: u16,
@@ -180,7 +180,7 @@ struct Band<'a> {
     reason = "All coordinates and pixel indexes are bounded by the 240 px panel"
 )]
 impl<'a> Band<'a> {
-    fn new(
+    pub(super) fn new(
         storage: &'a mut [[u8; 2]],
         x: u16,
         y: u16,
@@ -219,7 +219,20 @@ impl<'a> Band<'a> {
             (CENTERS[1], reverb, UNITY, percent(reverb)),
             (CENTERS[2], delay, UNITY, percent(delay)),
         ] {
-            self.knob(Point::new(x, y + 15), value, max, strip.selected);
+            self.knob(
+                Point::new(x, y + 15),
+                value,
+                max,
+                [
+                    KNOB,
+                    OUTLINE,
+                    if strip.selected {
+                        palette::CYAN
+                    } else {
+                        POINTER
+                    },
+                ],
+            );
             self.label(
                 str::from_utf8(&readout).expect("ASCII readout"),
                 Point::new(x, y + 30),
@@ -251,7 +264,13 @@ impl<'a> Band<'a> {
         }
     }
 
-    fn knob(&mut self, center: Point, value: u8, max: u8, selected: bool) {
+    pub(super) fn knob(
+        &mut self,
+        center: Point,
+        value: u8,
+        max: u8,
+        [face, rim, ink]: [Rgb565; 3],
+    ) {
         const DIRECTIONS: [(i32, i32); 17] = [
             (-5, 5),
             (-6, 4),
@@ -274,22 +293,21 @@ impl<'a> Band<'a> {
         let position = usize::from(value) * (DIRECTIONS.len() - 1) / usize::from(max);
         let (x, y) = DIRECTIONS[position];
         let body = PrimitiveStyleBuilder::new()
-            .fill_color(KNOB)
-            .stroke_color(OUTLINE)
+            .fill_color(face)
+            .stroke_color(rim)
             .stroke_width(1)
             .build();
         Circle::with_center(center, 21)
             .into_styled(body)
             .draw(self)
             .expect("infallible strip");
-        let ink = if selected { palette::CYAN } else { POINTER };
         Line::new(center, center + Point::new(x, y))
             .into_styled(PrimitiveStyle::with_stroke(ink, 2))
             .draw(self)
             .expect("infallible strip");
     }
 
-    fn rect(&mut self, point: Point, size: Size, color: Rgb565) {
+    pub(super) fn rect(&mut self, point: Point, size: Size, color: Rgb565) {
         Rectangle::new(point, size)
             .into_styled(PrimitiveStyle::with_fill(color))
             .draw(self)
@@ -307,7 +325,7 @@ impl<'a> Band<'a> {
         .expect("infallible strip");
     }
 
-    fn label(&mut self, name: &str, point: Point, alignment: Alignment, color: Rgb565) {
+    pub(super) fn label(&mut self, name: &str, point: Point, alignment: Alignment, color: Rgb565) {
         Text::with_text_style(
             name,
             point,

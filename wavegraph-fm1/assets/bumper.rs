@@ -18,7 +18,7 @@ fn frame(ms: u16) -> usize {
 enum Gate {
     Accent(u8),
     Pluck(u8),
-    Slide(u8),
+    Slide(u8, bool),
     Off,
 }
 
@@ -26,33 +26,37 @@ fn acid(mix: &mut [f32]) {
     use Gate::{Accent, Off, Pluck, Slide};
     let mut voice = Voice::new(f32::from(RATE));
     let params = VoiceParams {
-        cutoff_hz: 295.0,
-        resonance: 0.86,
-        env_oct: 2.8,
-        decay_s: 0.18,
-        overdrive_db: 15.0,
+        cutoff_hz: 315.0,
+        resonance: 0.88,
+        env_oct: 3.0,
+        decay_s: 0.25,
+        overdrive_db: 18.0,
         accent: 0.82,
-        slide_s: 0.065,
+        slide_s: 0.080,
         ..VoiceParams::default()
     };
-    // End times in ms. An F-minor pickup at 128 BPM, with an octave slide up
-    // and a shorter slide back to the root before the percussion answers.
+    // End times in ms. Quote the factory bass's two low Ds and A–C slide,
+    // then climb G–A–D. Hold the accented fifth into the high tonic so the
+    // pitch slews under one continuous filter envelope.
     let mut start = 0;
     for (end_ms, gate) in [
-        (72, Accent(41)),
-        (117, Off),
-        (177, Pluck(41)),
-        (234, Slide(53)),
-        (286, Pluck(48)),
-        (351, Off),
-        (407, Accent(44)),
-        (469, Slide(41)),
-        (527, Off),
+        (75, Accent(38)),
+        (109, Off),
+        (168, Pluck(38)),
+        (195, Off),
+        (254, Accent(45)),
+        (329, Slide(48, false)),
+        (363, Off),
+        (426, Pluck(43)),
+        (451, Off),
+        (516, Accent(45)),
+        (680, Slide(50, true)),
+        (750, Off),
     ] {
         match gate {
             Accent(n) => voice.note_on(i32::from(n), true, false),
             Pluck(n) => voice.note_on(i32::from(n), false, false),
-            Slide(n) => voice.note_on(i32::from(n), false, true),
+            Slide(n, accent) => voice.note_on(i32::from(n), accent, true),
             Off => voice.note_off(),
         }
         let end = frame(end_ms);
@@ -66,9 +70,8 @@ fn acid(mix: &mut [f32]) {
 }
 
 fn knocks(mix: &mut [f32]) {
-    // Speed up the 909 snare's shell and wires together. The higher ghost
-    // stroke leads the lower, louder one by a 32nd note.
-    for (ms, speed, mut gain) in [(527, 3, 0.38), (586, 2, 0.90)] {
+    // Two quiet shell knocks lead into the resolution. The hat marks the landing.
+    for (ms, speed, mut gain) in [(363, 3, 0.25), (451, 2, 0.42)] {
         let mut snare = SnareDrum::new(u32::from(RATE), speed).expect("fixed snare clock");
         snare.trigger();
         for sample in &mut mix[frame(ms)..] {
@@ -76,10 +79,10 @@ fn knocks(mix: &mut [f32]) {
             gain *= 0.9993;
         }
     }
-    // Just the first 12 ms of the closed hat puts a metallic edge on the last hit.
+    // Just the first 12 ms of the closed hat puts a metallic edge on the arriving tonic.
     let hat = Samples::X0XPROC1.closed_hat.as_chunks::<2>().0;
     let mut gain = 0.16;
-    for (sample, &bytes) in mix[frame(586)..].iter_mut().zip(hat).take(frame(12)) {
+    for (sample, &bytes) in mix[frame(516)..].iter_mut().zip(hat).take(frame(12)) {
         *sample += gain * f32::from(i16::from_le_bytes(bytes)) / 32768.0;
         gain *= 0.99;
     }
@@ -91,9 +94,19 @@ fn knocks(mix: &mut [f32]) {
 )]
 fn main() {
     println!("cargo:rerun-if-changed=assets/bumper.rs");
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
+        println!("cargo:rerun-if-changed=wavegraph-fm1.ld");
+        println!("cargo:rustc-link-search={}", env!("CARGO_MANIFEST_DIR"));
+    }
     let mut mix = vec![0.0; frame(750)];
     acid(&mut mix);
     knocks(&mut mix);
+    // End the printed release at digital silence on the logo boundary.
+    let fade = &mut mix[frame(740)..];
+    let length = f32::from(u16::try_from(fade.len()).expect("ten millisecond fade"));
+    for (remaining, sample) in (0_u16..).zip(fade.iter_mut().rev()) {
+        *sample *= f32::from(remaining) / length;
+    }
     let peak = mix.iter().copied().map(f32::abs).fold(0.0, f32::max);
     let scale = f32::from(i16::MAX) * 0.25 / peak;
     let pcm: Vec<u8> = mix

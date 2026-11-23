@@ -1,4 +1,4 @@
-//! WaveGraph monosynth, house organ, 303 and 909 firmware for the FM-1.
+//! Four assignable WaveGraph channels for the FM-1 synthesizers and drum kits.
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 

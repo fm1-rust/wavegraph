@@ -38,8 +38,9 @@ impl BassInserts {
         let mut sources = Vec::<_, CHANNELS>::new();
         for (part, pair) in self.parts.iter().zip(inputs.as_chunks::<2>().0) {
             let source = match (self.key, part) {
-                (KeySource::Kick, Part::Drums) => pair[1],
-                (KeySource::Kit, Part::Drums)
+                (KeySource::Kick, Part::Tr909) | (KeySource::Kick808, Part::Tr808) => pair[1],
+                (KeySource::Kit, Part::Tr909)
+                | (KeySource::Kit808, Part::Tr808)
                 | (KeySource::Organ, Part::Organ)
                 | (KeySource::Mono, Part::Mono) => pair[0],
                 _ => continue,

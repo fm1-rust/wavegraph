@@ -1,0 +1,20 @@
+[package]
+name = "wavegraph-808"
+description = "Four synthesized TR-808-style drum voices and a playable kit"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "drum-machine", "synthesis", "no-std"]
+
+[dependencies]
+wavegraph-core.workspace = true
+wavegraph-sample.workspace = true
+
+[dev-dependencies]
+wavegraph = { version = "0.1", path = "../../wavegraph" }
+
+[lints]
+workspace = true

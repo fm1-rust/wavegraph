@@ -86,11 +86,22 @@ impl Navigation {
         view: View::Scope,
         focus: Channel::One,
         assignments: [
+            Assignment::new(Part::Bass),
+            Assignment::new(Part::Bass),
+            Assignment::new(Part::Tr808),
+            Assignment::new(Part::Tr909),
+        ],
+    };
+
+    #[cfg(test)]
+    pub(super) const SYNTH_RACK: Self = Self {
+        assignments: [
             Assignment::new(Part::Mono),
             Assignment::new(Part::Organ),
             Assignment::new(Part::Bass),
-            Assignment::new(Part::Drums),
+            Assignment::new(Part::Tr909),
         ],
+        ..Self::INITIAL
     };
 
     pub(super) fn press(&mut self, button: PageButton) {
@@ -101,10 +112,10 @@ impl Navigation {
             PageButton::Glo => View::Mixer,
             PageButton::Fx if self.view != View::Fx => View::Fx,
             PageButton::Seq if self.view != View::Sequencer => View::Sequencer,
-            PageButton::Env if self.view != View::Envelope && self.part() != Part::Drums => {
+            PageButton::Env if self.view != View::Envelope && !self.part().is_kit() => {
                 View::Envelope
             }
-            PageButton::Env if self.part() == Part::Drums => self.view,
+            PageButton::Env if self.part().is_kit() => self.view,
             _ => View::Scope,
         };
     }
@@ -114,15 +125,15 @@ impl Navigation {
     }
 
     pub(super) fn piano_channel(self, last_melodic: &mut Channel) -> Channel {
-        if self.part() != Part::Drums {
+        if !self.part().is_kit() {
             *last_melodic = self.focus;
         } else if self.view == View::Sequencer {
-            if self.assignments[last_melodic.index()].part != Part::Drums {
+            if !self.assignments[last_melodic.index()].part.is_kit() {
                 return *last_melodic;
             }
             if let Some(channel) = Channel::ALL
                 .into_iter()
-                .find(|c| self.assignments[c.index()].part != Part::Drums)
+                .find(|c| !self.assignments[c.index()].part.is_kit())
             {
                 *last_melodic = channel;
                 return channel;
@@ -166,7 +177,7 @@ mod tests {
 
     #[test]
     fn drum_pattern_keeps_the_last_melodic_keyboard_until_all_four_channels_are_kits() {
-        let mut nav = Navigation::INITIAL;
+        let mut nav = Navigation::SYNTH_RACK;
         let mut last = Channel::One;
         nav.focus = Channel::Three;
         assert_eq!(nav.piano_channel(&mut last), Channel::Three);
@@ -174,19 +185,19 @@ mod tests {
         assert_eq!(nav.piano_channel(&mut last), Channel::Four);
         nav.press(PageButton::Seq);
         assert_eq!(nav.piano_channel(&mut last), Channel::Three);
-        nav.assignments[2] = Assignment::new(Part::Drums);
+        nav.assignments[2] = Assignment::new(Part::Tr909);
         assert_eq!(nav.piano_channel(&mut last), Channel::One);
-        nav.assignments.fill(Assignment::new(Part::Drums));
+        nav.assignments.fill(Assignment::new(Part::Tr909));
         assert_eq!(nav.piano_channel(&mut last), Channel::Four);
     }
 
     #[test]
     fn presets_and_home_follow_the_mixer_hierarchy() {
-        let mut nav = Navigation::INITIAL;
+        let mut nav = Navigation::SYNTH_RACK;
         nav.press(PageButton::Glo);
         nav.turn(0, 1);
         assert_eq!((nav.view, nav.focus), (View::Mixer, Channel::Two));
-        assert_eq!(nav.assignments, Navigation::INITIAL.assignments);
+        assert_eq!(nav.assignments, Navigation::SYNTH_RACK.assignments);
         nav.turn(1, 0);
         assert_eq!((nav.view, nav.focus), (View::Channel, Channel::Two));
         nav.turn(0, 1);

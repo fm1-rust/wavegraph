@@ -33,17 +33,19 @@ impl Mixer {
     pub(super) const DRY: Self = Self([Strip::UNITY; CHANNELS]);
     pub(super) const INITIAL: Self = Self([
         Strip {
-            reverb: 32,
-            ..Self::DRY.0[0]
+            level: 108,
+            reverb: 80,
+            delay: 104,
         },
         Strip {
-            reverb: 36,
-            ..Strip::UNITY
+            level: 120,
+            reverb: 96,
+            delay: 112,
         },
         Strip {
-            level: 112,
-            reverb: 24,
-            delay: 92,
+            level: 88,
+            reverb: 12,
+            delay: 0,
         },
         Strip {
             level: 80,
@@ -173,8 +175,8 @@ mod tests {
             mixer.0[1],
             Strip {
                 level: MAX_LEVEL,
-                reverb: 40,
-                delay: 8
+                reverb: 100,
+                delay: 120
             }
         );
         assert_eq!(mixer.0[0], Mixer::INITIAL.0[0]);

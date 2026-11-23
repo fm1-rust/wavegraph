@@ -1,7 +1,7 @@
-//! TR-909 faceplate and six voice lamps beneath the live scope.
+//! Drum faceplates and per-voice activity beneath the live kit scope.
 
-use super::selector::Selector;
-use crate::sequencer::DrumLamp;
+use super::{selector::Selector, tr808};
+use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
@@ -39,6 +39,23 @@ pub(super) const STYLE: WaveformStyle = WaveformStyle {
     grid_y: super::GRID,
 };
 
+pub(super) const CREAM: Rgb565 = Rgb565::new(30, 53, 20);
+pub(super) const STYLE_808: WaveformStyle = WaveformStyle {
+    background: Rgb565::new(3, 6, 3),
+    grid: Rgb565::new(7, 12, 4),
+    center: Rgb565::new(12, 20, 6),
+    trace: Rgb565::new(29, 32, 5),
+    ..STYLE
+};
+
+pub(super) fn style(part: Part) -> WaveformStyle {
+    if part == Part::Tr808 {
+        STYLE_808
+    } else {
+        STYLE
+    }
+}
+
 const KEY_W: usize = 39;
 const KEY_H: usize = 47;
 const KEY_Y: u16 = 189;
@@ -52,6 +69,8 @@ type Key =
 pub(super) struct Panel {
     key: &'static mut Key,
     previous: Option<[DrumLamp; 6]>,
+    controls: Option<wavegraph_808::Controls>,
+    status808: Option<(Channel, bool, &'static str)>,
 }
 
 impl Panel {
@@ -60,23 +79,29 @@ impl Panel {
         Self {
             key: KEY.take(),
             previous: None,
+            controls: None,
+            status808: None,
         }
     }
 
-    fn title(&mut self, lcd: &mut Display, selector: &Selector) -> Result<(), Error> {
+    fn title(&mut self, lcd: &mut Display, selector: &Selector, part: Part) -> Result<(), Error> {
         // Expand a one-bit wordmark in stripes, borrowing the keycap scratch buffer.
         type Title = Framebuffer<BinaryColor, RawU1, BigEndian, 56, 16, 112>;
         let mut mask = Title::new();
         Text::with_baseline(
-            "TR-909",
+            part.name(),
             Point::zero(),
             MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On),
             Baseline::Top,
         )
         .draw(&mut mask)
         .expect("infallible framebuffer");
-        let [paper, gray, orange] =
-            [STYLE.background, GRAPHITE, ORANGE].map(|ink| selector.shade(ink).to_be_bytes());
+        let [paper, gray, orange] = [
+            style(part).background,
+            if part == Part::Tr808 { CREAM } else { GRAPHITE },
+            ORANGE,
+        ]
+        .map(|ink| selector.shade(ink).to_be_bytes());
         let rows = mask.data().as_chunks::<7>().0;
         for (band, source) in rows.chunks_exact(4).enumerate() {
             let pixels = &mut self.key.data_mut()[..112 * 8 * 2];
@@ -97,7 +122,7 @@ impl Panel {
         Ok(())
     }
 
-    fn key_face(&mut self, voice: Voice, selector: &Selector) {
+    fn key_face(&mut self, voice: Voice, slot: usize, selector: &Selector) {
         let key = &mut *self.key;
         key.clear(selector.shade(STYLE.background))
             .expect("infallible framebuffer");
@@ -115,13 +140,13 @@ impl Panel {
             .draw(key)
             .expect("infallible framebuffer");
         }
-        let (first, second, note) = match voice {
-            Voice::Kick => ("KICK", "", "F3"),
-            Voice::Snare => ("SNARE", "", "G3"),
-            Voice::Clap => ("CLAP", "", "A3"),
-            Voice::ClosedHat => ("CLOSED", "HAT", "B3"),
-            Voice::OpenHat => ("OPEN", "HAT", "C4"),
-            Voice::Ride => ("RIDE", "", "D4"),
+        let (first, second) = match voice {
+            Voice::Kick => ("KICK", ""),
+            Voice::Snare => ("SNARE", ""),
+            Voice::Clap => ("CLAP", ""),
+            Voice::ClosedHat => ("CLOSED", "HAT"),
+            Voice::OpenHat => ("OPEN", "HAT"),
+            Voice::Ride => ("RIDE", ""),
         };
         let text = MonoTextStyle::new(&FONT_6X10, selector.shade(GRAPHITE));
         let align = TextStyleBuilder::new()
@@ -137,7 +162,7 @@ impl Panel {
                 .expect("infallible framebuffer");
         }
         Text::with_text_style(
-            note,
+            ["F3", "G3", "A3", "B3", "C4", "D4"][slot],
             Point::new(19, 36),
             MonoTextStyle::new(&FONT_5X8, selector.shade(GRAPHITE)),
             align,
@@ -146,34 +171,89 @@ impl Panel {
         .expect("infallible framebuffer");
     }
 
+    pub(super) fn status808(
+        &mut self,
+        lcd: &mut Display,
+        selector: &Selector,
+        status: (Channel, bool, &'static str),
+        entering: bool,
+    ) -> Result<(), Error> {
+        if entering || self.status808 != Some(status) {
+            tr808::status(
+                lcd,
+                self.key.data_mut().as_chunks_mut::<2>().0,
+                selector,
+                status,
+            )?;
+            self.status808 = Some(status);
+        }
+        Ok(())
+    }
+
+    pub(super) fn controls(
+        &mut self,
+        lcd: &mut Display,
+        selector: &Selector,
+        c: wavegraph_808::Controls,
+        entering: bool,
+    ) -> Result<(), Error> {
+        let previous = if entering { None } else { self.controls };
+        if previous == Some(c) {
+            return Ok(());
+        }
+        tr808::controls(
+            lcd,
+            self.key.data_mut().as_chunks_mut::<2>().0,
+            selector,
+            c,
+            previous,
+        )?;
+        self.controls = Some(c);
+        Ok(())
+    }
+
     pub(super) async fn paint(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
         selector: &Selector,
         entering: bool,
+        part: Part,
         lamps: [DrumLamp; 6],
     ) -> Result<(), Error> {
         if !entering && self.previous == Some(lamps) {
             return Ok(());
         }
         if entering {
-            self.title(lcd, selector)?;
+            self.title(lcd, selector, part)?;
             let rule = selector.shade(ORANGE).into_storage();
             lcd.fill_rect(0, 52, SIZE, 2, rule)?;
             lcd.fill_rect(0, 185, SIZE, 2, rule)?;
         }
         let mut lcd = lcd.as_async(clock)?;
+        if part == Part::Tr808 {
+            tr808::switches(
+                &mut lcd,
+                self.key.data_mut().as_chunks_mut::<2>().0,
+                selector,
+                lamps,
+                if entering { None } else { self.previous },
+            )
+            .await?;
+            self.previous = Some(lamps);
+            return Ok(());
+        }
         for (i, voice) in Voice::ALL.into_iter().enumerate() {
+            let lamp = lamps[voice as usize];
             let x = 1 + 40 * u16::try_from(i).expect("six keys");
             if entering {
-                self.key_face(voice, selector);
+                self.key_face(voice, i, selector);
                 lcd.write_rect_buffered(x, KEY_Y, KEY_W as u16, KEY_H as u16, self.key.data())
                     .await?;
-            } else if self.previous.is_some_and(|old| old[i] == lamps[i]) {
+            } else if self.previous.is_some_and(|old| old[voice as usize] == lamp) {
                 continue;
             }
-            let (lens, core) = match lamps[i] {
+            let (lens, core) = match lamp {
                 DrumLamp::Off => (Rgb565::new(7, 14, 6), Rgb565::new(10, 19, 8)),
                 DrumLamp::Tail => (EMBER, Rgb565::new(25, 21, 4)),
                 DrumLamp::Strike => (HOT, Rgb565::new(31, 53, 13)),

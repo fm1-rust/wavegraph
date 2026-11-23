@@ -34,19 +34,29 @@ pub(super) enum KeySource {
     Kit,
     Organ,
     Mono,
+    Kick808,
+    Kit808,
 }
 
 impl KeySource {
-    pub(super) const ALL: [KeySource; 5] =
-        [Self::Bass, Self::Kick, Self::Kit, Self::Organ, Self::Mono];
+    pub(super) const ALL: [KeySource; 7] = [
+        Self::Bass,
+        Self::Kick,
+        Self::Kit,
+        Self::Organ,
+        Self::Mono,
+        Self::Kick808,
+        Self::Kit808,
+    ];
 
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "An i8 delta and inlet index fit i16."
     )]
     fn turn(&mut self, detents: i8) {
-        let index = (i16::from(*self as u8) + i16::from(detents)).rem_euclid(5);
-        *self = Self::ALL[usize::try_from(index).expect("five sources")];
+        let index = (i16::from(*self as u8) + i16::from(detents))
+            .rem_euclid(i16::try_from(Self::ALL.len()).expect("small catalog"));
+        *self = Self::ALL[usize::try_from(index).expect("wrapped key source index")];
     }
 
     #[cfg(target_os = "none")]
@@ -55,6 +65,8 @@ impl KeySource {
             Self::Bass => b"303 SELF",
             Self::Kick => b"909 KICK",
             Self::Kit => b"909 KIT ",
+            Self::Kick808 => b"808 KICK",
+            Self::Kit808 => b"808 KIT ",
             Self::Organ => b"M1 ORGAN",
             Self::Mono => b"MONO    ",
         }
@@ -83,16 +95,16 @@ pub(super) struct Fx {
 impl Fx {
     pub(super) const INITIAL: Self = Self {
         reverb: Return {
-            wet: 64,
+            wet: 104,
             enabled: true,
         },
         delay: Return {
-            wet: 64,
+            wet: 76,
             enabled: true,
         },
-        decay: 80,
+        decay: 90,
         time_ms: 369, // Dotted eighth at the factory 122 BPM.
-        feedback: Delay::DEFAULT_FEEDBACK,
+        feedback: 43,
         key: KeySource::Kick,
         depth: 75,
         split_hz: 180,

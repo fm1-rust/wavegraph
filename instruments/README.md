@@ -12,6 +12,7 @@ outlet 0. Each instance keeps its voice state between blocks.
 | [`wavegraph-organ`](wavegraph-organ/) | Polyphony with four preallocated voices and a note-stealing policy. |
 | [`wavegraph-303`](wavegraph-303/) | A TB-303 voice that handles accent, slide and live parameter changes. |
 | [`wavegraph-sampler`](wavegraph-sampler/) | One-shot PCM playback from borrowed sample data. |
+| [`wavegraph-808`](wavegraph-808/) | Four synthesized drums with standalone child processors, shared metallic excitation, and individual and mixed outputs. |
 | [`wavegraph-909`](wavegraph-909/) | Six-voice 909 kit with modeled drums, sampled cymbals, individual outputs and hi-hat choke. |
 
 ## Implement a new instrument

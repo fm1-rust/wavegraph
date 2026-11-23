@@ -7,6 +7,7 @@
 
 use crate::{
     instrument::Part,
+    panel::Channel,
     sequencer::{Position, Sequencer, pattern},
 };
 use embedded_graphics::pixelcolor::raw::ToBytes;
@@ -30,14 +31,16 @@ const CURSOR: Rgb565 = Rgb565::new(3, 14, 9);
 const ACID: Rgb565 = Rgb565::new(31, 24, 4);
 const RESONANCE: Rgb565 = Rgb565::new(30, 49, 7);
 const DRIVE: Rgb565 = Rgb565::new(28, 15, 20);
-const DRUMS: [(Voice, &[u8]); 6] = [
-    (Voice::Kick, b"BD"),
-    (Voice::Snare, b"SD"),
-    (Voice::Clap, b"CP"),
-    (Voice::ClosedHat, b"CH"),
-    (Voice::OpenHat, b"OH"),
-    (Voice::Ride, b"RD"),
-];
+fn drum_label(voice: Voice) -> &'static [u8] {
+    match voice {
+        Voice::Kick => b"BD",
+        Voice::Snare => b"SD",
+        Voice::Clap => b"CP",
+        Voice::ClosedHat => b"CH",
+        Voice::OpenHat => b"OH",
+        Voice::Ride => b"RD",
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct Cell {
@@ -48,7 +51,7 @@ struct Cell {
 }
 
 pub(super) struct Grid {
-    previous: Option<(Part, u8, bool)>,
+    previous: Option<(Part, Channel, u8, bool)>,
     head: Option<u8>,
     pitches: [u8; 8],
     rows: usize,
@@ -69,23 +72,23 @@ impl Grid {
         self.head = None;
     }
 
-    fn labels(&mut self, text: &mut TextGrid, track: Part) {
+    fn labels(&mut self, text: &mut TextGrid, track: Part, channel: Channel) {
         for row in 3..13 {
             text.text(0, row, b"    ", palette::MUTED);
         }
         text.text(4, 2, b"1   2   3   4   ", palette::MUTED);
         self.rows = 0;
-        if track == Part::Drums {
-            for (row, (_, label)) in DRUMS.into_iter().enumerate() {
-                text.text(0, row + 3, label, palette::MUTED);
+        if track.is_kit() {
+            for (row, &voice) in track.pads().iter().enumerate() {
+                text.text(0, row + 3, drum_label(voice), palette::MUTED);
             }
-            self.rows = DRUMS.len();
+            self.rows = track.pads().len();
             return;
         }
         // One pitch per occupied lane, rather than spending the small screen
         // on semitones absent from this preset. High pitches are at the top.
         for step in 0..pattern::STEPS {
-            for &note in pattern::step(track, step).notes {
+            for &note in pattern::step(track, channel, step).notes {
                 if !self.pitches[..self.rows].contains(&note) && self.rows < self.pitches.len() {
                     self.pitches[self.rows] = note;
                     self.rows += 1;
@@ -123,13 +126,17 @@ impl Grid {
         let bar = position.map_or(seq.bar, |p| p.step / 16);
         let head = position.map(|p| p.step % 16);
         let enabled = seq.enabled[seq.channel.index()];
-        let key = (part, bar, enabled);
+        let key = (part, seq.channel, bar, enabled);
         let changed = self.previous != Some(key);
-        if changed && self.previous.is_none_or(|(track, _, _)| track != part) {
-            self.labels(text, part);
+        if changed
+            && self
+                .previous
+                .is_none_or(|(track, channel, _, _)| (track, channel) != (part, seq.channel))
+        {
+            self.labels(text, part, seq.channel);
         }
-        text.number(15, 0, 1, u32::from(bar) + 1, palette::WHITE);
-        text.text(16, 0, b"/4", palette::MUTED);
+        text.number(16, 0, 1, u32::from(bar) + 1, palette::WHITE);
+        text.text(17, 0, b"/4", palette::MUTED);
         if let Some(step) = head {
             text.number(17, 1, 2, u32::from(step) + 1, palette::WHITE);
         } else {
@@ -145,10 +152,12 @@ impl Grid {
             }
             let absolute = usize::from(bar) * 16 + usize::from(step);
             let cells: [Cell; 8] = core::array::from_fn(|row| {
-                if part == Part::Drums {
+                if part.is_kit() {
                     Cell {
-                        pixels: if row < DRUMS.len()
-                            && pattern::drums(absolute).contains(&DRUMS[row].0)
+                        pixels: if part
+                            .pads()
+                            .get(row)
+                            .is_some_and(|v| pattern::drums(part, absolute).contains(v))
                         {
                             0x7fe
                         } else {
@@ -158,13 +167,13 @@ impl Grid {
                         ..Cell::default()
                     }
                 } else if row < self.rows {
-                    note_cell(part, absolute, self.pitches[row])
+                    note_cell(part, seq.channel, absolute, self.pitches[row])
                 } else {
                     Cell::default()
                 }
             });
             let automation: [[u8; WIDTH + 1]; 3] = core::array::from_fn(|lane| {
-                core::array::from_fn(|x| automation_height(absolute, x, lane))
+                core::array::from_fn(|x| automation_height(seq.channel, absolute, x, lane))
             });
             for top in [0, HALF] {
                 let pixels = &mut strip[..WIDTH * HALF];
@@ -215,8 +224,8 @@ fn note_name(note: u8) -> [u8; 4] {
     }
 }
 
-fn note_cell(track: Part, absolute: usize, note: u8) -> Cell {
-    let strike = pattern::step(track, absolute);
+fn note_cell(track: Part, channel: Channel, absolute: usize, note: u8) -> Cell {
+    let strike = pattern::step(track, channel, absolute);
     let mut cell = Cell {
         onset: strike.notes.contains(&note),
         accent: strike.velocity >= 96,
@@ -226,7 +235,11 @@ fn note_cell(track: Part, absolute: usize, note: u8) -> Cell {
     // A u8 gate spans at most 32 steps. Include notes tied over a bar boundary.
     // The preset monophonic tracks terminate their old pitch at a new strike.
     for age in 0..32 {
-        let step = pattern::step(track, (absolute + pattern::STEPS - age) % pattern::STEPS);
+        let step = pattern::step(
+            track,
+            channel,
+            (absolute + pattern::STEPS - age) % pattern::STEPS,
+        );
         if step.notes.contains(&note) {
             let gate = if step.slide {
                 step.gate.max(8)
@@ -247,14 +260,14 @@ fn note_cell(track: Part, absolute: usize, note: u8) -> Cell {
     cell
 }
 
-fn automation_height(step: usize, x: usize, lane: usize) -> u8 {
+fn automation_height(channel: Channel, step: usize, x: usize, lane: usize) -> u8 {
     // Include the previous column's final point so adjacent strips meet.
     let (step, fraction) = if x == 0 {
         ((step + pattern::STEPS - 1) % pattern::STEPS, 234)
     } else {
         (step, ((x - 1) * 256 / WIDTH) as u8)
     };
-    let value = pattern::automation(step, fraction);
+    let value = pattern::automation(channel, step, fraction);
     let scaled = match lane {
         0 => u32::from(value.cutoff_hz.saturating_sub(150)).min(1650) * 12 / 1650,
         1 => u32::from(value.resonance.saturating_sub(64)).min(36) * 12 / 36,
@@ -311,7 +324,8 @@ fn pixel(
                     Part::Organ => super::ORGAN_LIME,
                     Part::Bass if cell.accent => RESONANCE,
                     Part::Bass => ACID,
-                    Part::Drums => palette::CYAN,
+                    Part::Tr909 => palette::CYAN,
+                    Part::Tr808 => super::drums::HOT,
                 }
             };
         }

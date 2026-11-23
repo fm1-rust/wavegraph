@@ -31,7 +31,7 @@ pub struct Settings {
 
 impl Settings {
     const INITIAL: Self = Self {
-        tracks: Track::DEEP_HOUSE,
+        tracks: Track::rack(Navigation::INITIAL.assignments),
         nav: Navigation::INITIAL,
         fx_page: FxPage::Reverb,
         mixer: Mixer::INITIAL,
@@ -51,6 +51,7 @@ impl Settings {
             focus: track.assignment.part,
             bass: track.bass,
             organ: track.organ,
+            drums808: track.drums808,
             organ_keys: track.organ_keys,
             menu_since: self.menu_since,
             view: self.nav.view,
@@ -82,6 +83,7 @@ pub(super) struct Labels {
     pub(super) focus: Part,
     pub(super) bass: Controls,
     pub(super) organ: OrganControls,
+    pub(super) drums808: wavegraph_808::Controls,
     pub(super) organ_keys: [OrganKey; wavegraph_organ::POLYPHONY],
     pub(super) menu_since: Option<u32>,
     pub(super) view: View,
@@ -123,7 +125,7 @@ mod app {
         overload::Overloads,
         panel::{Assignment, CHANNELS, Channel, Navigation, PageButton, View},
         screen::Screen,
-        sequencer::{DrumMachine, SeqPage, Sequencer},
+        sequencer::{DrumKits, SeqPage, Sequencer},
     };
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
@@ -195,7 +197,7 @@ mod app {
     #[inline(never)]
     fn initialize_graph() -> &'static mut Instrument<'static> {
         static ORGAN: Organ = crate::organ::instrument(FRAME_RATE.0, FRAME_RATE.1);
-        static DRUMS: StaticCell<DrumMachine> = StaticCell::new();
+        static DRUMS: StaticCell<DrumKits> = StaticCell::new();
         static PLAYERS: [StaticCell<Node<'static>>; CHANNELS] =
             [const { StaticCell::new() }; CHANNELS];
         // Keep the four channel queues in SRAM throughout RTICX initialization.
@@ -212,7 +214,7 @@ mod app {
         type Nodes = [&'static mut dyn Process<Message, I24>; 8];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
-        let drums = DRUMS.init_with(|| DrumMachine::new(FRAME_RATE));
+        let drums = DRUMS.init_with(|| DrumKits::new(FRAME_RATE));
         let [one, two, three, four] = PLAYERS.each_ref().map(|cell| {
             cell.init_with(|| {
                 Node::new(
@@ -456,7 +458,7 @@ mod app {
                 if scan.pressed(key) {
                     let velocity = match touch.velocity(key) {
                         Some(velocity) => velocity,
-                        None if assignment.part == Part::Drums => 127,
+                        None if assignment.part.is_kit() => 127,
                         None => continue,
                     };
                     self.piano.press(
@@ -526,7 +528,7 @@ mod app {
                     let assignment = nav.assignments[channel.index()];
                     if tracks[channel.index()].assignment != assignment {
                         self.keys.clear(channel);
-                        tracks[channel.index()] = Track::factory(assignment);
+                        tracks[channel.index()] = Track::factory(channel, assignment);
                     }
                     pads[channel.index()].apply(&mut tracks[channel.index()]);
                 }

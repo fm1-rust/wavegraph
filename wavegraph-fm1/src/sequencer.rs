@@ -61,8 +61,7 @@ impl Sequencer {
         transport: Transport::INITIAL,
         channel: Channel::One,
         bar: 0,
-        // The optional counterline starts muted, leaving room for chords and acid.
-        enabled: [false, true, true, true],
+        enabled: [true; CHANNELS],
     };
 
     pub(super) fn toggle_page(&mut self) {
@@ -333,7 +332,7 @@ impl PatternPlayer {
             .filter(|_| self.enabled[Channel::Three.index()])
             .map(|_| {
                 let (position, fraction) = self.clock.position(true);
-                pattern::automation(usize::from(position.step), fraction)
+                pattern::automation(Channel::Three, usize::from(position.step), fraction)
             })
     }
 
@@ -349,7 +348,7 @@ impl PatternPlayer {
                 Part::Mono => Message::Mono(MonoMessage::NoteOff(note)),
                 Part::Organ => Message::Organ(OrganMessage::NoteOff(note)),
                 Part::Bass => Message::Bass(BassMessage::NoteOff(note)),
-                Part::Drums => unreachable!("only synth instruments hold gates"),
+                Part::Tr808 | Part::Tr909 => unreachable!("only synth instruments hold gates"),
             };
             emit(channel, event(frame, message))?;
         }
@@ -382,16 +381,29 @@ impl PatternPlayer {
                 continue;
             }
             let part = self.assignments[i].part;
-            if part == Part::Drums {
-                for &voice in pattern::drums(step) {
+            if part.is_kit() {
+                for &voice in pattern::drums(part, step) {
+                    let velocity = match (part, voice) {
+                        (Part::Tr808, Voice::Kick) => 96,
+                        (Part::Tr808, Voice::Snare) => {
+                            if step % 16 == 15 {
+                                90
+                            } else {
+                                62
+                            }
+                        }
+                        (Part::Tr808, Voice::ClosedHat) => 72,
+                        (Part::Tr808, Voice::OpenHat) => 86,
+                        _ => 127,
+                    };
                     emit(
                         channel,
-                        event(frame, Message::Drum(DrumMessage::Trigger(voice))),
+                        event(frame, Message::Drum(DrumMessage::Trigger(voice, velocity))),
                     )?;
                 }
                 continue;
             }
-            let data = pattern::step(part, step);
+            let data = pattern::step(part, channel, step);
             if data.notes.is_empty() {
                 if self.gates[i].slide {
                     self.release(channel, frame, emit)?;
@@ -417,7 +429,7 @@ impl PatternPlayer {
                         accent: data.velocity >= 96,
                         slide,
                     }),
-                    Part::Drums => unreachable!("drum hits were emitted above"),
+                    Part::Tr808 | Part::Tr909 => unreachable!("drum hits were emitted above"),
                 };
                 emit(channel, event(frame, message))?;
             }
@@ -453,7 +465,7 @@ impl PatternPlayer {
                 // The old processor is being replaced in this block.
                 self.gates[i] = PatternGate::CLOSED;
             } else if restart || (self.enabled[i] && !enabled[i]) {
-                if assignments[i].part == Part::Drums {
+                if assignments[i].part.is_kit() {
                     emit(channel, event(0, Message::Drum(DrumMessage::Stop)))?;
                 } else {
                     self.release(channel, 0, &mut emit)?;
@@ -484,12 +496,15 @@ impl PatternPlayer {
             if self.automation_left == 0 {
                 if bass.contains(&true) {
                     let (position, fraction) = self.clock.position(false);
-                    let [cutoff, resonance, drive] =
-                        pattern::automation_values(usize::from(position.step), fraction);
                     for channel in Channel::ALL
                         .into_iter()
                         .filter(|channel| bass[channel.index()])
                     {
+                        let [cutoff, resonance, drive] = pattern::automation_values(
+                            channel,
+                            usize::from(position.step),
+                            fraction,
+                        );
                         for message in [
                             BassMessage::CutoffHz(cutoff),
                             BassMessage::Resonance(resonance / 100.0),
@@ -521,7 +536,8 @@ fn event(frame: usize, message: Message) -> Event<Message> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DrumMessage {
-    Trigger(Voice),
+    Trigger(Voice, u8),
+    Controls808(wavegraph_808::Controls),
     Stop,
 }
 
@@ -533,39 +549,108 @@ pub(super) enum DrumLamp {
     Strike,
 }
 
-/// The drum renderer has no private transport; it consumes the shared player's
-/// frame-stamped strikes just like every pitched instrument.
+/// Prepare both factory kits outside the audio interrupt. Each assignment takes
+/// an independent copy of just its selected kit into the channel's player.
+pub(super) struct DrumKits {
+    tr808: wavegraph_808::Tr808,
+    tr909: Tr909<'static>,
+    flash_frames: u32,
+}
+
+impl DrumKits {
+    pub(super) fn new(rate: (u32, u32)) -> Self {
+        Self {
+            tr808: wavegraph_808::Tr808::new(rate.0, rate.1).expect("808 clock"),
+            tr909: Tr909::with_decay(Samples::X0XPROC1, rate.0, rate.1, 55)
+                .expect("909 clock and PCM"),
+            flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16,
+        }
+    }
+
+    pub(super) fn assign(&self, part: Part) -> DrumMachine {
+        let kit = match part {
+            Part::Tr808 => Kit::Tr808(self.tr808),
+            Part::Tr909 => Kit::Tr909(self.tr909),
+            _ => unreachable!("only drum assignments use a kit"),
+        };
+        DrumMachine {
+            kit,
+            frame: 0,
+            struck_at: [0; 6],
+            flash_frames: self.flash_frames,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Kit {
+    Tr808(wavegraph_808::Tr808),
+    Tr909(Tr909<'static>),
+}
+
+fn voice808(voice: Voice) -> Option<wavegraph_808::Voice> {
+    use wavegraph_808::Voice as V;
+    Some(match voice {
+        Voice::Kick => V::Kick,
+        Voice::Snare => V::Snare,
+        Voice::ClosedHat => V::ClosedHat,
+        Voice::OpenHat => V::OpenHat,
+        Voice::Clap | Voice::Ride => return None,
+    })
+}
+
+impl Kit {
+    fn voice_active(&self, voice: Voice) -> bool {
+        match self {
+            Self::Tr808(kit) => voice808(voice).is_some_and(|v| kit.voice_active(v)),
+            Self::Tr909(kit) => kit.voice_active(voice),
+        }
+    }
+
+    fn send(&mut self, message: DrumMessage) {
+        match (self, message) {
+            (Self::Tr808(kit), DrumMessage::Trigger(voice, velocity)) => {
+                if let Some(v) = voice808(voice) {
+                    kit.trigger(v, velocity);
+                }
+            }
+            (Self::Tr808(kit), DrumMessage::Controls808(c)) => {
+                kit.send(wavegraph_808::Message::Controls(c))
+            }
+            (Self::Tr808(kit), DrumMessage::Stop) => kit.send(wavegraph_808::Message::Stop),
+            (Self::Tr909(kit), DrumMessage::Trigger(voice, _)) => kit.trigger(voice),
+            (Self::Tr909(kit), DrumMessage::Stop) => kit.stop(),
+            (Self::Tr909(_), DrumMessage::Controls808(_)) => (),
+        }
+    }
+}
+
+/// Both kits use the graph's frame-stamped transport and publish their own lamps.
 #[derive(Clone, Copy)]
 pub(super) struct DrumMachine {
-    kit: Tr909<'static>,
+    kit: Kit,
     frame: u32,
     struck_at: [u32; 6],
     flash_frames: u32,
 }
 
 impl DrumMachine {
-    pub(super) fn new(rate: (u32, u32)) -> Self {
-        Self {
-            kit: Tr909::with_decay(Samples::X0XPROC1, rate.0, rate.1, 55)
-                .expect("909 clock and PCM"),
-            frame: 0,
-            struck_at: [0; 6],
-            flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16, // 62.5 ms at the kit's sample rate.
-        }
-    }
-
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "The weighted sum of six i16 voices fits i32 before clamping to Q23."
     )]
     fn render(&mut self, out: &mut [I24], key: &mut [I24]) {
-        if !Voice::ALL.into_iter().any(|v| self.kit.voice_active(v)) {
+        let kit = match &mut self.kit {
+            Kit::Tr808(kit) => return kit.render_mix_kick(out, key),
+            Kit::Tr909(kit) => kit,
+        };
+        if !Voice::ALL.into_iter().any(|v| kit.voice_active(v)) {
             out.fill(I24::default());
             key.fill(I24::default());
             return;
         }
         for (sample, key) in out.iter_mut().zip(key) {
-            let [kick, snare, clap, closed, open, ride] = self.kit.next_voices().map(i32::from);
+            let [kick, snare, clap, closed, open, ride] = kit.next_voices().map(i32::from);
             *key = I24::new_unchecked(kick << 8);
             // Blend a saturated copy into the clean kick. Its early harmonics
             // carry the downbeat above the 50 Hz body on a small speaker.
@@ -594,14 +679,11 @@ impl Process<Message, I24> for DrumMachine {
                     &mut mix[0][start..event.frame],
                     &mut key[0][start..event.frame],
                 );
-                match message {
-                    DrumMessage::Trigger(voice) => {
-                        self.kit.trigger(voice);
-                        self.struck_at[voice as usize] = self.frame.wrapping_add(
-                            u32::try_from(event.frame).expect("frame within one audio block"),
-                        );
-                    }
-                    DrumMessage::Stop => self.kit.stop(),
+                self.kit.send(message);
+                if let DrumMessage::Trigger(voice, _) = message {
+                    self.struck_at[voice as usize] = self.frame.wrapping_add(
+                        u32::try_from(event.frame).expect("frame within one audio block"),
+                    );
                 }
                 start = event.frame;
             }
@@ -655,7 +737,7 @@ mod tests {
             .render(
                 frames,
                 transport,
-                Navigation::INITIAL.assignments,
+                Navigation::SYNTH_RACK.assignments,
                 enabled,
                 |track, event| {
                     events.push((track, event));
@@ -669,7 +751,7 @@ mod tests {
     #[test]
     fn panel_browses_four_tracks_and_edits_one_global_bpm() {
         let mut seq = Sequencer::INITIAL;
-        assert_eq!(seq.enabled, [false, true, true, true]);
+        assert_eq!(seq.enabled, [true; 4]);
         seq.channel.turn(-1);
         assert_eq!(seq.channel, Channel::Four);
         seq.toggle_track();
@@ -810,6 +892,50 @@ mod tests {
     }
 
     #[test]
+    fn factory_808_fills_the_909_rests_and_both_303s_play_their_own_slides() {
+        let mut counts = [0; 4];
+        for i in 0..pattern::STEPS {
+            for voice in pattern::drums(Part::Tr808, i) {
+                assert!(pattern::drums(Part::Tr909, i).is_empty());
+                let index = Part::Tr808
+                    .pads()
+                    .iter()
+                    .position(|v| v == voice)
+                    .expect("factory hit has an 808 pad");
+                counts[index] += 1;
+            }
+        }
+        assert_eq!(counts, [4, 4, 6, 3]);
+
+        let mut player = PatternPlayer::new((48_000, 1));
+        let mut slides = Vec::new();
+        player
+            .render(
+                48_000,
+                Transport {
+                    bpm: 120,
+                    ..playing()
+                },
+                Navigation::INITIAL.assignments,
+                [true; CHANNELS],
+                |channel, event| {
+                    if let Message::Bass(BassMessage::NoteOn {
+                        note, slide: true, ..
+                    }) = event.message
+                    {
+                        slides.push((channel, event.frame, note));
+                    }
+                    Ok(())
+                },
+            )
+            .expect("unbounded host event sink");
+        assert_eq!(
+            slides,
+            [(Channel::Two, 36_000, 65), (Channel::One, 42_000, 48)]
+        );
+    }
+
+    #[test]
     fn factory_drums_repeat_only_the_four_house_voices() {
         use wavegraph_909::Voice::{Clap, ClosedHat, Kick, Snare};
         let mut player = PatternPlayer::new((48_000, 1));
@@ -825,7 +951,7 @@ mod tests {
         let hits: Vec<_> = events
             .into_iter()
             .filter_map(|(_, e)| match e.message {
-                Message::Drum(DrumMessage::Trigger(v)) => Some((e.frame, v)),
+                Message::Drum(DrumMessage::Trigger(v, _)) => Some((e.frame, v)),
                 _ => None,
             })
             .collect();
@@ -890,11 +1016,11 @@ mod tests {
 
     #[test]
     fn automation_is_bounded_interpolated_and_continuous_at_the_loop() {
-        let mut previous = pattern::automation_values(0, 0);
+        let mut previous = pattern::automation_values(Channel::Three, 0, 0);
         let mut changes = [false; 3];
         for step in 0..pattern::STEPS {
             for fraction in 0..=255 {
-                let values = pattern::automation_values(step, fraction);
+                let values = pattern::automation_values(Channel::Three, step, fraction);
                 assert!((150.0..=1800.0).contains(&values[0]));
                 assert!((72.0..=94.0).contains(&values[1]));
                 assert!((12.0..=28.0).contains(&values[2]));
@@ -906,7 +1032,7 @@ mod tests {
             }
         }
         assert_eq!(changes, [true; 3]);
-        let first = pattern::automation_values(0, 0);
+        let first = pattern::automation_values(Channel::Three, 0, 0);
         for lane in 0..3 {
             assert!((previous[lane] - first[lane]).abs() < 1.0);
         }
@@ -919,7 +1045,7 @@ mod tests {
             player.render(
                 128,
                 playing(),
-                Navigation::INITIAL.assignments,
+                Navigation::SYNTH_RACK.assignments,
                 [true; 4],
                 |_, _| Err(Error::Capacity)
             ),
@@ -929,7 +1055,7 @@ mod tests {
 
     #[test]
     fn drum_trigger_and_stop_obey_the_shared_frame_offsets() {
-        let mut drums = DrumMachine::new((44_100, 1));
+        let mut drums = DrumKits::new((44_100, 1)).assign(Part::Tr909);
         let mut out = [I24::default(); 256];
         let mut kick = out;
         drums.process(&mut ProcessContext {
@@ -937,7 +1063,7 @@ mod tests {
             inputs: &[],
             outputs: &mut [&mut out, &mut kick],
             events: &[
-                event(11, Message::Drum(DrumMessage::Trigger(Voice::Kick))),
+                event(11, Message::Drum(DrumMessage::Trigger(Voice::Kick, 127))),
                 event(100, Message::Drum(DrumMessage::Stop)),
             ],
             emit: &mut Err,
