@@ -1,7 +1,8 @@
 //! Exercise a running program through the same entry points as a device.
+use core::cell::Cell;
 use wavegraph::{
     Event, Op, Port, Process, ProcessContext,
-    bytecode::{DecodeError, Error, Program},
+    bytecode::{DecodeError, Error, Patch, Program},
     dsp::{Dsp, Software},
 };
 use wavegraph_monosynth::{Message, Monosynth, Tuning, Waveform};
@@ -19,11 +20,12 @@ fn at(frame: usize, message: Message) -> Event<Message> {
 
 #[test]
 fn live_edits_keep_oscillator_phase_and_reject_invalid_replacements() {
+    fn assert_send(_: &impl Send) {}
     // At four samples per A4 cycle, restarting the voice is unambiguous.
     let tuning = Tuning::new(1760, 1).expect("clock");
     let mut voice = Monosynth::new(&tuning);
     let mut parked = Monosynth::new(&tuning);
-    let mut objects: [&mut dyn Process<Message, I24>; 2] = [&mut voice, &mut parked];
+    let mut objects: [&mut (dyn Process<Message, I24> + Send); 2] = [&mut voice, &mut parked];
     let first = Program::<1>::decode(VOICE).expect("plain voice");
     let mut edit = [0; 8];
     edit[..VOICE.len()].copy_from_slice(VOICE);
@@ -36,7 +38,8 @@ fn live_edits_keep_oscillator_phase_and_reject_invalid_replacements() {
     let gain = Program::<2>::decode(&edit).expect("half gain");
     let incompatible = Program::<1>::decode(&[1, 1, 0, 0, 2]).expect("two outputs");
     let missing = Program::<1>::decode(&[1, 1, 2, 0, 1]).expect("unknown object");
-    let mut patch = first.bind(&mut objects).expect("one voice");
+    let mut patch = first.bind_nodes(&mut objects).expect("one voice");
+    assert_send(&patch);
     let notes = [
         at(0, Message::Waveform(Waveform::Sawtooth)),
         at(
@@ -83,10 +86,10 @@ fn live_edits_keep_oscillator_phase_and_reject_invalid_replacements() {
     assert_eq!(buses[1].map(I24::inner), [0, 8192]);
 }
 
-/// One sample of history makes it observable whether a bypassed effect ran.
-struct OneSampleDelay(I24);
+/// The borrowed cell keeps this delay local and records whether a bypassed effect ran.
+struct OneSampleDelay<'a>(&'a Cell<I24>);
 
-impl Process<Message, I24> for OneSampleDelay {
+impl Process<Message, I24> for OneSampleDelay<'_> {
     fn inlets(&self) -> &[Port] {
         &[Port::Signal]
     }
@@ -97,7 +100,7 @@ impl Process<Message, I24> for OneSampleDelay {
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         for (out, &input) in cx.outputs[0].iter_mut().zip(cx.inputs[0]) {
-            *out = core::mem::replace(&mut self.0, input);
+            *out = self.0.replace(input);
         }
     }
 }
@@ -132,9 +135,10 @@ fn rebind_borrowed_nodes_while_a_note_is_held() -> Result<(), Error> {
     }
     {
         // The voice outlived the first table. Construct the effect now.
-        let mut delay = OneSampleDelay(I24::default());
+        let history = Cell::default();
+        let mut delay = OneSampleDelay(&history);
         let mut objects: [&mut dyn Process<Message, I24>; 2] = [&mut voice, &mut delay];
-        let mut patch = wet.bind(&mut objects)?;
+        let mut patch: Patch<'_, '_, Message, I24, 8> = wet.bind(&mut objects)?;
         patch.render(&mut Software, &mut buses, &[], |_, e| Err(e))?;
         assert_eq!(buses[0].map(I24::inner), [16384, -32768, -16384]);
         assert_eq!(buses[1].map(I24::inner), [0, 16384, -32768]);

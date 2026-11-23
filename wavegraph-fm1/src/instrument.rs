@@ -1006,6 +1006,7 @@ impl Channel {
 }
 
 type Plan = Program<'static, 11, 8>;
+pub(super) type AudioProcess<'a> = dyn Process<Message, I24> + Send + 'a;
 pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
@@ -1032,13 +1033,13 @@ impl Programs {
 
     pub(super) fn bind<'a>(
         &'a self,
-        nodes: &'a mut [&'a mut dyn Process<Message, I24>],
+        nodes: &'a mut [&'a mut AudioProcess<'a>],
         events: &'a mut [RoutedEvents; CHANNELS],
         rate: (u32, u32),
     ) -> Result<Instrument<'a>, Error> {
         Ok(Instrument {
             programs: self,
-            patch: self.0[0].bind(nodes)?,
+            patch: self.0[0].bind_nodes(nodes)?,
             half_gain: false,
             mixer: Mixer::DRY,
             previous_mixer: None,
@@ -1062,7 +1063,7 @@ impl Programs {
 
 pub(super) struct Instrument<'a> {
     programs: &'a Programs,
-    patch: Patch<'a, 'a, Message, I24, 8>,
+    patch: Patch<'a, 'a, Message, I24, 8, AudioProcess<'a>>,
     pub(super) half_gain: bool,
     mixer: Mixer,
     previous_mixer: Option<Mixer>,
@@ -1471,7 +1472,7 @@ mod tests {
         let mut line = [0; 44_118];
         let mut delay = FxNode(Delay::new(&mut line, rate_hz).expect("delay sample clock"));
         let mut inserts = crate::inserts::BassInserts::new(rate_hz);
-        let mut nodes: [&mut dyn Process<Message, I24>; 9] = [
+        let mut nodes: [&mut AudioProcess<'_>; 9] = [
             one,
             two,
             three,

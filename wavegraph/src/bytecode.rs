@@ -8,7 +8,7 @@
 //! instruction stream.
 
 use crate::{Event, Port, Process, ProcessContext, dsp::Dsp};
-use core::fmt;
+use core::{fmt, marker::PhantomData};
 use heapless::Vec;
 
 pub use wavegraph_core::bytecode::{DecodeError, Op, VERSION};
@@ -114,15 +114,32 @@ impl<'code, const OPS: usize, const PORTS: usize> Program<'code, OPS, PORTS> {
         &'run self,
         objects: &'run mut [&'node mut dyn Process<M, S>],
     ) -> Result<Patch<'run, 'node, M, S, PORTS>, Error> {
+        self.bind_nodes(objects)
+    }
+
+    /// Bind nodes while retaining their concrete type or trait-object bounds.
+    /// For example, a table of `dyn Process<M, S> + Send` produces a `Send`
+    /// patch that can be handed to an audio task.
+    ///
+    /// # Errors
+    /// Returns the same object and port errors as [`Self::bind`].
+    pub fn bind_nodes<'run, 'node, M, S, P: Process<M, S> + ?Sized>(
+        &'run self,
+        objects: &'run mut [&'node mut P],
+    ) -> Result<Patch<'run, 'node, M, S, PORTS, P>, Error> {
         self.check_objects(objects)?;
         Ok(Patch {
             ops: &self.ops,
             buses: self.buses,
             objects,
+            format: PhantomData,
         })
     }
 
-    fn check_objects<M, S>(&self, objects: &[&mut dyn Process<M, S>]) -> Result<(), Error> {
+    fn check_objects<M, S, P: Process<M, S> + ?Sized>(
+        &self,
+        objects: &[&mut P],
+    ) -> Result<(), Error> {
         for op in &self.ops {
             if let Op::Call {
                 object,
@@ -144,13 +161,15 @@ impl<'code, const OPS: usize, const PORTS: usize> Program<'code, OPS, PORTS> {
 }
 
 /// A decoded schedule bound to the stateful objects it will render.
-pub struct Patch<'run, 'node, M, S, const PORTS: usize> {
+pub struct Patch<'run, 'node, M, S, const PORTS: usize, P: ?Sized = dyn Process<M, S> + 'node> {
     ops: &'run [Op<'run>],
     buses: usize,
-    objects: &'run mut [&'node mut dyn Process<M, S>],
+    objects: &'run mut [&'node mut P],
+    // Messages and samples are borrowed only during render.
+    format: PhantomData<fn(M, S)>,
 }
 
-impl<M, S, const PORTS: usize> fmt::Debug for Patch<'_, '_, M, S, PORTS> {
+impl<M, S, const PORTS: usize, P: ?Sized> fmt::Debug for Patch<'_, '_, M, S, PORTS, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Patch")
             .field("instructions", &self.ops.len())
@@ -159,7 +178,7 @@ impl<M, S, const PORTS: usize> fmt::Debug for Patch<'_, '_, M, S, PORTS> {
     }
 }
 
-impl<'run, M, S, const PORTS: usize> Patch<'run, '_, M, S, PORTS> {
+impl<'run, M, S, const PORTS: usize, P: Process<M, S> + ?Sized> Patch<'run, '_, M, S, PORTS, P> {
     /// Switch schedules between blocks, retaining every object's state.
     ///
     /// # Errors

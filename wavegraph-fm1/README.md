@@ -16,7 +16,10 @@ including the [monosynth](../instruments/wavegraph-monosynth/),
 [M1-inspired organ](../instruments/wavegraph-organ/),
 [Super Saw](../instruments/wavegraph-supersaw/) and
 [wavetable synth](../instruments/wavegraph-wavetable/).
-The transport starts stopped. Keys and USB MIDI also work with it stopped.
+The transport starts stopped. You can play the panel keys immediately.
+WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
+`DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
+`fm1 log` offline. The firmware updater remains available through the bootloader.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
 | --- | --- | --- |
@@ -343,11 +346,11 @@ End each note, allow at least one tick for each gate, and keep chords to four
 notes. Each tick can carry up to sixteen messages, including up to six drum
 strikes for a kit. The master transport supplies the playback tempo.
 
-USB MIDI channels 1–4 address mixer channels 1–4. Playing patterns also send
-their notes and CCs on those channels, so a DAW can record a performance or
-route it to a TB-03 or plug-in. Incoming notes and CCs use the same MIDI message
-type as the clips. Disconnecting the host releases its held keys. The physical
-piano roll retains separate key ownership for overlapping panel and USB notes.
+When the BSP enables USB MIDI, channels 1–4 address mixer channels 1–4.
+Playing patterns send their notes and CCs on those channels, so a DAW can
+record a performance or route it to a TB-03 or plug-in. Incoming notes and CCs
+use the same MIDI message type as the clips. Disconnecting the host releases its
+held keys. The piano roll tracks panel and USB notes separately when they overlap.
 
 | 303 parameter | MIDI |
 | --- | --- |
@@ -376,7 +379,8 @@ A seven-pixel dot in the upper-right corner turns amber on a missed audio
 deadline and red on a second miss within one second. It disappears after one
 second without a miss. The synth scope’s `V` readout is the current note velocity.
 
-Connect USB and run `fm1 log` from the [FM-1 CLI][cli]. For example,
+On a build with USB MIDI active, connect USB and run `fm1 log` from the
+[FM-1 CLI][cli]. For example,
 `XR12 T4870 W3070 G2902 DMA` reports the 12th miss, 4,870 ms after boot,
 with 3,070 µs of interrupt work and 2,902 µs since the previous audio IRQ.
 `DMA` means the refill crossed a DMA boundary. The nominal 128-frame budget
@@ -553,8 +557,9 @@ WaveGraph workspace root run
 
 Both files are written to `target/pi32v2-none/firmware/`. The build reports the
 linked application size, the space available for code, and the end of the install.
-Cargo resolves the FM-1 SDK from crates.io, including `fm1` 0.1.3 and
-`fm1-rticx` 0.1.1. CI uses the SDK’s shared pi32v2 build workflow to package
+The FM-1 SDK dependencies use 0.2.0-rc.0. The workspace pins `fm1` to the
+merged [safe USB-MIDI startup change](https://github.com/fm1-rust/fm1-rust/pull/90).
+CI uses the same SDK release’s shared pi32v2 build workflow to package
 the flashable image.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
@@ -606,14 +611,14 @@ or the [MIT License](LICENSE-MIT).
 [sh101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
 [tb03]: https://static.roland.com/assets/media/pdf/TB-03_e02_W.pdf
 [korg-m1]: https://www.korg.com/us/products/software/kc_m1/
-[fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
+[fm1-graphics]: https://docs.rs/fm1-graphics/0.2.0-rc.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
 [WaveGraph browser emulator]: https://wavegraph.org/
 [flasher-install]: https://github.com/jvitkauskas/m-flasher/blob/8fbece7348d758ac284325eed455781675ac95ff/src/ops.rs#L360-L405
 [flash-layout]: https://sbegueria.github.io/fm1-dev-wiki/Flash-Storage.html
 [fm1-emu]: https://github.com/joakimeriksson/fm1-emu
-[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash
+[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/d57cac3a09f51274d2fddb4ccead99222e6f2850/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
 

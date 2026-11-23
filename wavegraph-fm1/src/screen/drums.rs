@@ -1,17 +1,17 @@
 //! Drum faceplates and per-voice activity beneath the live kit scope.
 
-use super::{selector::Selector, tr808};
+use super::{mixer::Band, selector::Selector, tr808};
 use crate::assets::fonts::{FONT_5X8, FONT_6X10, FONT_9X15_BOLD};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
 use embedded_graphics::{
     Drawable,
-    framebuffer::{Framebuffer, buffer_size},
+    framebuffer::Framebuffer,
     mono_font::MonoTextStyle,
     pixelcolor::{
         BinaryColor, IntoStorage,
-        raw::{BigEndian, RawU1, RawU16, ToBytes},
+        raw::{BigEndian, RawU1, ToBytes},
     },
-    prelude::{DrawTarget, Point, Primitive, Size},
+    prelude::{Point, Primitive, Size},
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
 };
@@ -20,7 +20,6 @@ use fm1_rticx::{
     bsp::display::{Display, Error, SIZE},
     time::Clock,
 };
-use static_cell::ConstStaticCell;
 use wavegraph_909::Voice;
 
 pub(super) const GRAPHITE: Rgb565 = Rgb565::new(7, 15, 7);
@@ -61,34 +60,23 @@ const LENS_W: usize = 20;
 const LENS_H: usize = 7;
 const LENS_X: u16 = 10;
 const LENS_Y: u16 = 6;
-type Key =
-    Framebuffer<Rgb565, RawU16, BigEndian, KEY_W, KEY_H, { buffer_size::<Rgb565>(KEY_W, KEY_H) }>;
+const _: () = assert!(KEY_W * KEY_H <= super::BAND * crate::capture::WIDTH);
 
+#[derive(Default)]
 pub(super) struct Panel {
-    key: &'static mut Key,
     previous: Option<[DrumLamp; 6]>,
     controls: Option<wavegraph_808::Controls>,
     status808: Option<(Channel, bool, &'static str)>,
 }
 
 impl Panel {
-    pub(super) fn new() -> Self {
-        static KEY: ConstStaticCell<Key> = ConstStaticCell::new(Key::new());
-        Self {
-            key: KEY.take(),
-            previous: None,
-            controls: None,
-            status808: None,
-        }
-    }
-
     fn title(
-        &mut self,
         lcd: &mut Display,
+        strip: &mut [[u8; 2]],
         selector: &mut Selector,
         part: Part,
     ) -> Result<(), Error> {
-        // Expand a one-bit wordmark in stripes, borrowing the keycap scratch buffer.
+        // Expand the one-bit wordmark in eight-row strips.
         type Title = Framebuffer<BinaryColor, RawU1, BigEndian, 56, 16, 112>;
         let mut mask = Title::new();
         Text::with_baseline(
@@ -107,9 +95,9 @@ impl Panel {
         .map(|ink| selector.shade(ink).to_be_bytes());
         let rows = mask.data().as_chunks::<7>().0;
         for (band, source) in rows.chunks_exact(4).enumerate() {
-            let pixels = &mut self.key.data_mut()[..112 * 8 * 2];
-            for (y, row) in pixels.chunks_exact_mut(112 * 2).enumerate() {
-                for (x, pixel) in row.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let pixels = &mut strip[..112 * 8];
+            for (y, row) in pixels.chunks_exact_mut(112).enumerate() {
+                for (x, pixel) in row.iter_mut().enumerate() {
                     let bit = x / 2;
                     *pixel = if source[y / 2][bit / 8] & (0x80 >> (bit % 8)) == 0 {
                         paper
@@ -121,18 +109,13 @@ impl Panel {
                 }
             }
             let y = 1 + 8 * band;
-            selector
-                .badge
-                .compose(10, y, 112, pixels.as_chunks_mut::<2>().0);
-            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels)?;
+            selector.badge.compose(10, y, 112, pixels);
+            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels.as_flattened())?;
         }
         Ok(())
     }
 
-    fn key_face(&mut self, voice: Voice, slot: usize, selector: &Selector) {
-        let key = &mut *self.key;
-        key.clear(selector.shade(STYLE.background))
-            .expect("infallible framebuffer");
+    fn key_face(key: &mut Band<'_>, voice: Voice, slot: usize, selector: &Selector) {
         // Recess, lower bevel and face of the keycap.
         for (x, y, w, h, ink) in [
             (0, 0, 39, 47, GRAPHITE),
@@ -181,17 +164,13 @@ impl Panel {
     pub(super) fn status808(
         &mut self,
         lcd: &mut Display,
+        strip: &mut [[u8; 2]],
         selector: &Selector,
         status: (Channel, bool, &'static str),
         entering: bool,
     ) -> Result<(), Error> {
         if entering || self.status808 != Some(status) {
-            tr808::status(
-                lcd,
-                self.key.data_mut().as_chunks_mut::<2>().0,
-                selector,
-                status,
-            )?;
+            tr808::status(lcd, strip, selector, status)?;
             self.status808 = Some(status);
         }
         Ok(())
@@ -200,6 +179,7 @@ impl Panel {
     pub(super) fn controls(
         &mut self,
         lcd: &mut Display,
+        strip: &mut [[u8; 2]],
         selector: &Selector,
         c: wavegraph_808::Controls,
         entering: bool,
@@ -208,13 +188,7 @@ impl Panel {
         if previous == Some(c) {
             return Ok(());
         }
-        tr808::controls(
-            lcd,
-            self.key.data_mut().as_chunks_mut::<2>().0,
-            selector,
-            c,
-            previous,
-        )?;
+        tr808::controls(lcd, strip, selector, c, previous)?;
         self.controls = Some(c);
         Ok(())
     }
@@ -223,6 +197,7 @@ impl Panel {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
+        strip: &mut [[u8; 2]],
         selector: &mut Selector,
         entering: bool,
         part: Part,
@@ -232,7 +207,7 @@ impl Panel {
             return Ok(());
         }
         if entering {
-            self.title(lcd, selector, part)?;
+            Self::title(lcd, strip, selector, part)?;
             let rule = selector.shade(ORANGE).into_storage();
             lcd.fill_rect(0, 52, SIZE, 2, rule)?;
             lcd.fill_rect(0, 185, SIZE, 2, rule)?;
@@ -241,7 +216,7 @@ impl Panel {
         if part == Part::Tr808 {
             tr808::switches(
                 &mut lcd,
-                self.key.data_mut().as_chunks_mut::<2>().0,
+                strip,
                 selector,
                 lamps,
                 if entering { None } else { self.previous },
@@ -254,9 +229,23 @@ impl Panel {
             let lamp = lamps[voice as usize];
             let x = 1 + 40 * u16::try_from(i).expect("six keys");
             if entering {
-                self.key_face(voice, i, selector);
-                lcd.write_rect_buffered(x, KEY_Y, KEY_W as u16, KEY_H as u16, self.key.data())
-                    .await?;
+                let mut key = Band::new(
+                    strip,
+                    0,
+                    0,
+                    KEY_W as u16,
+                    KEY_H as u16,
+                    selector.shade(STYLE.background),
+                );
+                Self::key_face(&mut key, voice, i, selector);
+                lcd.write_rect_buffered(
+                    x,
+                    KEY_Y,
+                    KEY_W as u16,
+                    KEY_H as u16,
+                    key.pixels.as_flattened(),
+                )
+                .await?;
             } else if self.previous.is_some_and(|old| old[voice as usize] == lamp) {
                 continue;
             }

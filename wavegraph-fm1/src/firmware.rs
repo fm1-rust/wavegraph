@@ -145,7 +145,7 @@ mod app {
         capture::{Capture, FLAT, Scale},
         inserts::BassInserts,
         instrument::{
-            BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Message, Node, Note,
+            AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
             Part, Programs, RoutedEvents, STRIP_BUS, Track,
         },
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
@@ -161,7 +161,7 @@ mod app {
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
     use fm1_rticx::{
         bsp::{
-            Board,
+            Board, Cpu0,
             display::{DisplayPort, SpiClock, on_spi1_interrupt},
             enter_download_mode,
             time::{Timers, cycles, ticks},
@@ -176,10 +176,7 @@ mod app {
     use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
-    use wavegraph::{
-        Process,
-        control::{Controller, EditQueue, Host},
-    };
+    use wavegraph::control::{Controller, EditQueue, Host};
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
@@ -249,7 +246,7 @@ mod app {
         );
         static EFFECTS: StaticCell<Effects> = StaticCell::new();
         static INSERTS: StaticCell<BassInserts> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 9];
+        type Nodes = [&'static mut AudioProcess<'static>; 9];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
         let drums = DRUMS.init_with(|| DrumKits::new(FRAME_RATE));
@@ -292,12 +289,13 @@ mod app {
         let usb = board
             .take_usb()
             .expect("one USB device")
-            .into_midi(Identity {
+            .try_into_midi(Identity {
                 vendor_id: 0x1209,
                 product_id: 0x0001,
                 manufacturer: "fm1-rust",
                 product: "WaveGraph FM-1",
-            });
+            })
+            .ok();
         let timer = Clock::start(board.timers.with_panel_scan_rate());
         let clock = timer.clock();
         // Keep the DMA-sized buses out of the task initializer and its stack.
@@ -357,7 +355,7 @@ mod app {
                 },
                 panel: Panel {
                     timer,
-                    controls: board.panel.into_touch_controls(),
+                    controls: board.panel.into_touch_controls().into(),
                     piano: PIANO.take(),
                     nav: Navigation::INITIAL,
                     seq: Sequencer::INITIAL,
@@ -381,13 +379,13 @@ mod app {
                     previous: None,
                 },
                 usb: Usb {
-                    device: usb,
+                    device: usb.map(Cpu0::from),
                     clock,
                     midi: midi_out,
                     outbound,
                 },
                 draw: Draw {
-                    port: Some(board.display),
+                    port: Some(board.display.into()),
                     clock,
                 },
             },
@@ -407,7 +405,7 @@ mod app {
     #[task(binds = TIMER5, priority = 4, shared = [leds, motion])]
     struct Panel {
         timer: Timer5,
-        controls: TouchControls,
+        controls: Cpu0<TouchControls>,
         piano: &'static mut Piano<PIANO_KEYS>,
         nav: Navigation,
         seq: Sequencer,
@@ -924,7 +922,7 @@ mod app {
 
     #[async_task(priority = 1, shared = [overloads, settings, midi_epoch, outbox])]
     struct Usb {
-        device: MidiDevice,
+        device: Option<Cpu0<MidiDevice>>,
         clock: Clock,
         midi: Sender<'static, MidiEvent, MIDI_EVENTS>,
         outbound: Receiver<'static, (), 1>,
@@ -932,6 +930,9 @@ mod app {
     impl RticAsyncTask for Usb {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
+            let Some(mut device) = self.device.take() else {
+                return;
+            };
             let mut rx = PacketBuffer::default();
             let mut tx = PacketBuffer::default();
             let mut log = UsbLog::new();
@@ -946,19 +947,19 @@ mod app {
                     let poll = {
                         let activity = pin!(Clock::timeout_after(
                             100.millis(),
-                            self.device.wait_for_activity(&mut self.clock)
+                            device.wait_for_activity(&mut self.clock)
                         ));
                         let output = pin!(self.outbound.recv());
                         !matches!(select(activity, output).await, Either::Left((Ok(()), _)))
                     };
                     if poll {
-                        self.device.poll();
+                        device.poll();
                     }
                 } else {
-                    self.device.wait_for_activity(&mut self.clock).await;
+                    device.wait_for_activity(&mut self.clock).await;
                 }
-                let packets = self.device.receive(&mut rx);
-                let active = self.device.session();
+                let packets = device.receive(&mut rx);
+                let active = device.session();
                 if session != active {
                     session = active;
                     self.shared().outbox.lock(|q| q.connect(active.is_some()));
@@ -995,11 +996,11 @@ mod app {
                         }
                     }
                 }
-                log.service(&mut self.device, packets);
+                log.service(&mut device, packets);
                 if active.is_some() {
                     let (revision, count) = self.shared().outbox.lock(|q| q.peek(&mut tx));
                     if count != 0 {
-                        let sent = self.device.send(&tx[..count]);
+                        let sent = device.send(&tx[..count]);
                         self.shared().outbox.lock(|q| q.sent(revision, sent));
                     }
                 }
@@ -1009,14 +1010,14 @@ mod app {
 
     #[async_task(priority = 1, shared = [frame, overloads, motion, bumper])]
     struct Draw {
-        port: Option<DisplayPort>,
+        port: Option<Cpu0<DisplayPort>>,
         clock: Clock,
     }
     impl RticAsyncTask for Draw {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
             let port = self.port.take().expect("one LCD");
-            let Ok(mut lcd) = port.init_with_clock(SpiClock::Div1) else {
+            let Ok(mut lcd) = port.into_inner().init_with_clock(SpiClock::Div1) else {
                 return;
             };
             let mut screen = Screen::new();
