@@ -1,7 +1,10 @@
 //! JP-8080 rack panel above and below the channel's full-width oscilloscope.
 
 use super::{BAND, GRID, mixer::Band, selector::Selector};
-use crate::{firmware::Labels, instrument::SawControls, panel::Channel};
+use crate::{
+    envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
+};
+use core::fmt::Write;
 use embedded_graphics::{
     Drawable,
     framebuffer::Framebuffer,
@@ -22,7 +25,7 @@ use fm1_rticx::{
 pub(super) const FACE: Rgb565 = Rgb565::new(3, 8, 13);
 pub(super) const EDGE: Rgb565 = Rgb565::new(8, 37, 25);
 pub(super) const AMBER: Rgb565 = Rgb565::new(31, 41, 6);
-const PRINT: Rgb565 = Rgb565::new(22, 50, 28);
+pub(super) const PRINT: Rgb565 = Rgb565::new(22, 50, 28);
 const BLACK: Rgb565 = Rgb565::new(1, 3, 4);
 const RIM: Rgb565 = Rgb565::new(10, 23, 19);
 const LCD: Rgb565 = Rgb565::new(12, 43, 24);
@@ -38,7 +41,7 @@ pub(super) const STYLE: WaveformStyle = WaveformStyle {
 #[derive(Default)]
 pub(super) struct Panel {
     status: Option<(Channel, bool, [u8; 4])>,
-    controls: Option<SawControls>,
+    controls: Option<[u8; 4]>,
 }
 
 impl Panel {
@@ -105,71 +108,116 @@ impl Panel {
             self.status = Some(status);
         }
 
-        for (x, name, value, old) in [
-            (
-                0,
-                "1 DETUNE",
-                labels.saw.detune,
-                self.controls.map(|c| c.detune),
-            ),
-            (120, "2 MIX", labels.saw.mix, self.controls.map(|c| c.mix)),
-        ] {
-            if !entering && old == Some(value) {
+        let values = [
+            labels.voice.cutoff_step,
+            labels.saw.resonance,
+            labels.saw.detune,
+            labels.saw.mix,
+        ];
+        for (i, (x, name)) in [
+            (0, "1 CUTOFF"),
+            (60, "2 RESO"),
+            (120, "3 DETUNE"),
+            (180, "4 MIX"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let value = values[i];
+            if !entering && self.controls.is_some_and(|old| old[i] == value) {
                 continue;
             }
             let left = i32::from(x);
-            let number = [
-                b'0' + value / 100,
-                b'0' + value / 10 % 10,
-                b'0' + value % 10,
-            ];
-            for y in (200..240).step_by(BAND) {
-                let mut band = Band::new(pixels, x, y, 120, 8, ink(FACE));
-                band.rect(Point::new(left, 200), Size::new(120, 1), ink(BLACK));
-                band.rect(Point::new(left, 201), Size::new(120, 1), ink(EDGE));
-                band.rect(Point::new(119, 207), Size::new(1, 26), ink(RIM));
-                for (dx, dy) in [
-                    (-11, 8),
-                    (-13, 0),
-                    (-9, -9),
-                    (0, -13),
-                    (9, -9),
-                    (13, 0),
-                    (11, 8),
-                ] {
-                    band.rect(
-                        Point::new(left + 32 + dx, 221 + dy),
-                        Size::new(2, 2),
-                        ink(EDGE),
-                    );
+            let mut readout = heapless::String::<6>::new();
+            let max = if i == 0 {
+                let hz = labels.voice.cutoff_hz();
+                if hz < 1000 {
+                    write!(readout, "{hz}Hz")
+                } else {
+                    write!(readout, "{}.{}k", hz / 1000, hz / 100 % 10)
                 }
+                .expect("five characters");
+                MAX_CUTOFF_STEP
+            } else {
+                write!(readout, "{value}").expect("three digits");
+                127
+            };
+            for y in [200, 220] {
+                let mut band = Band::new(pixels, x, y, 60, 20, ink(FACE));
+                band.rect(Point::new(left, 200), Size::new(60, 1), ink(BLACK));
+                band.rect(Point::new(left, 201), Size::new(60, 1), ink(EDGE));
+                band.rect(Point::new(left + 59, 206), Size::new(1, 29), ink(RIM));
+                band.label(
+                    name,
+                    Point::new(left + 30, 204),
+                    Alignment::Center,
+                    ink(PRINT),
+                );
                 band.knob(
-                    Point::new(left + 32, 221),
+                    Point::new(left + 14, 226),
                     value,
-                    127,
+                    max,
                     [ink(BLACK), ink(RIM), ink(AMBER)],
                 );
                 band.label(
-                    name,
-                    Point::new(left + 54, 207),
-                    Alignment::Left,
-                    ink(PRINT),
+                    readout.as_str(),
+                    Point::new(left + 41, 222),
+                    Alignment::Center,
+                    ink(AMBER),
                 );
-                Text::with_baseline(
-                    core::str::from_utf8(&number).expect("ASCII digits"),
-                    Point::new(left + 54, 219),
-                    MonoTextStyle::new(&FONT_9X15_BOLD, ink(AMBER)),
-                    Baseline::Top,
-                )
-                .draw(&mut band)
-                .expect("infallible strip");
-                lcd.write_rect_buffered(x, y, 120, 8, band.pixels.as_flattened())
+                lcd.write_rect_buffered(x, y, 60, 20, band.pixels.as_flattened())
                     .await?;
             }
         }
-        self.controls = Some(labels.saw);
+        self.controls = Some(values);
         lcd.flush().await
     }
+}
+
+pub(super) async fn envelope_header(
+    lcd: &mut Display,
+    clock: &mut Clock,
+    pixels: &mut [[u8; 2]],
+    target: EnvelopeTarget,
+    entering: bool,
+) -> Result<(), Error> {
+    let mut lcd = lcd.as_async(clock)?;
+    if entering {
+        wordmark(pixels, FACE, AMBER);
+        lcd.write_rect_buffered(7, 2, 100, 16, pixels[..1600].as_flattened())
+            .await?;
+        let mut band = Band::new(pixels, 0, 18, 108, 14, FACE);
+        band.label("ENVELOPES", Point::new(9, 19), Alignment::Left, PRINT);
+        lcd.write_rect_buffered(0, 18, 108, 14, band.pixels.as_flattened())
+            .await?;
+    }
+    for y in [0, 16] {
+        let mut band = Band::new(pixels, 110, y, 114, 16, FACE);
+        band.label("SELECT", Point::new(113, 0), Alignment::Left, PRINT);
+        for (x, width, name, page) in [
+            (112, 40, "AMP", EnvelopeTarget::Amp),
+            (155, 66, "FILTER", EnvelopeTarget::Filter),
+        ] {
+            let active = target == page;
+            band.rect(
+                Point::new(x, 11),
+                Size::new(width, 17),
+                if active { AMBER } else { RIM },
+            );
+            if !active {
+                band.rect(Point::new(x + 1, 12), Size::new(width - 2, 15), FACE);
+            }
+            band.label(
+                name,
+                Point::new(x + (width / 2) as i32, 15),
+                Alignment::Center,
+                if active { BLACK } else { PRINT },
+            );
+        }
+        lcd.write_rect_buffered(110, y, 114, 16, band.pixels.as_flattened())
+            .await?;
+    }
+    lcd.flush().await
 }
 
 // Stretch and shear the glyphs on the rack's printed model badge.

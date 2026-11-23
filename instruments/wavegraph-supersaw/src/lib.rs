@@ -3,12 +3,16 @@
 #![doc = include_str!("../README.md")]
 
 mod decimator;
+mod filter;
 
+pub use wavegraph_adsr::Adsr;
 pub use wavegraph_core::Tuning;
 
 use core::f32::consts::PI;
 use decimator::Decimator;
+use filter::LowPass;
 use micromath::F32;
+use wavegraph_adsr::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
 
@@ -16,6 +20,22 @@ use wavegraph_sample::FromSample;
 pub const DEFAULT_DETUNE: u8 = 80;
 /// Initial mix on the 0–127 panel scale.
 pub const DEFAULT_MIX: u8 = 96;
+/// Initial low-pass cutoff at the foot of the filter envelope.
+pub const DEFAULT_CUTOFF_HZ: u16 = 5_000;
+/// The original short gate, with a velocity-sensitive peak.
+pub const DEFAULT_AMP_ENVELOPE: Adsr = Adsr {
+    attack_us: 2_000,
+    decay_us: 160_000,
+    sustain_percent: 100,
+    release_us: 2_000,
+};
+/// Open the filter on the strike and settle to a brighter held tone.
+pub const DEFAULT_FILTER_ENVELOPE: Adsr = Adsr {
+    attack_us: 8_000,
+    decay_us: 250_000,
+    sustain_percent: 35,
+    release_us: 125_000,
+};
 
 /// Notes and panel controls for the instrument's message inlet.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +53,14 @@ pub enum Message {
     Detune(u8),
     /// Set the level of the six side saws, clamped to 0–127.
     Mix(u8),
+    /// Set the base low-pass cutoff in Hz. Zero selects 1 Hz.
+    CutoffHz(u16),
+    /// Set the low-pass resonance, clamped to 0–127.
+    Resonance(u8),
+    /// Edit the amplitude contour, including during a note or release.
+    AmpEnvelope(Adsr),
+    /// Edit the contour that sweeps cutoff up to two octaves above its base.
+    FilterEnvelope(Adsr),
 }
 
 // Side offsets from the oscillator DSP, in units of 1/128 of the detune base.
@@ -78,8 +106,8 @@ impl Saw {
     }
 }
 
-/// Seven phase-continuous saws, a pitch-tracking high-pass filter and a mono
-/// output. Instances can share one tuning table at the host's output rate.
+/// Seven phase-continuous saws with a pitch-tracking high-pass, resonant low-pass
+/// and independent filter and amplitude envelopes. Output is mono.
 #[derive(Clone, Debug)]
 pub struct Supersaw<'a> {
     tuning: &'a Tuning,
@@ -90,9 +118,14 @@ pub struct Supersaw<'a> {
     hp_coeff: f32,
     hp_state: f32,
     decimator: Decimator,
-    level: f32,
-    target_level: f32,
-    slew: f32,
+    filter: LowPass,
+    filter_env: Envelope,
+    filter_timing: Timing,
+    amp_env: Envelope,
+    amp_timing: Timing,
+    velocity: f32,
+    target_velocity: f32,
+    velocity_slew: f32,
 }
 
 impl<'a> Supersaw<'a> {
@@ -109,6 +142,7 @@ impl<'a> Supersaw<'a> {
             0xf2ae_0000,
             0x68d4_0000,
         ];
+        let period = tuning.sample_period();
         let mut voice = Self {
             tuning,
             saws: phases.map(|phase| Saw { phase, step: 0 }),
@@ -118,9 +152,14 @@ impl<'a> Supersaw<'a> {
             hp_coeff: 0.0,
             hp_state: 0.0,
             decimator: Decimator::new(),
-            level: 0.0,
-            target_level: 0.0,
-            slew: 500.0 * tuning.sample_period(), // 2 ms to traverse full scale
+            filter: LowPass::new(period),
+            filter_env: Envelope::IDLE,
+            filter_timing: DEFAULT_FILTER_ENVELOPE.at_sample_period(period),
+            amp_env: Envelope::IDLE,
+            amp_timing: DEFAULT_AMP_ENVELOPE.at_sample_period(period),
+            velocity: 0.0,
+            target_velocity: 0.0,
+            velocity_slew: 500.0 * period,
         };
         voice.set_pitch(69);
         voice
@@ -162,21 +201,38 @@ impl<'a> Supersaw<'a> {
                 self.retune_sides();
             }
             Message::Mix(value) => self.side_gain = side_gain(value),
+            Message::CutoffHz(hz) => self.filter.set_cutoff(hz, self.tuning.sample_period()),
+            Message::Resonance(value) => self.filter.set_resonance(value),
+            Message::AmpEnvelope(adsr) => {
+                let next = adsr.at_sample_period(self.tuning.sample_period());
+                self.amp_env.retime(&self.amp_timing, &next);
+                self.amp_timing = next;
+            }
+            Message::FilterEnvelope(adsr) => {
+                let next = adsr.at_sample_period(self.tuning.sample_period());
+                self.filter_env.retime(&self.filter_timing, &next);
+                self.filter_timing = next;
+            }
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } if note == self.note => {
-                self.target_level = 0.0;
+                self.amp_env.gate_off(&self.amp_timing);
+                self.filter_env.gate_off(&self.filter_timing);
             }
             Message::NoteOn { note, velocity } if note < 128 && velocity != 0 => {
                 self.set_pitch(note);
-                if self.level == 0.0 {
+                if self.saws[0].step == 0 {
+                    self.amp_env = Envelope::IDLE;
+                    self.filter_env = Envelope::IDLE;
+                    return;
+                }
+                self.target_velocity = f32::from(velocity.min(127)) / 127.0;
+                if self.amp_env.is_idle() {
                     self.hp_state = 0.0;
                     self.decimator = Decimator::new();
+                    self.filter.reset();
+                    self.velocity = self.target_velocity;
                 }
-                if self.saws[0].step == 0 {
-                    self.level = 0.0;
-                    self.target_level = 0.0;
-                } else {
-                    self.target_level = f32::from(velocity.min(127)) / 127.0;
-                }
+                self.amp_env.gate_on(&self.amp_timing);
+                self.filter_env.gate_on(&self.filter_timing);
             }
             _ => {}
         }
@@ -204,10 +260,17 @@ impl<'a> Supersaw<'a> {
         reason = "Phase accumulation wraps modulo 2^32, including when skipping silent frames."
     )]
     fn render<S: FromSample<f32>>(&mut self, output: &mut [S]) {
-        if self.level == 0.0 && self.target_level == 0.0 {
+        if self.amp_env.is_idle() {
             let ticks = (output.len() as u32).wrapping_mul(2);
             for saw in &mut self.saws {
                 saw.phase = saw.phase.wrapping_add(saw.step.wrapping_mul(ticks));
+            }
+            // A short VCA release can leave the VCF releasing into the next strike.
+            for _ in 0..output.len() {
+                if self.filter_env.is_idle() {
+                    break;
+                }
+                self.filter_env.advance(&self.filter_timing);
             }
             output.fill_with(|| S::from_sample_(0.0));
             return;
@@ -215,8 +278,12 @@ impl<'a> Supersaw<'a> {
         for out in output {
             let pair = [self.tick(), self.tick()];
             let sample = self.decimator.process(pair);
-            self.level += (self.target_level - self.level).clamp(-self.slew, self.slew);
-            *out = S::from_sample_((sample * self.level).clamp(-1.0, 1.0 - f32::EPSILON));
+            let cutoff = self.filter_env.advance(&self.filter_timing);
+            let filtered = self.filter.process(sample, cutoff);
+            self.velocity += (self.target_velocity - self.velocity)
+                .clamp(-self.velocity_slew, self.velocity_slew);
+            let gain = self.velocity * self.amp_env.advance(&self.amp_timing);
+            *out = S::from_sample_((filtered * gain).clamp(-1.0, 1.0 - f32::EPSILON));
         }
     }
 }

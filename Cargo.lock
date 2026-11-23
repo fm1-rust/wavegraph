@@ -937,6 +937,7 @@ name = "wavegraph-supersaw"
 version = "0.1.0"
 dependencies = [
  "micromath",
+ "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-sample",
 ]

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths: &wavegraph-supersaw-paths
       - 'instruments/wavegraph-supersaw/**'
+      - 'wavegraph-adsr/**'
       - 'wavegraph-core/**'
       - 'wavegraph-sample/**'
       - 'Cargo.toml'
