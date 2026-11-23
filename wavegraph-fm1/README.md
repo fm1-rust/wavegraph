@@ -415,10 +415,9 @@ A two-block queue feeds an async observer. Missing blocks and routing changes
 start a fresh trace. The trace labels travel with the samples. The cutoff
 readout follows the knob even while the scope waits for a trigger.
 
-The splash and instrument pages use [fm1-graphics] to draw a waveform on a
-24-pixel grid. The boot illustration combines two harmonics with phase
-modulation. When the green WaveGraph title finishes bouncing, the pink FM-1
-lettering rises from the bottom. A 750 ms cue starts on that landing. The
+The splash uses [fm1-graphics] to draw a waveform on a 24-pixel grid. The
+boot illustration combines two harmonics with phase modulation. When the green
+WaveGraph title finishes bouncing, the pink FM-1 lettering rises from the bottom. A 750 ms cue starts on that landing. The
 303 quotes the pattern's two low Ds and A–C slide, then climbs G–A–D.
 It holds the accented A into the upper tonic using the voice's pitch slide
 and a continuous filter envelope. Two quiet 909 knocks lead into the landing. MASTER controls the cue throughout.
@@ -429,8 +428,11 @@ The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
 artwork. Both draw in buffered RGB565 strips. The scope stays live while the transport is stopped. During playback, a
 narrow phosphor pulse crosses the trace once per quarter note, starting at
 the left edge with the kick. It follows the audio master clock across tempo
-changes and clears on STOP. Display DMA runs below
-audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
+changes and clears on STOP. The live scope compares the old and new trace and
+pulse in 12-column strips. It restores the grid and composites the new ink
+and preset list in the same LCD write. A jump between notes leaves the clean
+rows between them alone. Painting counts toward the 30 ms display interval.
+Display DMA runs below audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
 or `assets/fm1.png` and run
 `python3 wavegraph-fm1/assets/pack_logo.py` with Pillow installed.
 

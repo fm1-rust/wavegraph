@@ -874,6 +874,8 @@ mod app {
             }
             // A failed display transfer ends only this task. Audio and panel IRQs keep running.
             loop {
+                // Count paint time toward the frame period and sample the latest frame on a miss.
+                let next_frame = Clock::now() + 30.millis();
                 let frame = self.shared().frame.lock(|f| *f);
                 let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
                 let motion = self.shared().motion.lock(|motion| *motion);
@@ -884,7 +886,7 @@ mod app {
                 {
                     return;
                 }
-                Clock::delay(30.millis()).await;
+                Clock::delay_until(next_frame).await;
             }
         }
     }

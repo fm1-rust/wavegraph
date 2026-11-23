@@ -1,7 +1,10 @@
 //! Boot artwork composited over the scope in buffered LCD strips.
 
-use super::{STYLE, Screen, paper, segment};
-use crate::capture::{Trace, WIDTH};
+use super::{STYLE, Screen, paper};
+use crate::{
+    capture::{Trace, WIDTH},
+    scope::segment,
+};
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},

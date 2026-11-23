@@ -3,6 +3,7 @@
 use crate::{
     instrument::Part,
     panel::{CHANNELS, Channel},
+    scope::Window,
 };
 use embedded_graphics::{
     Drawable,
@@ -10,7 +11,7 @@ use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_9X15_BOLD},
     pixelcolor::{
         Gray2, RgbColor,
-        raw::{BigEndian, RawU2},
+        raw::{BigEndian, RawU2, ToBytes},
     },
     prelude::{DrawTarget, Point, Primitive, Size},
     primitives::{PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
@@ -134,11 +135,37 @@ impl Selector {
         if !self.visible() || !(LEFT..RIGHT).contains(&x) || !(TOP..BOTTOM).contains(&y) {
             return background;
         }
+        self.ink(x, y).unwrap_or(background)
+    }
+
+    pub(super) fn bounds(&self) -> Option<Window> {
+        self.visible().then_some(Window {
+            x: LEFT,
+            y: TOP,
+            width: WIDTH,
+            height: HEIGHT,
+        })
+    }
+
+    pub(super) fn overlay(&self, w: Window, pixels: &mut [[u8; 2]]) {
+        if !self.visible() {
+            return;
+        }
+        for y in TOP.max(w.y)..BOTTOM.min(w.y + w.height) {
+            for x in LEFT.max(w.x)..RIGHT.min(w.x + w.width) {
+                if let Some(ink) = self.ink(x, y) {
+                    pixels[(y - w.y) * w.width + x - w.x] = ink.to_be_bytes();
+                }
+            }
+        }
+    }
+
+    fn ink(&self, x: usize, y: usize) -> Option<Rgb565> {
         let i = (y - TOP) * WIDTH + x - LEFT;
         match (self.mask.data()[i / 4] >> (6 - 2 * (i % 4))) & 3 {
-            0 => background,
-            1 => Rgb565::BLACK,
-            _ => palette::WHITE,
+            0 => None,
+            1 => Some(Rgb565::BLACK),
+            _ => Some(palette::WHITE),
         }
     }
 }

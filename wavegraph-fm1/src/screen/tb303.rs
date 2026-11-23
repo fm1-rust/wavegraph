@@ -18,7 +18,7 @@ use embedded_graphics::{
         raw::{BigEndian, RawU1},
     },
     prelude::{Point, Primitive, Size},
-    primitives::{Circle, Line, PrimitiveStyle},
+    primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::{Alignment, Baseline, Text},
 };
 use fm1_graphics::Rgb565;
@@ -115,7 +115,8 @@ impl Snapshot {
                 Knob::Overdrive => a.overdrive_db,
                 _ => return None,
             };
-            Some(Band::knob_offset(value, max))
+            let tip = Band::knob_offset(value, max);
+            Some(Point::new(tip.x * 13 / 7 - 1, tip.y * 11 / 7))
         });
         Dial {
             pointer: Band::knob_offset(
@@ -162,13 +163,8 @@ impl Dial {
             );
         }
         // The cap shows the stored setting. The red witness mark follows the sequencer.
-        if let Some(tip) = self.marker {
-            let position = center + Point::new(tip.x * 13 / 7, tip.y * 11 / 7);
-            band.rect(
-                position - Point::new(1, 0),
-                Size::new(3, 3),
-                shade(OXIDE_RED),
-            );
+        if let Some(marker) = self.marker {
+            band.rect(center + marker, Size::new(3, 3), shade(OXIDE_RED));
         }
         band.label(
             name,
@@ -230,23 +226,36 @@ impl Panel {
         }
         for (i, (knob, name)) in KNOBS.into_iter().enumerate() {
             let dial = state.dial(knob);
-            if old.is_some_and(|s| s.dial(knob) == dial) {
+            let previous = old.map(|s| s.dial(knob));
+            if previous.as_ref() == Some(&dial) {
                 continue;
             }
             let slot = u16::try_from(i).expect("eight knobs");
-            let (x, y, width) = if slot < 6 {
+            let (x, y, width): (u16, u16, u16) = if slot < 6 {
                 (40 * slot, 209, 40)
             } else {
                 (158 + 36 * (slot - 6), 0, 36)
             };
-            let mut cell = Band::new(pixels, 0, 0, width, 31, paper);
-            dial.draw(
-                &mut cell,
-                selector,
-                name,
-                Point::new(i32::from(width / 2), 11),
-            );
-            lcd.write_rect_buffered(x, y, width, 31, cell.pixels.as_flattened())
+            let center = Point::new(i32::from(width / 2), 11);
+            // A moving sequencer marker only damages its old and new footprints.
+            // Draw the final dial clipped to that area to restore the underlying bevel and ticks.
+            let area = if old.is_some_and(|s| s.controls == state.controls)
+                && let (Some(a), Some(b)) = (previous.and_then(|d| d.marker), dial.marker)
+            {
+                Rectangle::with_corners(
+                    center + a.component_min(b),
+                    center + a.component_max(b) + Point::new(2, 2),
+                )
+            } else {
+                Rectangle::new(Point::zero(), Size::new(u32::from(width), 31))
+            };
+            let dx = area.top_left.x as u16;
+            let dy = area.top_left.y as u16;
+            let w = area.size.width as u16;
+            let h = area.size.height as u16;
+            let mut cell = Band::new(pixels, dx, dy, w, h, paper);
+            dial.draw(&mut cell, selector, name, center);
+            lcd.write_rect_buffered(x + dx, y + dy, w, h, cell.pixels.as_flattened())
                 .await?;
         }
         lcd.flush().await?;

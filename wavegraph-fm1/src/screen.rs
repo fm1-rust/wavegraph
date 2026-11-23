@@ -3,12 +3,13 @@
 use crate::overload::Severity;
 use crate::{
     bass::{Bank, Controls, Knob, envelope as bass_env},
-    capture::{HEIGHT, Trace, WIDTH},
+    capture::{HEIGHT, WIDTH},
     envelope::EnvelopeControls,
     firmware::{Frame, Labels, Motion},
     fx::FxPage,
     instrument::Part,
     panel::{CHANNELS, Channel, View},
+    scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
     sequencer::{Position, SeqPage, Sequencer},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
@@ -35,7 +36,6 @@ mod tr808;
 use selector::{Menu, Selector};
 
 const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
-const GRID: u8 = 24;
 const STYLE: WaveformStyle = WaveformStyle {
     background: Rgb565::new(0, 2, 1),
     grid: Rgb565::new(2, 12, 4),
@@ -76,7 +76,6 @@ const LANE_X: u16 = 42;
 type Lane = Waveform<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
-const TRAIL: usize = 32;
 
 fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
     if y == WIDTH / 2 {
@@ -110,7 +109,8 @@ pub(super) struct Screen {
     wave: microwave::Panel,
     mixer: mixer::Surface,
     sequence: sequencer::Grid,
-    beam: Beam,
+    sweep: Option<Sweep>,
+    scope_palette: Option<Palette>,
     dot: Option<Severity>,
     dot_background: Rgb565,
     page: Option<Page>,
@@ -151,10 +151,8 @@ impl Screen {
             page: None,
             dot: None,
             dot_background: STYLE.background,
-            beam: Beam {
-                old_head: None,
-                old_trace: None,
-            },
+            sweep: None,
+            scope_palette: None,
         }
     }
 
@@ -162,11 +160,11 @@ impl Screen {
         self.dot = None;
         self.dot_background = style.background;
         self.plot.set_style(style);
-        // Pages can share a palette; the previous pulse may still be on the LCD.
+        // A new page can reuse the same colors over different artwork.
         self.plot.invalidate();
         *self.text = TextGrid::with_background(style.background);
-        self.beam.old_head = None;
-        self.beam.old_trace = None;
+        self.sweep = None;
+        self.scope_palette = None;
         self.sequence.invalidate();
     }
 
@@ -464,8 +462,7 @@ impl Screen {
             None
         };
         if self.selector.select(menu) {
-            // Restore the palette and any tiles previously covered by the list.
-            self.plot.invalidate();
+            // Repaint the instrument with the new palette and list mask.
             self.page = None;
         }
         if let Some(page) = labels.seq.page {
@@ -544,41 +541,30 @@ impl Screen {
         if changed_page {
             self.change_view(style);
         }
-        // Keep traces, their halos and the plot's eight-pixel dirty tiles clear
-        // of the controls. Two footer rows begin at LCD y=208.
+        // Leave room for the halo above and below the connected trace.
         let trace = if drums {
-            // LCD y=60..179, including the halo and dirty tiles within y=56..183.
-            frame.trace.map(|y| (36 + u16::from(y) * 5 / 8) as u8)
+            frame.trace.map(|y| (60 + u16::from(y) * 5 / 8) as u8)
         } else if saw || wave {
-            // The 168-pixel scope spans LCD y=32..199, with room for dirty tiles.
-            frame.trace.map(|y| (20 + u16::from(y) * 4 / 5) as u8)
+            frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
-            // Trace at LCD y=34..205. The halo and dirty tiles fit inside y=32..207.
-            frame.trace.map(|y| (10 + u16::from(y) * 9 / 10) as u8)
+            frame.trace.map(|y| (34 + u16::from(y) * 9 / 10) as u8)
         } else if organ || fx {
-            // Preserve the center at y=120; the bottom tile ends at y=207.
-            frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
+            frame.trace.map(|y| (36 + u16::from(y) * 7 / 8) as u8)
         } else {
-            frame.trace
+            frame.trace.map(|y| y + TOP as u8)
         };
-        // While browsing, compose moving trace pixels and the list in the same LCD write.
-        if changed_page || menu.is_none() {
-            self.plot
-                .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
-                .await?;
-        }
+        let (header, footer) = if drums {
+            (56, 56)
+        } else if bass {
+            (tb303::MARGIN, tb303::MARGIN)
+        } else if saw || wave {
+            (32, 40)
+        } else if organ || fx {
+            (16, 32)
+        } else {
+            (16, 16)
+        };
         if changed_page {
-            let (header, footer) = if drums {
-                (56, 56)
-            } else if bass {
-                (tb303::MARGIN, tb303::MARGIN)
-            } else if saw || wave {
-                (32, 40)
-            } else if organ || fx {
-                (16, 32)
-            } else {
-                (16, 16)
-            };
             if bass {
                 self.dot_background = self.selector.shade(tb303::METAL);
             } else if saw {
@@ -596,15 +582,14 @@ impl Screen {
             }
         }
         let pulse_track = if fx { Part::Mono } else { labels.focus };
-        self.paint_beam(
-            lcd,
-            clock,
-            &trace,
-            style,
-            pulse_track,
-            motion.position.map(|position| position.beat_phase),
-        )
-        .await?;
+        let sweep = Sweep {
+            trace,
+            head: motion
+                .position
+                .map(|p| usize::from(p.beat_phase) * WIDTH / 256),
+        };
+        self.paint_scope(lcd, clock, sweep, style, pulse_track, header..SIZE - footer)
+            .await?;
         if bass {
             let automation = motion
                 .bass_automation
@@ -801,21 +786,6 @@ fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32, ink:
     text.text(x + 6, y, unit, palette::MUTED);
 }
 
-struct Beam {
-    old_head: Option<usize>,
-    old_trace: Option<Trace>,
-}
-
-fn segment(trace: &Trace, x: usize) -> (usize, usize) {
-    let a = usize::from(trace[x.saturating_sub(1)]);
-    let b = usize::from(trace[x]);
-    (a.min(b), a.max(b))
-}
-
-fn age(head: usize, x: usize) -> usize {
-    (head + WIDTH - x) % WIDTH
-}
-
 // The brightest point leads. Its one-pixel halo disappears before the tail.
 fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
     if track.is_kit() {
@@ -866,93 +836,59 @@ fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
 }
 
 impl Screen {
-    async fn paint_beam(
+    async fn paint_scope(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
-        trace: &Trace,
+        sweep: Sweep,
         style: WaveformStyle,
         track: Part,
-        beat_phase: Option<u8>,
+        rows: core::ops::Range<u16>,
     ) -> Result<(), Error> {
-        let beam = &mut self.beam;
-        let selector = &*self.selector;
-        let head = beat_phase.map(|phase| usize::from(phase) * WIDTH / 256);
-        if head.is_none() && beam.old_head.is_none() && !selector.visible() {
+        if self.sweep.as_ref() == Some(&sweep) {
             return Ok(());
         }
-        let mut lcd = lcd.as_async(clock)?;
-        for x0 in (0..WIDTH).step_by(BAND) {
-            // Include the old halo when a note or its gain changes under the beam.
-            let mut top = HEIGHT;
-            let mut bottom = 0;
-            if selector.visible()
-                && beam.old_trace.is_none()
-                && x0 < selector::RIGHT
-                && x0 + BAND > selector::LEFT
-            {
-                top = selector::TOP - usize::from(TOP);
-                bottom = selector::BOTTOM - 1 - usize::from(TOP);
-            }
-            for x in x0..x0 + BAND {
-                if selector.visible()
-                    && let Some(previous) = &beam.old_trace
-                {
-                    let old = segment(previous, x);
-                    let new = segment(trace, x);
-                    if old != new {
-                        top = top.min(old.0).min(new.0);
-                        bottom = bottom.max(old.1).max(new.1);
+        let list = &*self.selector;
+        let palette = self.scope_palette.get_or_insert_with(|| {
+            Palette::new(
+                style.background.to_be_bytes(),
+                style.grid.to_be_bytes(),
+                style.center.to_be_bytes(),
+                core::array::from_fn(|age| {
+                    let (ink, halo) = phosphor(track, age);
+                    Pen {
+                        ink: list.shade(ink).to_be_bytes(),
+                        halo: halo.map(|color| list.shade(color).to_be_bytes()),
                     }
-                }
-                for (which_head, which_trace) in [
-                    (head, trace),
-                    (beam.old_head, beam.old_trace.as_ref().unwrap_or(trace)),
-                ] {
-                    if which_head.is_some_and(|h| age(h, x) < TRAIL) {
-                        let (a, b) = segment(which_trace, x);
-                        top = top.min(a.saturating_sub(1));
-                        bottom = bottom.max((b + 1).min(HEIGHT - 1));
-                    }
-                }
-            }
-            if top == HEIGHT {
-                continue;
-            }
-            let height = bottom - top + 1;
-            let pixels = &mut self.strip[..BAND * height];
-            for dx in 0..BAND {
-                let x = x0 + dx;
-                let (a, b) = segment(trace, x);
-                let (ink, halo) = head.map_or((style.trace, None), |h| {
-                    let (ink, halo) = phosphor(track, age(h, x));
-                    (selector.shade(ink), halo.map(|color| selector.shade(color)))
-                });
-                for y in top..=bottom {
-                    let paper = paper(style, x, usize::from(TOP) + y);
-                    let color = if (a..=b).contains(&y) {
-                        ink
-                    } else if y + 1 == a || y == b + 1 {
-                        halo.unwrap_or(paper)
-                    } else {
-                        paper
-                    };
-                    pixels[(y - top) * BAND + dx] =
-                        selector.pixel(x, usize::from(TOP) + y, color).to_be_bytes();
-                }
-            }
-            lcd.write_rect_buffered(
-                x0 as u16,
-                TOP + top as u16,
-                BAND as u16,
-                height as u16,
-                pixels.as_flattened(),
+                }),
             )
-            .await?;
+        });
+        let damage = if let Some(old) = self.sweep.take() {
+            sweep.damage(&old, palette)
+        } else {
+            Damage::full(
+                usize::from(rows.start)..usize::from(rows.end),
+                list.bounds(),
+            )
+        };
+        let mut lcd = lcd.as_async(clock)?;
+        for window in damage.windows() {
+            for w in window.strips(self.strip.len()) {
+                let pixels = &mut self.strip[..w.width * w.height];
+                sweep.render(w, palette, pixels);
+                list.overlay(w, pixels);
+                lcd.write_rect_buffered(
+                    w.x as u16,
+                    w.y as u16,
+                    w.width as u16,
+                    w.height as u16,
+                    pixels.as_flattened(),
+                )
+                .await?;
+            }
         }
         lcd.flush().await?;
-        beam.old_head = head;
-        beam.old_trace = Some(*trace);
+        self.sweep = Some(sweep);
         Ok(())
     }
 }
