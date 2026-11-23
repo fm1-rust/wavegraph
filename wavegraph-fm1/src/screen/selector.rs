@@ -1,6 +1,6 @@
 //! Two-bit foreground mask over the live scope. Zero leaves the instrument visible.
 
-use crate::instrument::Part;
+use crate::sequencer::Track;
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
@@ -17,7 +17,7 @@ use fm1_graphics::{Rgb565, WaveformStyle, palette};
 
 const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 21;
-const HEIGHT: usize = 3 * ROW_HEIGHT;
+const HEIGHT: usize = Track::ALL.len() * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;
 pub(super) const RIGHT: usize = LEFT + WIDTH;
 pub(super) const TOP: usize = (crate::capture::WIDTH - HEIGHT) / 2;
@@ -27,7 +27,7 @@ type Mask =
     Framebuffer<Gray2, RawU2, BigEndian, WIDTH, HEIGHT, { buffer_size::<Gray2>(WIDTH, HEIGHT) }>;
 
 pub(super) struct Selector {
-    focus: Option<Part>,
+    focus: Option<Track>,
     mask: Mask,
 }
 
@@ -39,7 +39,7 @@ impl Selector {
         }
     }
 
-    pub(super) fn select(&mut self, focus: Option<Part>) -> bool {
+    pub(super) fn select(&mut self, focus: Option<Track>) -> bool {
         if self.focus == focus {
             return false;
         }
@@ -55,9 +55,10 @@ impl Selector {
                 .stroke_width(2)
                 .build();
             for (row, (part, name)) in [
-                (Part::Mono, "001 MONOSYNTH"),
-                (Part::Organ, "002 M1 ORGAN"),
-                (Part::Bass, "003 TB-303"),
+                (Track::Mono, "001 MONOSYNTH"),
+                (Track::Organ, "002 M1 ORGAN"),
+                (Track::Bass, "003 TB-303"),
+                (Track::Drums, "004 TR-909"),
             ]
             .into_iter()
             .enumerate()

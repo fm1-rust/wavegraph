@@ -3,8 +3,8 @@
 The M-VAVE FM-1 plays a [909 drum machine](../instruments/wavegraph-909/) alongside three keyboard instruments, the green
 [monosynth](../instruments/wavegraph-monosynth/), charcoal-and-lime four-voice
 [M1-inspired organ](../instruments/wavegraph-organ/), and silver
-[TB-303](../instruments/wavegraph-303/). PRESETS cycles them in that order, one detent
-at a time, with a transient three-row patch-selection overlay. Each part
+[TB-303](../instruments/wavegraph-303/). PRESETS cycles the monosynth, organ,
+303 and 909 with a four-row patch selector. Each part
 keeps sounding when you select another. The default page is the green
 monosynth, with sine selected and the cutoff at 5 kHz. The shared transport
 starts stopped at 122 BPM. PLAY starts an original four-bar deep-house sketch:
@@ -24,14 +24,14 @@ but muted initially.
 | KNOB 2 in SEQ | Browse the four bars while stopped. While playing, the view follows the audio playhead. |
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back for the pattern. |
-| PRESETS encoder | Cycle through monosynth → organ → TB-303. Each detent updates the panel and routes new keys to the highlighted instrument. Held notes stay with their original part. |
+| PRESETS encoder | Cycle through monosynth → organ → TB-303 → TR-909. Held notes stay with their original part. |
 | Piano keys | Play F3 to G5 at the default octave. Each key stays lit while you hold it. The organ has four voices. The monosynth and 303 each play one note at a time. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
-| ENV | Open or close the selected instrument’s envelope page. ENV stays lit while the page is open. |
+| ENV | Open or close the selected melodic instrument’s envelope page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
@@ -44,7 +44,7 @@ but muted initially.
 | Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
-| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, KIT for 909) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -130,6 +130,20 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 | Main envelope and accents | Accent sweep with Env Mod at zero |
 | --- | --- |
 | ![303 preview with filter decay and rising accent peaks](assets/tb-303-envelope.png) | ![303 preview with the accent sweep isolated and a 30 ms VCA attack](assets/tb-303-accent-sweep.png) |
+
+## TR-909 instrument view
+
+Turn PRESETS one detent left from the monosynth to open the 909. The scope
+shows the kit before its channel fader and effect sends. SEL switches the
+trace to the final DAC mix while the lamps keep following the kit. The orange pulse
+follows the transport. Each key's lamp flashes at the attack and glows dimly
+until that voice finishes. A closed hat cuts off an open hat immediately.
+
+Press PLAY to watch the pattern, or tap the first six white piano keys to play
+the kit yourself, even with the transport stopped. From left to right, F3, G3,
+A3, B3, C4 and D4 play kick, snare, clap, closed hat, open hat and ride. These
+physical pad assignments stay in place across octave changes. SEQ opens the
+drum pattern and HOME returns to the same live view.
 
 ## Preset sequencer and master tempo
 

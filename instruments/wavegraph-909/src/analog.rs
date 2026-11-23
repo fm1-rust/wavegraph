@@ -135,10 +135,14 @@ impl BassDrum {
         self.body = 0.0;
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.body > 0.06
+    }
+
     /// Render the next mono PCM frame.
     #[inline]
     pub fn next_frame(&mut self) -> i16 {
-        if self.body <= 0.06 {
+        if !self.is_active() {
             return 0;
         }
         let tone = self.oscillator.next(1.0 + self.bend);
@@ -209,10 +213,14 @@ impl SnareDrum {
         self.snap = 0.0;
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.snap >= 0.00002
+    }
+
     /// Render the next mono PCM frame.
     #[inline]
     pub fn next_frame(&mut self) -> i16 {
-        if self.snap < 0.00002 {
+        if !self.is_active() {
             return 0;
         }
         let raw = noise(&mut self.noise);

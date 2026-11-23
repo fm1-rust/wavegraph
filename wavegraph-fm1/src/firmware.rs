@@ -18,7 +18,6 @@ use fm1_audio::MasterLevel;
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Settings {
     parts: Parts,
-    focus: Part,
     env_mode: bool,
     fx_view: bool,
     fx_page: FxPage,
@@ -29,13 +28,13 @@ pub struct Settings {
     fx: Fx,
     master: MasterLevel,
     voice_tap: bool,
+    kit_tap: bool,
     menu_since: Option<u32>,
 }
 
 impl Settings {
     const INITIAL: Self = Self {
         parts: Parts::DEEP_HOUSE,
-        focus: Part::Mono,
         env_mode: false,
         fx_view: false,
         fx_page: FxPage::Reverb,
@@ -46,13 +45,25 @@ impl Settings {
         fx: Fx::INITIAL,
         master: MasterLevel::MIN,
         voice_tap: false,
+        kit_tap: true,
         menu_since: None,
     };
 
+    fn scope_tap(&self) -> bool {
+        if self.seq.track == crate::sequencer::Track::Drums {
+            self.kit_tap
+        } else {
+            self.voice_tap
+        }
+    }
+
     fn labels(self, half_gain: bool) -> Labels {
         Labels {
-            voice: self.parts.voices[self.focus as usize],
-            focus: self.focus,
+            melodic: self
+                .seq
+                .track
+                .part()
+                .map(|part| (part, self.parts.voices[part as usize])),
             bass: self.parts.bass,
             organ: self.parts.organ,
             organ_keys: self.parts.organ_keys,
@@ -67,15 +78,14 @@ impl Settings {
             fx: self.fx,
             mono_envelope: self.parts.mono_envelope,
             half_gain,
-            voice_tap: self.voice_tap,
+            voice_tap: self.scope_tap(),
         }
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Labels {
-    pub(super) voice: Voice,
-    pub(super) focus: Part,
+    pub(super) melodic: Option<(Part, Voice)>,
     pub(super) bass: Controls,
     pub(super) organ: OrganControls,
     pub(super) organ_keys: [OrganKey; wavegraph_organ::POLYPHONY],
@@ -106,12 +116,12 @@ mod app {
         bumper::Bumper,
         capture::{Capture, FLAT},
         instrument::{
-            BUS_COUNT, FxMixer, FxNode, Gate, Instrument, Keyboard, Message, Node, Note, Part,
-            Programs,
+            BUS_COUNT, DrumPads, FxMixer, FxNode, Gate, Instrument, Keyboard, Message, Node, Note,
+            Part, Playback, Programs,
         },
         overload::Overloads,
         screen::Screen,
-        sequencer::{DrumMachine, Position, Sequencer, Track},
+        sequencer::{DrumMachine, Sequencer, Track},
     };
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
@@ -142,8 +152,8 @@ mod app {
     type PanelFrame = (
         Scan,
         Sequencer,
-        Part,
         [Gate; 3],
+        DrumPads,
         [crate::organ::OrganKey; wavegraph_organ::POLYPHONY],
     );
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
@@ -162,7 +172,7 @@ mod app {
         leds: Leds,
         frame: Frame,
         overloads: Overloads,
-        position: Option<Position>,
+        playback: Playback,
     }
 
     #[init]
@@ -234,7 +244,7 @@ mod app {
                     labels: Settings::INITIAL.labels(false),
                 },
                 overloads: Overloads::default(),
-                position: None,
+                playback: Playback::default(),
             },
             TaskInits {
                 audio: Audio {
@@ -252,6 +262,7 @@ mod app {
                     timer,
                     controls: board.panel.into_touch_controls(),
                     keyboard: Keyboard::default(),
+                    pads: DrumPads::default(),
                     seq: Sequencer::INITIAL,
                     scans,
                     leds,
@@ -292,6 +303,7 @@ mod app {
         timer: Timer5,
         controls: TouchControls,
         keyboard: Keyboard<{ PianoKey::COUNT as usize }>,
+        pads: DrumPads,
         seq: Sequencer,
         scans: Sender<'static, PanelFrame, SCANS>,
         leds: Leds,
@@ -315,9 +327,6 @@ mod app {
                 PlayLedState::Red
             });
             if scan.pressed(Button::Seq) {
-                if self.seq.page.is_none() {
-                    self.seq.track = Track::from(self.keyboard.focus);
-                }
                 self.seq.toggle_page();
             } else if scan.pressed(Button::Home)
                 || scan.pressed(Button::Env)
@@ -330,20 +339,16 @@ mod app {
                 scan.encoder_delta(Encoder::Select),
                 scan.encoder_delta(Encoder::Knob3),
             );
-            let presets = scan.encoder_delta(Encoder::Presets);
+            self.seq.turn_track(scan.encoder_delta(Encoder::Presets));
+            // In the drum pattern editor, live keys keep their last melodic part.
+            if let Some(part) = self.seq.track.part() {
+                self.keyboard.focus = part;
+            }
             if self.seq.page.is_some() {
-                self.seq.turn_track(presets);
                 self.seq.turn_bar(scan.encoder_delta(Encoder::Knob2));
                 if scan.pressed(Button::Sel) {
                     self.seq.toggle_track();
                 }
-                // Browsing the drum pattern leaves the live keyboard on its
-                // last melodic instrument; held keys always retain ownership.
-                if let Some(part) = self.seq.track.part() {
-                    self.keyboard.focus = part;
-                }
-            } else {
-                self.keyboard.focus.turn_preset(presets);
             }
             self.leds.set(Button::Seq, self.seq.page.is_some());
             let now = cycles();
@@ -377,13 +382,15 @@ mod app {
             }
             for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
                 self.leds.set(key, true);
-                if scan.pressed(key)
-                    && let Some(velocity) = touch.velocity(key)
-                {
-                    self.keyboard.press(Note {
-                        number: 53 + key.index(),
-                        velocity,
-                    });
+                if scan.pressed(key) {
+                    if self.seq.track == Track::Drums && self.seq.page.is_none() {
+                        self.pads.press(key.index());
+                    } else if let Some(velocity) = touch.velocity(key) {
+                        self.keyboard.press(Note {
+                            number: 53 + key.index(),
+                            velocity,
+                        });
+                    }
                 }
             }
             // A full state snapshot survives dropped scans. The organ includes
@@ -391,8 +398,8 @@ mod app {
             let _ = self.scans.try_send((
                 scan,
                 self.seq,
-                self.keyboard.focus,
                 self.keyboard.gates(),
+                self.pads,
                 self.keyboard.organ_keys(),
             ));
         }
@@ -409,9 +416,8 @@ mod app {
     impl RticAsyncTask for Input {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
-            while let Ok((scan, seq, focus, gates, organ_keys)) = self.input.recv().await {
+            while let Ok((scan, seq, gates, pads, organ_keys)) = self.input.recv().await {
                 let before = self.settings;
-                self.settings.focus = focus;
                 self.settings.seq = seq;
                 if seq.page.is_some() {
                     self.settings.env_mode = false;
@@ -420,14 +426,14 @@ mod app {
                     self.settings.menu_since = None;
                 }
                 if seq.page.is_none()
-                    && (before.focus != focus || scan.encoder_delta(Encoder::Presets) != 0)
+                    && (before.seq.track != seq.track || scan.encoder_delta(Encoder::Presets) != 0)
                 {
                     self.settings.menu_since = Some(ticks());
                     self.settings.env_mode = false;
                 }
                 if scan.pressed(Button::Env) {
                     self.settings.menu_since = None;
-                    self.settings.env_mode = !self.settings.env_mode;
+                    self.settings.env_mode = seq.track.part().is_some() && !self.settings.env_mode;
                     if self.settings.env_mode {
                         self.settings.fx_view = false;
                         self.settings.mixer_view = false;
@@ -457,6 +463,7 @@ mod app {
                     voice.gate = gate;
                 }
                 self.settings.parts.organ_keys = organ_keys;
+                self.settings.parts.pads = pads;
                 let knobs = [
                     Encoder::Knob1,
                     Encoder::Knob2,
@@ -483,7 +490,7 @@ mod app {
                         .edit(self.settings.fx_page, knobs, scan.pressed(Button::Sel));
                     // Retain the asynchronous graph-edit demonstration.
                     scan.encoder_delta(Encoder::Algorithm) != 0
-                } else {
+                } else if let Some(focus) = seq.track.part() {
                     let voice = &mut self.settings.parts.voices[focus as usize];
                     voice.turn_waveform(focus, scan.encoder_delta(Encoder::Algorithm));
                     match (self.settings.env_mode, focus) {
@@ -500,6 +507,11 @@ mod app {
                         self.settings.voice_tap = !self.settings.voice_tap;
                     }
                     false
+                } else {
+                    if scan.pressed(Button::Sel) {
+                        self.settings.kit_tap = !self.settings.kit_tap;
+                    }
+                    false
                 };
                 if let Some(master) = scan.master() {
                     self.settings.master = master;
@@ -511,7 +523,8 @@ mod app {
                 if route_changed && self.editor.commit(!self.half_gain).await.is_ok() {
                     self.half_gain = !self.half_gain;
                 }
-                if before.voice_tap != self.settings.voice_tap
+                if before.seq.track != seq.track
+                    || before.scope_tap() != self.settings.scope_tap()
                     || before.env_mode != self.settings.env_mode
                     || before.fx_view != self.settings.fx_view
                     || before.mixer_view != self.settings.mixer_view
@@ -526,7 +539,7 @@ mod app {
                     } else if mixer_view {
                         false
                     } else {
-                        self.settings.voice_tap
+                        self.settings.scope_tap()
                     };
                     self.shared().leds.lock(|leds| {
                         leds.set(Button::Env, env);
@@ -539,7 +552,7 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, position, bumper])]
+    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, playback, bumper])]
     struct Audio {
         output: Output,
         instrument: Instrument<'static>,
@@ -584,14 +597,14 @@ mod app {
             if result == Refill::Written {
                 self.host.submitted(revision, self.first_frame);
                 // Keep the visual clock current even when scope capture drops a block.
-                let position = self.instrument.position;
-                self.shared().position.lock(|current| *current = position);
+                let playback = self.instrument.playback;
+                self.shared().playback.lock(|current| *current = playback);
             }
             self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
             if result == Refill::Written && !self.tap.is_full() {
                 let block = ScopeBlock {
-                    samples: if settings.voice_tap && !settings.fx_view && !settings.mixer_view {
-                        self.buses[settings.focus.tap()].map(I24::inner)
+                    samples: if !settings.fx_view && !settings.mixer_view && settings.scope_tap() {
+                        settings.seq.track.scope_samples(self.buses)
                     } else {
                         core::array::from_fn(|i| self.output.block()[i][0])
                     },
@@ -635,7 +648,7 @@ mod app {
                         // Publish the new page even while waiting for its first trigger.
                         if let Some(trace) = trace {
                             frame.trace = trace;
-                        } else if frame.labels.focus != block.labels.focus
+                        } else if frame.labels.seq.track != block.labels.seq.track
                             || frame.labels.voice_tap != block.labels.voice_tap
                             || frame.labels.fx_view != block.labels.fx_view
                             || frame.labels.mixer_view != block.labels.mixer_view
@@ -694,7 +707,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, position, bumper])]
+    #[async_task(priority = 1, shared = [frame, overloads, playback, bumper])]
     struct Draw {
         port: Option<DisplayPort>,
         clock: Clock,
@@ -719,9 +732,9 @@ mod app {
             loop {
                 let frame = self.shared().frame.lock(|f| *f);
                 let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
-                let position = self.shared().position.lock(|position| *position);
+                let playback = self.shared().playback.lock(|current| *current);
                 if screen
-                    .paint(&mut lcd, &mut self.clock, &frame, severity, position)
+                    .paint(&mut lcd, &mut self.clock, &frame, severity, playback)
                     .await
                     .is_err()
                 {

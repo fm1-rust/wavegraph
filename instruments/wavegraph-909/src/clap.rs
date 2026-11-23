@@ -83,6 +83,10 @@ impl HandClap {
         self.remaining = 0;
     }
 
+    pub(crate) fn is_active(&self) -> bool {
+        self.remaining != 0
+    }
+
     /// Render one signed 16-bit frame. Returns silence before the first strike
     /// and after both envelopes have decayed below the output resolution.
     #[inline]
@@ -91,7 +95,7 @@ impl HandClap {
         reason = "Counters decrement only above zero."
     )]
     pub fn next_frame(&mut self) -> i16 {
-        if self.remaining == 0 {
+        if !self.is_active() {
             return 0;
         }
         self.remaining -= 1;

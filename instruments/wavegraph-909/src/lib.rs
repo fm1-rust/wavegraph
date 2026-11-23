@@ -171,6 +171,20 @@ impl<'a> Tr909<'a> {
         self.opened_this_frame = false;
     }
 
+    /// Whether the voice's envelope or sample is still running. Choking a hat
+    /// clears it immediately, even when another voice continues to ring.
+    #[must_use]
+    pub fn voice_active(&self, voice: Voice) -> bool {
+        match voice {
+            Voice::Kick => self.kick.is_active(),
+            Voice::Snare => self.snare.is_active(),
+            Voice::Clap => self.clap.is_active(),
+            Voice::ClosedHat => self.closed_hat.is_active(),
+            Voice::OpenHat => self.open_hat.is_active(),
+            Voice::Ride => self.ride.is_active(),
+        }
+    }
+
     /// Advance all six voices one frame and return dry PCM in [`Voice::ALL`] order.
     #[inline]
     pub fn next_voices(&mut self) -> [i16; 6] {
