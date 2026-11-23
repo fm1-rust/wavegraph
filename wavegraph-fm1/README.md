@@ -1,14 +1,12 @@
 # WaveGraph for the FM-1
 
-The M-VAVE FM-1 plays a [909 drum machine](../instruments/wavegraph-909/) alongside three keyboard instruments, the green
-[monosynth](../instruments/wavegraph-monosynth/), charcoal-and-lime four-voice
-[M1-inspired organ](../instruments/wavegraph-organ/), and silver
-[TB-303](../instruments/wavegraph-303/). PRESETS cycles the monosynth, organ,
-303 and 909 with a four-row patch selector. Each part
-keeps sounding when you select another. The default page is the green
-monosynth, with sine selected and the cutoff at 5 kHz. The shared transport
-starts stopped at 122 BPM. PLAY starts an original four-bar deep-house sketch:
-quarter-note 909 kicks, sustained M1-style chords, and an accented, sliding 303 with automated
+WaveGraph gives the M-VAVE FM-1 four assignable mixer channels. They start with
+[monosynth](../instruments/wavegraph-monosynth/), [M1-inspired organ](../instruments/wavegraph-organ/),
+[TB-303](../instruments/wavegraph-303/) and [TR-909](../instruments/wavegraph-909/).
+PRESETS cycles channels. Each keeps sounding when you move to another. The default
+page is the green monosynth, with sine selected and the cutoff at 5 kHz. The shared transport
+starts stopped at 122 BPM. PLAY starts a four-bar deep-house sketch with
+quarter-note 909 kicks, sustained M1-style chords, and a sliding 303 with automated
 cutoff, resonance and overdrive. A sparse monosynth counterline is preloaded
 but muted initially.
 
@@ -19,13 +17,13 @@ but muted initially.
 | Control | Action |
 | --- | --- |
 | PLAY/STOP | Start all enabled patterns on beat one from any page (green). Press again to release sequenced notes, silence the kit and stop (red). Live held keys keep sounding. |
-| SEQ | View the selected instrument's preset pattern. SEQ or HOME returns to the instrument. |
-| PRESETS in SEQ | Browse monosynth → M1 organ → TB-303 → TR-909 while keeping the sequence view open. |
+| SEQ | View the selected channel's factory pattern. SEQ or HOME returns from the pattern to its instrument. |
+| PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
 | KNOB 2 in SEQ | Browse the four bars while stopped. While playing, the view follows the audio playhead. |
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
-| SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back for the pattern. |
-| PRESETS encoder | Cycle through monosynth → organ → TB-303 → TR-909. Held notes stay with their original part. |
-| Piano keys | Play F3 to G5 at the default octave. Each key stays lit while you hold it. The organ has four voices. The monosynth and 303 each play one note at a time. |
+| SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
+| PRESETS encoder | Cycle channels 1–4 and route new panel keys to the active channel. Held keys keep their channel. |
+| Piano keys | Play F3 to G5 at the default octave, or trigger the six TR-909 voices with the first six white keys. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
@@ -35,9 +33,11 @@ but muted initially.
 | Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
-| GLO | Open or close the four-strip mixer; its lamp stays on while the mixer is visible. HOME closes the page. |
-| SELECT encoder in mixer | Cycle through LEVEL, REVERB and DELAY for all four knobs. |
-| Knobs 1–4 in mixer | Set tracks 1–4 independently, 0–128: monosynth, organ, 303, and TR-909. |
+| GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
+| SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
+| Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
+| PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
+| HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
 | FX | Turn SELECT to choose REVERB, DELAY or 303 / COMP. |
 | Knobs 1–2 on FX / REVERB | Reverb decay (0–127) and wet return (0–128). |
 | Knobs 1–3 on FX / DELAY | Delay time (5–1,000 ms), feedback (0–95%) and wet return (0–128). |
@@ -78,7 +78,7 @@ The organ's dark charcoal panel with lime accents and a cyan readout takes
 visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
 list is inspired by the FM-1's stock patch-selector overlay. A bright outline
 and dark fill mark the selected row over the dimmed instrument page. The scope
-and controls stay live while browsing. The list closes one second after the
+and controls stay live while browsing channels. The list closes one second after the
 last turn.
 
 ## VCA envelope
@@ -133,21 +133,30 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 
 ## TR-909 instrument view
 
-Turn PRESETS one detent left from the monosynth to open the 909. The scope
-shows the kit before its channel fader and effect sends. SEL switches the
-trace to the final DAC mix while the lamps keep following the kit. The orange pulse
-follows the transport. Each key's lamp flashes at the attack and glows dimly
-until that voice finishes. A closed hat cuts off an open hat immediately.
+Select a TR-909 channel with PRESETS to see its pre-fader kit waveform. SEL
+switches the trace to the final DAC mix. The orange pulse follows the transport.
+The six key lamps follow this kit in either scope mode. Each lamp flashes at
+the attack and glows dimly through the tail. A closed hat cuts off an open hat
+immediately.
 
-Press PLAY to watch the pattern, or tap the first six white piano keys to play
-the kit yourself, even with the transport stopped. From left to right, F3, G3,
-A3, B3, C4 and D4 play kick, snare, clap, closed hat, open hat and ride. These
-physical pad assignments stay in place across octave changes. SEQ opens the
-drum pattern and HOME returns to the same live view.
+Press PLAY to watch the pattern, or trigger the lamps and voices from the
+panel or USB MIDI with the transport stopped. The six physical pads keep their
+assignments across octave changes. SEQ opens the drum pattern and HOME returns
+to the same live view.
+
+| Voice | Panel key | USB MIDI note |
+| --- | --- | --- |
+| Kick | F3 | 35, 36 |
+| Snare | G3 | 38, 40 |
+| Clap | A3 | 39 |
+| Closed hat | B3 | 42, 44 |
+| Open hat | C4 | 46 |
+| Ride | D4 | 51 |
 
 ## Preset sequencer and master tempo
 
-SEQ opens on the instrument selected with PRESETS. The compact grid shows
+SEQ opens on the active channel. Each channel plays the factory pattern for its
+assigned instrument and remembers its own mute setting. The compact grid shows
 one bar of sixteen steps, with the current step highlighted during playback.
 Pitched tracks show their occupied note lanes and gate lengths. The 303 adds
 `A` accent and `S` outgoing-slide marks plus `CUT`, `RES` and `DRV` curves.
@@ -174,7 +183,8 @@ The other voice controls remain live. Moving an automated knob retains its
 panel setting for when the track stops, is muted, or is taken over by live keys.
 Pressing keys temporarily takes over that melodic track; the other tracks
 continue. After key-up, the track rejoins at its next scheduled note. Browsing
-the drum pattern leaves the live keyboard on the last selected melodic part.
+the drum pattern keeps the keyboard on the last selected melodic channel when
+available. With four 909s assigned, the keyboard plays the displayed kit.
 
 The 909 repeats one bar. The kick hits all four beats, a short closed hat
 plays each offbeat, and snare and clap strike together on two and four.
@@ -190,11 +200,18 @@ panel scans and LCD redraws do not quantize the beat. The bundled 44.1 kHz
 cymbals play at the hardware rate of about 44,118 Hz, a pitch difference of
 roughly 0.7 cent.
 
+## USB MIDI
+
+USB MIDI channels 1–4 route to mixer channels 1–4. Note On, Note Off, and
+All Notes Off (CC 123) apply to the instrument currently assigned to that
+channel. A new assignment releases its old notes. Disconnecting USB releases
+notes from the host while panel keys remain playable.
+
 ## Audio overloads and USB log
 
 A seven-pixel dot in the upper-right corner turns amber on a missed audio
 deadline and red on a second miss within one second. It disappears after one
-second without a miss. The `V` readout is the last key velocity.
+second without a miss. The synth scope’s `V` readout is the current note velocity.
 
 Connect USB and run `fm1 log` from the [FM-1 CLI][cli]. For example,
 `XR12 T4870 W3070 G2902 DMA` reports the 12th miss, 4,870 ms after boot,
@@ -213,13 +230,16 @@ change presets. The 303 still discharges its accent capacitor while silent.
 
 ## Four-track mixer, reverb and delay
 
-Press GLO to enter the mixer. Its four horizontal strips show the selected
-bank as values and bars. Turn SELECT to cycle through LEVEL, REVERB and
-DELAY. Knobs 1–4 edit the monosynth, M1 organ, 303 and 909 respectively.
-Press GLO again or HOME to leave. GLO, FX, ENV, and SEQ are mutually exclusive.
-PRESETS continues to change the keyboard's selected instrument without
-changing the mixer page or its bank. All four strips are live, including
-the sequenced TR-909.
+Press GLO to see four horizontal strips with live post-fader peak meters.
+The segments rise from green through amber at −12 dBFS to red at full scale.
+The mixer overview uses PRESETS to move the keyboard between channels. Turn
+SELECT clockwise to open the active strip, then turn it either way to move
+between strips. The highlight shows which channel Knobs 1–3 will edit.
+
+Turn PRESETS while a strip is highlighted to replace its instrument and hear
+the new assignment immediately. Any slot can run any of the four instruments,
+including four independent TB-303s. The slot keeps its MIDI channel, fader,
+sends and sequence mute. The new processor starts from its factory settings.
 
 | Factory mix (128 = unity) | Mono | M1 organ | TB-303 | TR-909 |
 | --- | ---: | ---: | ---: | ---: |
@@ -229,11 +249,11 @@ the sequenced TR-909.
 
 **Both sends are post-fader.**
 Lowering a track fader reduces the new signal it feeds to either effect.
-Existing tails continue to play. All gains are 0–128, with 128 representing unity.
+Existing tails continue to play. Faders run from mute to about +6 dB. Sends
+run from zero to unity. MASTER sets the listening volume independently.
 
-To change the 303 echo level, open GLO, turn SELECT to DELAY and turn knob 3.
-For the 909, raise knob 4. Open FX and turn SELECT to DELAY to adjust the
-shared echo. Knob 1 changes the time in 5 ms steps (initially 369 ms, a dotted
+To change one channel’s echo level, highlight its strip in GLO and turn knob 3.
+Open FX and turn SELECT to DELAY to adjust the shared echo. Knob 1 changes the time in 5 ms steps (initially 369 ms, a dotted
 eighth at 122 BPM). The delay time stays fixed when tempo changes. Knob 2
 sets feedback (initially 35%), and knob 3 sets the wet return (initially
 64/128). Zero feedback gives one repeat.
@@ -259,12 +279,31 @@ the ducking subside. **909 KIT** includes hats and claps in the detector.
 accents. Only the 303 is processed. The factory setting is 75% depth at
 180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
 
+Each assigned 303 has its own insert. Named external sources sum all matching
+channels before their faders. With two 909s assigned, a kick from either kit
+can duck every 303. With 303 SELF selected, each 303 keys from its own signal.
+
+## UI patterns
+
+Turn SELECT to enter a drilldown from an overview and highlight the item it
+acts on. Light HOME while the drilldown is open. HOME returns one level and
+clears the drilldown highlight. In GLO this leaves the mixer open with all four
+meters live, and a second HOME press returns to the instrument. In SEQ, HOME
+returns from tempo to the channel’s pattern.
+
+PRESETS browses channels in ordinary views. In a channel assignment drilldown,
+it picks the instrument for the highlighted slot. The picker highlights the
+active row, applies each detent immediately and closes one second after the
+last turn.
+
 ## Audio and display
 
-Every 128-frame ALNK0 block first merges frame-stamped preset events with live
-panel messages in bounded queues, ordering releases before new strikes. The
-merged events feed three persistent synths, the 909, and a four-input Q23 mixer
-with dry, reverb-send and delay-send outputs.
+Every 128-frame ALNK0 block merges frame-stamped factory pattern events with
+live panel and MIDI changes in bounded per-channel queues. A swap replaces the
+channel's processor at the start of a block, before its first control or note
+message. The other processors and the shared returns continue with their current DSP
+state. Each channel feeds the Q23 mixer, which produces dry, reverb and delay
+buses.
 One reverb and one mono digital delay run in parallel. The master mix adds
 both wet returns to the dry sum before output gain and stereo duplication.
 The delay borrows one second of PCM16 storage (88,236 bytes) and skips empty

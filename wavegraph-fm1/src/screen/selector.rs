@@ -1,6 +1,9 @@
 //! Two-bit foreground mask over the live scope. Zero leaves the instrument visible.
 
-use crate::sequencer::Track;
+use crate::{
+    instrument::Part,
+    panel::{CHANNELS, Channel},
+};
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
@@ -17,7 +20,7 @@ use fm1_graphics::{Rgb565, WaveformStyle, palette};
 
 const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 21;
-const HEIGHT: usize = Track::ALL.len() * ROW_HEIGHT;
+const HEIGHT: usize = CHANNELS * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;
 pub(super) const RIGHT: usize = LEFT + WIDTH;
 pub(super) const TOP: usize = (crate::capture::WIDTH - HEIGHT) / 2;
@@ -26,27 +29,36 @@ pub(super) const BOTTOM: usize = TOP + HEIGHT;
 type Mask =
     Framebuffer<Gray2, RawU2, BigEndian, WIDTH, HEIGHT, { buffer_size::<Gray2>(WIDTH, HEIGHT) }>;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum Menu {
+    Channels {
+        parts: [Part; CHANNELS],
+        focus: Channel,
+    },
+    Instruments(Part),
+}
+
 pub(super) struct Selector {
-    focus: Option<Track>,
+    menu: Option<Menu>,
     mask: Mask,
 }
 
 impl Selector {
     pub(super) const fn new() -> Self {
         Self {
-            focus: None,
+            menu: None,
             mask: Mask::new(),
         }
     }
 
-    pub(super) fn select(&mut self, focus: Option<Track>) -> bool {
-        if self.focus == focus {
+    pub(super) fn select(&mut self, menu: Option<Menu>) -> bool {
+        if self.menu == menu {
             return false;
         }
-        self.focus = focus;
-        if let Some(focus) = focus {
+        self.menu = menu;
+        if let Some(menu) = menu {
             self.mask
-                .clear(Gray2::new(0))
+                .clear(Gray2::new(u8::from(matches!(menu, Menu::Instruments(_)))))
                 .expect("infallible framebuffer");
             let text = MonoTextStyle::new(&FONT_9X15_BOLD, Gray2::new(3));
             let highlight = PrimitiveStyleBuilder::new()
@@ -54,17 +66,13 @@ impl Selector {
                 .stroke_color(Gray2::new(3))
                 .stroke_width(2)
                 .build();
-            for (row, (part, name)) in [
-                (Track::Mono, "001 MONOSYNTH"),
-                (Track::Organ, "002 M1 ORGAN"),
-                (Track::Bass, "003 TB-303"),
-                (Track::Drums, "004 TR-909"),
-            ]
-            .into_iter()
-            .enumerate()
-            {
+            let (parts, active, numbered) = match menu {
+                Menu::Channels { parts, focus } => (parts, focus.index(), true),
+                Menu::Instruments(part) => (Part::ALL, part as usize, false),
+            };
+            for (row, part) in parts.into_iter().enumerate() {
                 let y = (row * ROW_HEIGHT) as i32;
-                if part == focus {
+                if row == active {
                     RoundedRectangle::with_equal_corners(
                         Rectangle::new(
                             Point::new(0, y),
@@ -76,16 +84,31 @@ impl Selector {
                     .draw(&mut self.mask)
                     .expect("infallible framebuffer");
                 }
-                Text::with_baseline(name, Point::new(8, y + 3), text, Baseline::Top)
+                if numbered {
+                    Text::with_baseline(
+                        ["1", "2", "3", "4"][row],
+                        Point::new(8, y + 3),
+                        text,
+                        Baseline::Top,
+                    )
                     .draw(&mut self.mask)
                     .expect("infallible framebuffer");
+                }
+                Text::with_baseline(
+                    part.name(),
+                    Point::new(if numbered { 27 } else { 8 }, y + 3),
+                    text,
+                    Baseline::Top,
+                )
+                .draw(&mut self.mask)
+                .expect("infallible framebuffer");
             }
         }
         true
     }
 
     pub(super) fn visible(&self) -> bool {
-        self.focus.is_some()
+        self.menu.is_some()
     }
 
     pub(super) fn shade(&self, color: Rgb565) -> Rgb565 {

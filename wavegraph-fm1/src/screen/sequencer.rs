@@ -5,7 +5,10 @@
     reason = "All coordinates are bounded by a 240-pixel display and a 64-step pattern."
 )]
 
-use crate::sequencer::{Position, Sequencer, Track, pattern};
+use crate::{
+    instrument::Part,
+    sequencer::{Position, Sequencer, pattern},
+};
 use embedded_graphics::pixelcolor::raw::ToBytes;
 use fm1_graphics::{Rgb565, TextGrid, palette};
 use fm1_rticx::{
@@ -45,7 +48,7 @@ struct Cell {
 }
 
 pub(super) struct Grid {
-    previous: Option<(Track, u8, bool)>,
+    previous: Option<(Part, u8, bool)>,
     head: Option<u8>,
     pitches: [u8; 8],
     rows: usize,
@@ -66,13 +69,13 @@ impl Grid {
         self.head = None;
     }
 
-    fn labels(&mut self, text: &mut TextGrid, track: Track) {
+    fn labels(&mut self, text: &mut TextGrid, track: Part) {
         for row in 3..13 {
             text.text(0, row, b"    ", palette::MUTED);
         }
         text.text(4, 2, b"1   2   3   4   ", palette::MUTED);
         self.rows = 0;
-        if track == Track::Drums {
+        if track == Part::Drums {
             for (row, (_, label)) in DRUMS.into_iter().enumerate() {
                 text.text(0, row + 3, label, palette::MUTED);
             }
@@ -93,7 +96,7 @@ impl Grid {
         for (row, &note) in self.pitches[..self.rows].iter().enumerate() {
             text.text(0, row + 3, note_name(note), palette::MUTED);
         }
-        if track == Track::Bass {
+        if track == Part::Bass {
             for (row, (label, ink)) in [
                 (b"CUT", palette::CYAN),
                 (b"RES", RESONANCE),
@@ -113,17 +116,17 @@ impl Grid {
         clock: &mut Clock,
         text: &mut TextGrid,
         strip: &mut [[u8; 2]],
-        seq: Sequencer,
+        (seq, part): (Sequencer, Part),
         position: Option<Position>,
     ) -> Result<(), Error> {
         let position = position.filter(|_| seq.transport.playing());
         let bar = position.map_or(seq.bar, |p| p.step / 16);
         let head = position.map(|p| p.step % 16);
-        let enabled = seq.enabled[seq.track as usize];
-        let key = (seq.track, bar, enabled);
+        let enabled = seq.enabled[seq.channel.index()];
+        let key = (part, bar, enabled);
         let changed = self.previous != Some(key);
-        if changed && self.previous.is_none_or(|(track, _, _)| track != seq.track) {
-            self.labels(text, seq.track);
+        if changed && self.previous.is_none_or(|(track, _, _)| track != part) {
+            self.labels(text, part);
         }
         text.number(15, 0, 1, u32::from(bar) + 1, palette::WHITE);
         text.text(16, 0, b"/4", palette::MUTED);
@@ -142,7 +145,7 @@ impl Grid {
             }
             let absolute = usize::from(bar) * 16 + usize::from(step);
             let cells: [Cell; 8] = core::array::from_fn(|row| {
-                if seq.track == Track::Drums {
+                if part == Part::Drums {
                     Cell {
                         pixels: if row < DRUMS.len()
                             && pattern::drums(absolute).contains(&DRUMS[row].0)
@@ -155,7 +158,7 @@ impl Grid {
                         ..Cell::default()
                     }
                 } else if row < self.rows {
-                    note_cell(seq.track, absolute, self.pitches[row])
+                    note_cell(part, absolute, self.pitches[row])
                 } else {
                     Cell::default()
                 }
@@ -168,7 +171,7 @@ impl Grid {
                 for y in top..top + HALF {
                     for x in 0..WIDTH {
                         pixels[(y - top) * WIDTH + x] = pixel(
-                            seq.track,
+                            part,
                             &cells,
                             &automation,
                             self.rows,
@@ -212,7 +215,7 @@ fn note_name(note: u8) -> [u8; 4] {
     }
 }
 
-fn note_cell(track: Track, absolute: usize, note: u8) -> Cell {
+fn note_cell(track: Part, absolute: usize, note: u8) -> Cell {
     let strike = pattern::step(track, absolute);
     let mut cell = Cell {
         onset: strike.notes.contains(&note),
@@ -237,7 +240,7 @@ fn note_cell(track: Track, absolute: usize, note: u8) -> Cell {
                 }
             }
         }
-        if track != Track::Organ && !step.notes.is_empty() {
+        if track != Part::Organ && !step.notes.is_empty() {
             break;
         }
     }
@@ -265,7 +268,7 @@ fn automation_height(step: usize, x: usize, lane: usize) -> u8 {
     reason = "One small strip is composed without a framebuffer."
 )]
 fn pixel(
-    track: Track,
+    track: Part,
     cells: &[Cell; 8],
     automation: &[[u8; WIDTH + 1]; 3],
     rows: usize,
@@ -280,7 +283,7 @@ fn pixel(
     let background = if head { CURSOR } else { BACKGROUND };
     if row < rows {
         let cell = cells[row];
-        if cell.onset && track == Track::Bass {
+        if cell.onset && track == Part::Bass {
             // Small A/S flags above each struck note: accent and outgoing slide.
             let flag = if cell.accent && (1..=3).contains(&x) {
                 Some(([2, 5, 7, 5, 5], x - 1))
@@ -296,7 +299,7 @@ fn pixel(
                 return if enabled { palette::WHITE } else { BEAT };
             }
         }
-        let note_top = if track == Track::Bass { 7 } else { 3 };
+        let note_top = if track == Part::Bass { 7 } else { 3 };
         if (note_top..=12).contains(&dy) && cell.pixels & (1 << x) != 0 {
             return if !enabled {
                 BEAT
@@ -304,15 +307,15 @@ fn pixel(
                 palette::WHITE
             } else {
                 match track {
-                    Track::Mono => palette::GREEN,
-                    Track::Organ => super::ORGAN_LIME,
-                    Track::Bass if cell.accent => RESONANCE,
-                    Track::Bass => ACID,
-                    Track::Drums => palette::CYAN,
+                    Part::Mono => palette::GREEN,
+                    Part::Organ => super::ORGAN_LIME,
+                    Part::Bass if cell.accent => RESONANCE,
+                    Part::Bass => ACID,
+                    Part::Drums => palette::CYAN,
                 }
             };
         }
-    } else if track == Track::Bass && row < rows + 3 {
+    } else if track == Part::Bass && row < rows + 3 {
         let lane = row - rows;
         let a = usize::from(automation[lane][x]);
         let b = usize::from(automation[lane][x + 1]);

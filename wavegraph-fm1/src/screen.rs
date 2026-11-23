@@ -5,10 +5,11 @@ use crate::{
     bass::{Bank, Controls, Knob, envelope as bass_env},
     capture::{HEIGHT, Trace, WIDTH},
     envelope::EnvelopeControls,
-    firmware::Frame,
+    firmware::{Frame, Labels, Motion},
     fx::FxPage,
-    instrument::{Mixer, MixerBank, Part, Playback},
-    sequencer::{Position, SeqPage, Sequencer, Track},
+    instrument::Part,
+    panel::{CHANNELS, Channel, View},
+    sequencer::{Position, SeqPage, Sequencer},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
@@ -22,11 +23,12 @@ use fm1_rticx::{
 use static_cell::{ConstStaticCell, StaticCell};
 
 mod drums;
+mod mixer;
 mod selector;
 mod sequencer;
 mod splash;
 
-use selector::Selector;
+use selector::{Menu, Selector};
 
 const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
 const GRID: u8 = 24;
@@ -84,10 +86,10 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
-    Scope(Track),
+    Scope(Channel, Part),
     Fx(FxPage),
     Mixer,
-    Sequencer(SeqPage, Track),
+    Sequencer(SeqPage, Channel, Part),
     Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
 }
@@ -96,9 +98,10 @@ pub(super) struct Screen {
     plot: &'static mut Waveform<WIDTH, WIDTH>,
     lanes: [&'static mut Lane; 3],
     text: &'static mut TextGrid,
-    strip: &'static mut [[u8; 2]; BAND * HEIGHT],
+    strip: &'static mut [[u8; 2]; BAND * WIDTH],
     selector: &'static mut Selector,
     drums: drums::Panel,
+    mixer: mixer::Surface,
     sequence: sequencer::Grid,
     beam: Beam,
     dot: Option<Severity>,
@@ -112,8 +115,8 @@ impl Screen {
         static LANES: [StaticCell<Lane>; 3] = [const { StaticCell::new() }; 3];
         static SELECTOR: ConstStaticCell<Selector> = ConstStaticCell::new(Selector::new());
         static TEXT: StaticCell<TextGrid> = StaticCell::new();
-        static STRIP: ConstStaticCell<[[u8; 2]; BAND * HEIGHT]> =
-            ConstStaticCell::new([[0; 2]; BAND * HEIGHT]);
+        static STRIP: ConstStaticCell<[[u8; 2]; BAND * WIDTH]> =
+            ConstStaticCell::new([[0; 2]; BAND * WIDTH]);
         Self {
             plot: PLOT.init_with(|| Waveform::new(0, 0).expect("panel-sized scope")),
             lanes: core::array::from_fn(|i| {
@@ -133,6 +136,7 @@ impl Screen {
             strip: STRIP.take(),
             selector: SELECTOR.take(),
             drums: drums::Panel::new(),
+            mixer: mixer::Surface::default(),
             sequence: sequencer::Grid::new(),
             page: None,
             dot: None,
@@ -156,56 +160,23 @@ impl Screen {
         self.sequence.invalidate();
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "All mixer rows and fader bars fit within the 20 by 15 text grid"
-    )]
     async fn paint_mixer(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
-        mixer: Mixer,
-        bank: MixerBank,
+        labels: Labels,
+        peaks: [u8; CHANNELS],
     ) -> Result<(), Error> {
-        let background = STYLE.background;
         if self.page.replace(Page::Mixer) != Some(Page::Mixer) {
-            self.change_view(STYLE);
-            lcd.fill_rect(0, 0, SIZE, SIZE, background.into_storage())?;
+            self.change_view(WaveformStyle {
+                background: self.selector.shade(mixer::BACKGROUND),
+                ..STYLE
+            });
+            self.mixer.reset();
         }
-        self.text.text(0, 0, b"MIXER", palette::WHITE);
-        self.text.text(
-            11,
-            0,
-            match bank {
-                MixerBank::Volume => b"LEVEL ".as_slice(),
-                MixerBank::Reverb => b"REVERB".as_slice(),
-                MixerBank::Delay => b"DELAY ".as_slice(),
-            },
-            palette::CYAN,
-        );
-        let names: [&[u8]; 4] = [b"1 MONOSYNTH", b"2 M1 ORGAN", b"3 TB-303", b"4 TR-909"];
-        let colors = [palette::GREEN, ORGAN_LIME, palette::RED, palette::CYAN];
-        let values = match bank {
-            MixerBank::Volume => mixer.volume,
-            MixerBank::Reverb => mixer.reverb,
-            MixerBank::Delay => mixer.delay,
-        };
-        for (track, (&name, &ink)) in names.iter().zip(&colors).enumerate() {
-            let y = 2 + 3 * track;
-            self.text.text(0, y, name, ink);
-            self.text.number(17, y, 3, u32::from(values[track]), ink);
-            let filled = usize::from(values[track]) * 16 / 128;
-            self.text
-                .text(2, y + 1, &b"################"[..filled], ink);
-            self.text.text(
-                2 + filled,
-                y + 1,
-                &b"----------------"[..16 - filled],
-                palette::MUTED,
-            );
-        }
-        self.text.text(12, 14, b"GLO EXIT", palette::MUTED);
-        self.text.paint_async(lcd, clock).await
+        self.mixer
+            .paint(lcd, clock, self.strip, self.selector, labels, peaks)
+            .await
     }
 
     async fn paint_envelope(
@@ -330,19 +301,26 @@ impl Screen {
         clock: &mut Clock,
         view: SeqPage,
         seq: Sequencer,
+        part: Part,
         position: Option<Position>,
     ) -> Result<(), Error> {
-        let page = Page::Sequencer(view, seq.track);
+        let page = Page::Sequencer(view, seq.channel, part);
         if self.page.replace(page) != Some(page) {
             self.change_view(STYLE);
             lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
-            let title: &[u8] = match seq.track {
-                Track::Mono => b"SEQ MONO",
-                Track::Organ => b"SEQ M1 ORGAN",
-                Track::Bass => b"SEQ TB-303",
-                Track::Drums => b"SEQ TR-909",
+            let title: &[u8] = match part {
+                Part::Mono => b"SEQ MONO",
+                Part::Organ => b"SEQ M1 ORGAN",
+                Part::Bass => b"SEQ TB-303",
+                Part::Drums => b"SEQ TR-909",
             };
             self.text.text(0, 0, title, palette::WHITE);
+            self.text.text(
+                12,
+                0,
+                [b"C1", b"C2", b"C3", b"C4"][seq.channel.index()],
+                palette::CYAN,
+            );
             if view == SeqPage::Pattern {
                 self.text.text(14, 0, b"B", palette::MUTED);
                 self.text.text(16, 1, b"S", palette::MUTED);
@@ -370,7 +348,7 @@ impl Screen {
         );
         self.text
             .number(5, 1, 3, u32::from(seq.transport.bpm), palette::WHITE);
-        let enabled = seq.enabled[seq.track as usize];
+        let enabled = seq.enabled[seq.channel.index()];
         self.text.text(
             12,
             1,
@@ -403,7 +381,7 @@ impl Screen {
                 palette::MUTED,
             );
             self.sequence
-                .paint(lcd, clock, self.text, self.strip, seq, position)
+                .paint(lcd, clock, self.text, self.strip, (seq, part), position)
                 .await?;
         }
         self.text.paint_async(lcd, clock).await
@@ -415,9 +393,9 @@ impl Screen {
         clock: &mut Clock,
         frame: &Frame,
         severity: Option<Severity>,
-        playback: Playback,
+        motion: Motion,
     ) -> Result<(), Error> {
-        self.paint_page(lcd, clock, frame, playback).await?;
+        self.paint_page(lcd, clock, frame, motion).await?;
         if severity != self.dot {
             let color = match severity {
                 None => self.dot_background,
@@ -447,53 +425,57 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         frame: &Frame,
-        playback: Playback,
+        motion: Motion,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        let track = labels.seq.track;
-        let browsing = labels.seq.page.is_none()
-            && !labels.env_mode
-            && !labels.fx_view
-            && !labels.mixer_view
-            && labels
-                .menu_since
-                .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS);
-        if self.selector.select(browsing.then_some(track)) {
+        let menu = if labels
+            .menu_since
+            .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS)
+        {
+            match labels.view {
+                View::Scope => Some(Menu::Channels {
+                    parts: labels.assignments,
+                    focus: labels.channel,
+                }),
+                View::Channel => Some(Menu::Instruments(labels.focus)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if self.selector.select(menu) {
             // Restore the palette and any tiles previously covered by the list.
             self.plot.invalidate();
             self.page = None;
         }
         if let Some(page) = labels.seq.page {
             return self
-                .paint_sequencer(lcd, clock, page, labels.seq, playback.position)
+                .paint_sequencer(lcd, clock, page, labels.seq, labels.focus, motion.position)
                 .await;
         }
-        if labels.mixer_view {
-            return self
-                .paint_mixer(lcd, clock, labels.mixer, labels.mixer_bank)
-                .await;
+        if labels.view.is_mixer() {
+            return self.paint_mixer(lcd, clock, labels, motion.peaks).await;
         }
-        if labels.env_mode
-            && !labels.fx_view
-            && let Some(part) = track.part()
-        {
-            match part {
-                Part::Bass => {
-                    return self.paint_bass_envelope(lcd, clock, labels.bass).await;
-                }
+        if labels.view == View::Envelope {
+            match labels.focus {
+                Part::Bass => return self.paint_bass_envelope(lcd, clock, labels.bass).await,
                 Part::Mono | Part::Organ => {
-                    let controls = if part == Part::Organ {
+                    let controls = if labels.focus == Part::Organ {
                         labels.organ.envelope
                     } else {
                         labels.mono_envelope
                     };
-                    return self.paint_envelope(lcd, clock, part, controls).await;
+                    return self
+                        .paint_envelope(lcd, clock, labels.focus, controls)
+                        .await;
                 }
+                Part::Drums => (),
             }
         }
-        let bass = !labels.fx_view && track == Track::Bass;
-        let drums = !labels.fx_view && track == Track::Drums;
-        let organ = !labels.fx_view && track == Track::Organ;
+        let fx = labels.view == View::Fx;
+        let bass = !fx && labels.focus == Part::Bass;
+        let organ = !fx && labels.focus == Part::Organ;
+        let drums = !fx && labels.focus == Part::Drums;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
         } else if drums {
@@ -510,10 +492,10 @@ impl Screen {
         };
         let style = self.selector.style(style);
         let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
-        let page = if labels.fx_view {
+        let page = if fx {
             Page::Fx(labels.fx_page)
         } else {
-            Page::Scope(track)
+            Page::Scope(labels.channel, labels.focus)
         };
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
@@ -526,14 +508,14 @@ impl Screen {
             frame.trace.map(|y| (36 + u16::from(y) * 5 / 8) as u8)
         } else if bass {
             frame.trace.map(|y| (25 + u16::from(y) * 3 / 4) as u8)
-        } else if organ || labels.fx_view {
+        } else if organ || fx {
             // Preserve the center at y=120; the bottom tile ends at y=207.
             frame.trace.map(|y| (12 + u16::from(y) * 7 / 8) as u8)
         } else {
             frame.trace
         };
         // While browsing, compose moving trace pixels and the list in the same LCD write.
-        if changed_page || !browsing {
+        if changed_page || menu.is_none() {
             self.plot
                 .paint_async(lcd, &trace.map(|y| y + TOP as u8), clock)
                 .await?;
@@ -541,7 +523,7 @@ impl Screen {
         if changed_page {
             let (header, footer) = if drums {
                 (56, 56)
-            } else if bass || organ || labels.fx_view {
+            } else if bass || organ || fx {
                 (if bass { 48 } else { 16 }, 32)
             } else {
                 (16, 16)
@@ -550,17 +532,17 @@ impl Screen {
                 lcd.fill_rect(0, y, SIZE, height, style.background.into_storage())?;
             }
         }
-        let pulse_track = if labels.fx_view { Track::Mono } else { track };
+        let pulse_track = if fx { Part::Mono } else { labels.focus };
         self.paint_beam(
             lcd,
             clock,
             &trace,
             style,
             pulse_track,
-            playback.position.map(|position| position.beat_phase),
+            motion.position.map(|position| position.beat_phase),
         )
         .await?;
-        if labels.fx_view {
+        if fx {
             let enabled = labels.fx.enabled(labels.fx_page);
             self.text.text(
                 0,
@@ -615,27 +597,36 @@ impl Screen {
             }
             return self.text.paint_async(lcd, clock).await;
         }
-        let Some((part, voice)) = labels.melodic else {
+        if drums {
             self.drums
-                .paint(lcd, clock, self.selector, changed_page, playback.drums)
+                .paint(
+                    lcd,
+                    clock,
+                    self.selector,
+                    changed_page,
+                    motion.drums[labels.channel.index()],
+                )
                 .await?;
             self.text
                 .number(12, 1, 3, u32::from(labels.seq.transport.bpm), muted);
             self.text.text(16, 1, b"BPM", muted);
             self.text.text(1, 2, b"CH", muted);
-            self.text.number(4, 2, 1, u32::from(track as u8) + 1, muted);
+            self.text
+                .number(4, 2, 1, u32::from(labels.channel as u8) + 1, muted);
             self.text
                 .text(7, 2, if labels.voice_tap { b"KIT" } else { b"DAC" }, muted);
             let status = if !labels.seq.transport.playing() {
                 b"STOP"
-            } else if labels.seq.enabled[track as usize] {
+            } else if labels.seq.enabled[labels.channel.index()] {
                 b"PLAY"
             } else {
                 b"MUTE"
             };
             self.text.text(15, 2, status, ink);
             return self.text.paint_async(lcd, clock).await;
-        };
+        }
+        let part = labels.focus;
+        let voice = labels.voice;
         if bass {
             self.bass_panel(labels.bass);
         } else if organ {
@@ -668,6 +659,7 @@ impl Screen {
             (true, Part::Mono) => b"VCA",
             (true, Part::Organ) => b"ORG",
             (true, Part::Bass) => b"SRC",
+            (true, Part::Drums) => b"KIT",
         };
         self.text.text(16, 0, source, muted);
         self.text.text(0, 14, voice.label(part), ink);
@@ -708,8 +700,8 @@ fn age(head: usize, x: usize) -> usize {
 }
 
 // The brightest point leads. Its one-pixel halo disappears before the tail.
-fn phosphor(track: Track, age: usize) -> (Rgb565, Option<Rgb565>) {
-    if track == Track::Drums {
+fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
+    if track == Part::Drums {
         return match age {
             0..=3 => (drums::HOT, Some(drums::GLOW)),
             4..=12 => (drums::ORANGE, None),
@@ -717,7 +709,7 @@ fn phosphor(track: Track, age: usize) -> (Rgb565, Option<Rgb565>) {
             _ => (drums::STYLE.trace, None),
         };
     }
-    if track == Track::Bass {
+    if track == Part::Bass {
         return match age {
             0..=3 => (Rgb565::new(24, 10, 3), Some(Rgb565::new(21, 34, 16))),
             4..=9 => (OXIDE_RED, None),
@@ -725,7 +717,7 @@ fn phosphor(track: Track, age: usize) -> (Rgb565, Option<Rgb565>) {
             _ => (SILVER.trace, None),
         };
     }
-    if track == Track::Organ {
+    if track == Part::Organ {
         return match age {
             0..=4 => (ORGAN_LIME, Some(palette::CYAN)),
             5..=12 => (Rgb565::new(19, 53, 9), None),
@@ -749,7 +741,7 @@ impl Screen {
         clock: &mut Clock,
         trace: &Trace,
         style: WaveformStyle,
-        track: Track,
+        track: Part,
         beat_phase: Option<u8>,
     ) -> Result<(), Error> {
         let beam = &mut self.beam;

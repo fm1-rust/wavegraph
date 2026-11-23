@@ -20,11 +20,19 @@ mod firmware;
 #[cfg(any(target_os = "none", test))]
 mod fx;
 #[cfg(any(target_os = "none", test))]
+mod inserts;
+#[cfg(any(target_os = "none", test))]
 mod instrument;
+#[cfg(any(target_os = "none", test))]
+mod keys;
+#[cfg(any(target_os = "none", test))]
+mod mixer;
 #[cfg(any(target_os = "none", test))]
 mod organ;
 #[cfg(any(target_os = "none", test))]
 mod overload;
+#[cfg(any(target_os = "none", test))]
+mod panel;
 #[cfg(target_os = "none")]
 mod screen;
 #[cfg(any(target_os = "none", test))]

@@ -26,7 +26,7 @@ impl FxPage {
     }
 }
 
-// Signal inlet order of the 303 insert in Programs::decode.
+// Order of detector sources on the 303 compressor page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum KeySource {
     Bass,
@@ -37,20 +37,16 @@ pub(super) enum KeySource {
 }
 
 impl KeySource {
+    pub(super) const ALL: [KeySource; 5] =
+        [Self::Bass, Self::Kick, Self::Kit, Self::Organ, Self::Mono];
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "An i8 delta and inlet index fit i16."
     )]
     fn turn(&mut self, detents: i8) {
-        const SOURCES: [KeySource; 5] = [
-            KeySource::Bass,
-            KeySource::Kick,
-            KeySource::Kit,
-            KeySource::Organ,
-            KeySource::Mono,
-        ];
         let index = (i16::from(*self as u8) + i16::from(detents)).rem_euclid(5);
-        *self = SOURCES[usize::try_from(index).expect("five sources")];
+        *self = Self::ALL[usize::try_from(index).expect("five sources")];
     }
 
     #[cfg(target_os = "none")]
