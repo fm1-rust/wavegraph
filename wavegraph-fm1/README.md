@@ -30,7 +30,7 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | KNOB 2 in SEQ | Browse the four bars while stopped. While playing, the view follows the audio playhead. |
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
-| PRESETS encoder | Cycle channels 1–4. A large white number in the upper-left corner shows the new channel for 1.5 seconds after the last turn. New notes go to that channel. Held keys keep theirs. |
+| PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
 | Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. |

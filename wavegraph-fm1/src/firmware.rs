@@ -435,7 +435,12 @@ mod app {
             }
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
-            if !home && presets != 0 && (channel_changed || self.nav.view == View::Channel) {
+            let show_picker = match self.nav.view {
+                View::Scope => channel_changed,
+                View::Channel => true,
+                _ => false,
+            };
+            if !home && presets != 0 && show_picker {
                 self.nav.preset_since = Some(ticks());
             } else if home
                 || channel_changed
