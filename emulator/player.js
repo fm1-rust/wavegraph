@@ -5,13 +5,24 @@ const display = canvas.getContext("2d", { alpha: false });
 const status = document.querySelector("#player-status");
 const start = document.querySelector("#power-on");
 const stop = document.querySelector("#power-off");
+const firmwareLink = document.querySelector("#firmware-source");
 const sampleRate = 44100;
 let session = null;
 
-async function asset(path, signal) {
-  const response = await fetch(new URL(path, import.meta.url), { signal });
+async function fetchAsset(path, signal, cache = "default") {
+  const response = await fetch(new URL(path, import.meta.url), { signal, cache });
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
-  return response.arrayBuffer();
+  return response;
+}
+
+async function loadFirmware(signal) {
+  const manifest = await fetchAsset("firmware/current.json", signal, "no-cache");
+  const { image, label, url } = await manifest.json();
+  const response = await fetchAsset(`firmware/${image}`, signal);
+  const bytes = await response.arrayBuffer();
+  firmwareLink.href = url;
+  firmwareLink.textContent = label;
+  return bytes;
 }
 
 function powerOff(message = "") {
@@ -77,6 +88,8 @@ async function powerOn() {
   start.hidden = true;
   hero.hidden = true;
   player.hidden = false;
+  firmwareLink.textContent = "";
+  firmwareLink.removeAttribute("href");
   status.hidden = false;
   status.textContent = "Starting the FM-1…";
   stop.textContent = "Power off";
@@ -86,8 +99,9 @@ async function powerOn() {
     // Resume during the click, before awaiting downloads (including on iOS).
     s.audio = new AudioContext({ latencyHint: "interactive" });
     const [module, firmware] = await Promise.all([
-      asset("vendor/fm1_web.wasm", s.abort.signal).then(bytes => WebAssembly.compile(bytes)),
-      asset("wavegraph-a429eb52.bin", s.abort.signal),
+      fetchAsset("vendor/fm1_web.wasm", s.abort.signal)
+        .then(response => response.arrayBuffer()).then(bytes => WebAssembly.compile(bytes)),
+      loadFirmware(s.abort.signal),
       s.audio.resume(),
     ]);
     if (session !== s) return;

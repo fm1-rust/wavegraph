@@ -1,5 +1,5 @@
 Firmware and bundled instrument data
-https://github.com/fm1-rust/wavegraph/tree/a429eb52b43008eb56e4b5dc82d531797f3ae432
+See firmware/current.json for the source link for this image.
 
 wavegraph-fm1/LICENSE-MIT
 
