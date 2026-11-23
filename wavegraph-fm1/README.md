@@ -1,18 +1,24 @@
 # WaveGraph for the FM-1
 
-WaveGraph gives the M-VAVE FM-1 four assignable mixer channels. They start with
-[monosynth](../instruments/wavegraph-monosynth/), [M1-inspired organ](../instruments/wavegraph-organ/),
-[TB-303](../instruments/wavegraph-303/) and [TR-909](../instruments/wavegraph-909/).
-PRESETS cycles channels. Each keeps sounding when you move to another. The default
-page is the green monosynth, with sine selected and the cutoff at 5 kHz. The shared transport
-starts stopped at 122 BPM. PLAY starts a four-bar deep-house sketch with
-quarter-note 909 kicks, sustained M1-style chords, and a sliding 303 with automated
-cutoff, resonance and overdrive. A sparse monosynth counterline is preloaded
-but muted initially.
+WaveGraph gives the M-VAVE FM-1 four assignable mixer channels. It opens on
+the first [TB-303](../instruments/wavegraph-303/). Press PLAY to start this
+four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
+
+| Channel / USB MIDI | Instrument | Factory part |
+| --- | --- | --- |
+| 1 | TB-303 · saw | The original sliding bassline, with cutoff, resonance and drive automation. |
+| 2 | TB-303 · square | A higher answer drawn from the former M1 chords. Held-gate slides connect C to F and B to E. |
+| 3 | [TR-808](../instruments/wavegraph-808/) | Syncopated bass drum, ghost snares and hat pickups between the 909 hits. |
+| 4 | [TR-909](../instruments/wavegraph-909/) | Four-on-the-floor kick, backbeat snare and clap, and offbeat closed hats. |
+
+All four patterns start enabled. GLO lets any channel host any instrument,
+including the [monosynth](../instruments/wavegraph-monosynth/) and
+[M1-inspired organ](../instruments/wavegraph-organ/).
+The transport starts stopped. Keys and USB MIDI also work with it stopped.
 
 | Monosynth | 303 bank 1 | 303 bank 2 |
 | --- | --- | --- |
-| ![Boot logo and green monosynth scope](assets/monosynth.gif) | ![Silver 303 scope with decay on knob 4](assets/tb-303.png) | ![Silver 303 scope with overdrive on knob 4](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![Silver 303 scope with decay on knob 4](assets/tb-303.png) | ![Silver 303 scope with overdrive on knob 4](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
@@ -23,7 +29,7 @@ but muted initially.
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
 | PRESETS encoder | Cycle channels 1–4 and route new panel keys to the active channel. Held keys keep their channel. |
-| Piano keys | Play F3 to G5 at the default octave, or trigger the six TR-909 voices with the first six white keys. Each pressed key lights up. |
+| Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, or choose 303 saw/square. |
 | SELECT encoder | Transpose monosynth/organ by ±12 semitones, or switch the 303's knob bank. |
@@ -44,7 +50,7 @@ but muted initially.
 | Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
-| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, KIT for 909) and the post-MASTER DAC mix. |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
 | 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
@@ -55,13 +61,12 @@ but muted initially.
 SELECT updates the bank indicator and all four labels, including when the keys
 are idle. Returning to a bank recalls its settings and last-touched knob.
 
-Hold a monosynth note, turn PRESETS once to the organ, and play a four-note
-chord. Turn PRESETS again to the 303 and play a bassline: all three parts
-continue together. Keys retain the part they were pressed on. On the organ,
-the latest four physical keys take priority, and releasing a newer key
-restores an older held key. The monosynth and 303 preserve their existing
-last-note priority. On the 303, velocity 96+ triggers accent; overlapping
-notes slide and a new strike after release restarts the envelopes.
+Hold a bass note on channel one, turn PRESETS to channel two, and play the
+upper voice. Each key keeps the channel it was pressed on. The 303 and
+monosynth use last-note priority. On the 303, velocity 96+ triggers accent,
+overlapping notes slide, and a fresh strike after release restarts the
+envelopes. On the organ, the latest four physical keys take priority.
+Releasing a newer key restores an older held key.
 
 ## M1-inspired organ
 
@@ -72,7 +77,7 @@ The modeling follows independent community recipes, not Korg's actual PCM
 multisample. No Korg ROM data is bundled. For a proper similarity check,
 compare a dry Organ 2 patch in the Korg M1 plug-in against both modes; a
 spectrum and envelope comparison would be more informative than a single
-house-music recording. The factory mix sends a little of the organ to the shared reverb.
+house-music recording.
 
 The organ's dark charcoal panel with lime accents and a cyan readout takes
 visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
@@ -131,6 +136,33 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 | --- | --- |
 | ![303 preview with filter decay and rising accent peaks](assets/tb-303-envelope.png) | ![303 preview with the accent sweep isolated and a 30 ms VCA attack](assets/tb-303-accent-sweep.png) |
 
+## TR-808 instrument view
+
+Turn PRESETS to channel three to play the factory 808. To put another 808
+on any channel, press GLO, turn SELECT to highlight its strip, and turn
+PRESETS to **TR-808**. The strip keeps its MIDI channel, fader, sends and
+sequence mute. Press HOME twice to return to the instrument.
+
+The four red, orange, amber and yellow switches show the actual voices in that strip. A strike depresses the cap and lights
+the lens. The lamp dims through the tail and goes dark when the voice stops.
+The scope shows the pre-fader kit, and SEL switches it to the master output.
+Knobs 1–4 adjust kick Tone, kick Decay, snare Tone and Snappy. Each dial shows
+its current value.
+
+| Switch | Panel key | USB MIDI note |
+| --- | --- | ---: |
+| Bass drum | F3 | 36 |
+| Snare | G3 | 38 |
+| Closed hi-hat | A3 | 42 |
+| Open hi-hat | B3 | 46 |
+
+The factory 808 plays between the 909's hits. Short sub kicks answer the main
+kick, ghost snares punctuate the bar turns, and open hats lead into the next
+phrase. A closed hat chokes its ringing open partner. MIDI strike velocity
+sets each voice's excitation.
+
+![TR-808 scope with the snare ringing and its pad lit](assets/tr-808.png)
+
 ## TR-909 instrument view
 
 Select a TR-909 channel with PRESETS to see its pre-fader kit waveform. SEL
@@ -160,19 +192,18 @@ assigned instrument and remembers its own mute setting. The compact grid shows
 one bar of sixteen steps, with the current step highlighted during playback.
 Pitched tracks show their occupied note lanes and gate lengths. The 303 adds
 `A` accent and `S` outgoing-slide marks plus `CUT`, `RES` and `DRV` curves.
-The drum view shows all six voices: kick, snare, clap, closed/open hat and ride.
+The drum grid shows the four 808 lanes or the six 909 lanes for the selected kit.
 Only changed playhead columns are redrawn between bar changes.
 
-The original factory sketch moves from D minor seventh to C major seventh.
-The organ plays A3–C4–F4 and G3–B3–E4. The 303 supplies the roots below
-those voicings. The long offbeat chords have a 92% sustain level and 200 ms
-release. Shorter stabs answer them at the end of bars one and three.
-The monosynth has a separate, quiet counterline; enable it with SEL in its SEQ
-view. This spike provides fixed presets and track mutes, with no recording,
-step editing or pattern saving yet. Edit `src/sequencer/pattern.rs` to change
-the notes, gates, accents, slides and automation control points.
+The factory sketch moves from Dm7 to Cmaj7. The saw 303 plays the original
+bass part. Channel two's square 303 breaks the M1 voicings A3–C4–F4 and
+G3–B3–E4 into short answers with slides from C to F and B to E. Its cutoff
+opens on different half-bars and its shorter envelope leaves space for echo.
+An organ assignment recalls the sustained chord part, and a monosynth plays
+its spare counterline. Edit `src/sequencer/pattern.rs` to change the notes,
+gates, accents, slides and automation.
 
-The 303's cutoff sweeps from 180 to 1800 Hz, resonance from 74 to 94%, and
+The lower 303's cutoff sweeps from 180 to 1800 Hz, resonance from 74 to 94%, and
 overdrive from 12 to 28 dB over the four bars. Half-bar control points interpolate
 at an audio-clocked rate of one update per 128 samples, including across loop
 boundaries. Its filter envelope adds another three octaves, with 330 ms decay
@@ -184,7 +215,7 @@ panel setting for when the track stops, is muted, or is taken over by live keys.
 Pressing keys temporarily takes over that melodic track; the other tracks
 continue. After key-up, the track rejoins at its next scheduled note. Browsing
 the drum pattern keeps the keyboard on the last selected melodic channel when
-available. With four 909s assigned, the keyboard plays the displayed kit.
+available. With four drum kits assigned, the keyboard plays the displayed kit.
 
 The 909 repeats one bar. The kick hits all four beats, a short closed hat
 plays each offbeat, and snare and clap strike together on two and four.
@@ -237,15 +268,15 @@ SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
 Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the four instruments,
+the new assignment immediately. Any slot can run any of the five instruments,
 including four independent TB-303s. The slot keeps its MIDI channel, fader,
 sends and sequence mute. The new processor starts from its factory settings.
 
-| Factory mix (128 = unity) | Mono | M1 organ | TB-303 | TR-909 |
+| Factory mix (128 = unity) | 303 bass | 303 harmony | TR-808 | TR-909 |
 | --- | ---: | ---: | ---: | ---: |
-| Fader | 128 | 128 | 112 | 80 |
-| Reverb send | 32 | 36 | 24 | 0 |
-| Delay send | 0 | 0 | 92 | 0 |
+| Fader | 108 | 120 | 88 | 80 |
+| Reverb send | 80 | 96 | 12 | 0 |
+| Delay send | 104 | 112 | 0 | 0 |
 
 **Both sends are post-fader.**
 Lowering a track fader reduces the new signal it feeds to either effect.
@@ -255,10 +286,11 @@ run from zero to unity. MASTER sets the listening volume independently.
 To change one channel’s echo level, highlight its strip in GLO and turn knob 3.
 Open FX and turn SELECT to DELAY to adjust the shared echo. Knob 1 changes the time in 5 ms steps (initially 369 ms, a dotted
 eighth at 122 BPM). The delay time stays fixed when tempo changes. Knob 2
-sets feedback (initially 35%), and knob 3 sets the wet return (initially
-64/128). Zero feedback gives one repeat.
+sets feedback (initially 43%), and knob 3 sets the wet return (initially
+76/128). Zero feedback gives one repeat.
 
-On FX / REVERB, knobs 1 and 2 set decay and wet level. SEL mutes the displayed
+On FX / REVERB, knobs 1 and 2 set decay (initially 90/127) and wet level
+(initially 104/128). SEL mutes the displayed
 return, and its LED shows whether that return is enabled. Both effects keep
 their state across full/half gain edits. FX scopes the final DAC mix.
 
@@ -272,9 +304,10 @@ the 303 dip on each quarter and come back between hits. Knob 3 moves the shelf
 up in frequency to duck more of the squelch as well. SEL compares the entire
 insert, including makeup gain, with the dry 303.
 
-Try **M1 ORGAN** as the key. The bass now makes room for chord stabs, even
+With an organ assigned, try **M1 ORGAN** as the key. The bass makes room for chord stabs, even
 with the organ fader down. Muting its SEQ track lets its release finish and
 the ducking subside. **909 KIT** includes hats and claps in the detector.
+**808 KICK** and **808 KIT** select the corresponding 808 sources independently.
 **MONO** follows the monosynth and **303 SELF** follows the acid line's own
 accents. Only the 303 is processed. The factory setting is 75% depth at
 180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
@@ -325,9 +358,10 @@ readout follows the knob even while the scope waits for a trigger.
 The splash and instrument pages use [fm1-graphics] to draw a waveform on a
 24-pixel grid. The boot illustration combines two harmonics with phase
 modulation. When the green WaveGraph title finishes bouncing, the pink FM-1
-lettering rises from the bottom. A 750 ms cue starts on that landing. An
-accented 303 slides up an octave and back down, followed by two pitched 909
-snare strokes and a touch of closed hat. MASTER controls the cue throughout.
+lettering rises from the bottom. A 750 ms cue starts on that landing. The
+303 quotes the pattern's two low Ds and A–C slide, then climbs G–A–D.
+It holds the accented A into the upper tonic using the voice's pitch slide
+and a continuous filter envelope. Two quiet 909 knocks lead into the landing. MASTER controls the cue throughout.
 Turning it fully down skips the rest of the cue for that boot. The firmware
 version beneath the logo comes from the `wavegraph-fm1` Cargo package.
 
@@ -343,9 +377,8 @@ or `assets/fm1.png` and run
 ## Build and flash
 
 The [firmware workflow] builds a `wavegraph-fm1` artifact containing
-`wavegraph-fm1.fwsc` for M-Flasher and the [browser emulator], plus a raw
-`wavegraph-fm1.bin` for emulators that accept an application image (such as
-[fm1-emulator]). For a local build, follow the
+`wavegraph-fm1.fwsc` for M-Flasher and a raw `wavegraph-fm1.bin` for
+emulators accepting an application image. For a local build, follow the
 [FM-1 toolchain setup] for `RUSTC`, `PI32V2_BIN` and `PI32V2_ISA`, and set
 `PI32V2_TARGET` to the SDK's `fm1/targets/pi32v2-none.json`. From the
 WaveGraph workspace root run
@@ -363,8 +396,15 @@ To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
 [release workflow] checks the tag against the Cargo version, tests and builds
 the firmware, then attaches versioned `.fwsc` and `.bin` files to a GitHub
-Release. Open the `.fwsc` in the [browser emulator] or run it with
-`fm1-live --fwsc`; no additional conversion is needed for that emulator.
+Release. The package contains the application area for the hardware updater.
+For [fm1-emu]'s native `fm1-live`, place the raw application at offset
+0x120 within its XIP window. From the firmware output directory run
+
+```sh
+head -c 288 /dev/zero > wavegraph-fm1.xip.bin
+cat wavegraph-fm1.bin >> wavegraph-fm1.xip.bin
+fm1-live --bin wavegraph-fm1.xip.bin --entry 0x02000120
+```
 
 ## License
 
@@ -376,8 +416,7 @@ or the [MIT License](LICENSE-MIT).
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
-[browser emulator]: https://joakimeriksson.github.io/fm1-emu/
-[fm1-emulator]: https://github.com/simonjohansson/fm1-emulator
+[fm1-emu]: https://github.com/joakimeriksson/fm1-emu
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html

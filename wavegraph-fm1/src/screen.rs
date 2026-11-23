@@ -27,6 +27,7 @@ mod mixer;
 mod selector;
 mod sequencer;
 mod splash;
+mod tr808;
 
 use selector::{Menu, Selector};
 
@@ -310,9 +311,11 @@ impl Screen {
             lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
             let title: &[u8] = match part {
                 Part::Mono => b"SEQ MONO",
-                Part::Organ => b"SEQ M1 ORGAN",
-                Part::Bass => b"SEQ TB-303",
-                Part::Drums => b"SEQ TR-909",
+                Part::Organ => b"SEQ M1 ORG",
+                Part::Bass if seq.channel == Channel::Two => b"SEQ 303 HI",
+                Part::Bass => b"SEQ 303 LOW",
+                Part::Tr909 => b"SEQ TR-909",
+                Part::Tr808 => b"SEQ TR-808",
             };
             self.text.text(0, 0, title, palette::WHITE);
             self.text.text(
@@ -322,7 +325,7 @@ impl Screen {
                 palette::CYAN,
             );
             if view == SeqPage::Pattern {
-                self.text.text(14, 0, b"B", palette::MUTED);
+                self.text.text(15, 0, b"B", palette::MUTED);
                 self.text.text(16, 1, b"S", palette::MUTED);
             } else {
                 self.text.text(0, 4, b"TEMPO 2/2", palette::MUTED);
@@ -469,15 +472,22 @@ impl Screen {
                         .paint_envelope(lcd, clock, labels.focus, controls)
                         .await;
                 }
-                Part::Drums => (),
+                Part::Tr808 | Part::Tr909 => (),
             }
         }
         let fx = labels.view == View::Fx;
         let bass = !fx && labels.focus == Part::Bass;
         let organ = !fx && labels.focus == Part::Organ;
-        let drums = !fx && labels.focus == Part::Drums;
+        let drums = !fx && labels.focus.is_kit();
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
+        } else if labels.focus == Part::Tr808 && drums {
+            (
+                drums::STYLE_808,
+                drums::HOT,
+                drums::CREAM,
+                drums::STYLE_808.trace,
+            )
         } else if drums {
             (
                 drums::STYLE,
@@ -604,25 +614,37 @@ impl Screen {
                     clock,
                     self.selector,
                     changed_page,
+                    labels.focus,
                     motion.drums[labels.channel.index()],
                 )
                 .await?;
-            self.text
-                .number(12, 1, 3, u32::from(labels.seq.transport.bpm), muted);
-            self.text.text(16, 1, b"BPM", muted);
-            self.text.text(1, 2, b"CH", muted);
-            self.text
-                .number(4, 2, 1, u32::from(labels.channel as u8) + 1, muted);
-            self.text
-                .text(7, 2, if labels.voice_tap { b"KIT" } else { b"DAC" }, muted);
             let status = if !labels.seq.transport.playing() {
-                b"STOP"
+                "STOP"
             } else if labels.seq.enabled[labels.channel.index()] {
-                b"PLAY"
+                "PLAY"
             } else {
-                b"MUTE"
+                "MUTE"
             };
-            self.text.text(15, 2, status, ink);
+            let source = if labels.voice_tap { b"KIT" } else { b"DAC" };
+            if labels.focus == Part::Tr808 {
+                self.drums
+                    .controls(lcd, self.selector, labels.drums808, changed_page)?;
+                self.drums.status808(
+                    lcd,
+                    self.selector,
+                    (labels.channel, labels.voice_tap, status),
+                    changed_page,
+                )?;
+            } else {
+                self.text
+                    .number(12, 1, 3, u32::from(labels.seq.transport.bpm), muted);
+                self.text.text(16, 1, b"BPM", muted);
+                self.text.text(1, 2, b"CH", muted);
+                self.text
+                    .number(4, 2, 1, u32::from(labels.channel as u8) + 1, muted);
+                self.text.text(7, 2, source, muted);
+                self.text.text(15, 2, status.as_bytes(), ink);
+            }
             return self.text.paint_async(lcd, clock).await;
         }
         let part = labels.focus;
@@ -659,7 +681,7 @@ impl Screen {
             (true, Part::Mono) => b"VCA",
             (true, Part::Organ) => b"ORG",
             (true, Part::Bass) => b"SRC",
-            (true, Part::Drums) => b"KIT",
+            (true, Part::Tr808 | Part::Tr909) => b"KIT",
         };
         self.text.text(16, 0, source, muted);
         self.text.text(0, 14, voice.label(part), ink);
@@ -701,12 +723,12 @@ fn age(head: usize, x: usize) -> usize {
 
 // The brightest point leads. Its one-pixel halo disappears before the tail.
 fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
-    if track == Part::Drums {
+    if track.is_kit() {
         return match age {
             0..=3 => (drums::HOT, Some(drums::GLOW)),
             4..=12 => (drums::ORANGE, None),
             13..TRAIL => (drums::EMBER, None),
-            _ => (drums::STYLE.trace, None),
+            _ => (drums::style(track).trace, None),
         };
     }
     if track == Part::Bass {

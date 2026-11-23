@@ -1,14 +1,17 @@
 //! Four assignable instrument nodes feed the shared effect send/return graph.
 
+#[cfg(test)]
+use crate::panel::Navigation;
 use crate::{
     bass::Controls,
     envelope::EnvelopeControls,
     fx::{Fx, FxPage},
+    keys::HitLog,
     mixer::Mixer,
     organ::{Controls as OrganControls, OrganKey},
-    panel::{Assignment, CHANNELS, Channel, Navigation},
+    panel::{Assignment, CHANNELS, Channel},
     sequencer::{
-        DrumLamp, DrumMachine, DrumMessage, PatternPlayer, Position, Sequencer, Transport,
+        DrumKits, DrumLamp, DrumMachine, DrumMessage, PatternPlayer, Position, Sequencer, Transport,
     },
 };
 use heapless::Vec;
@@ -46,19 +49,39 @@ pub(super) enum Part {
     Mono,
     Organ,
     Bass,
-    Drums,
+    Tr909,
+    Tr808,
 }
 
 impl Part {
-    pub(super) const ALL: [Self; 4] = [Self::Mono, Self::Organ, Self::Bass, Self::Drums];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Mono,
+        Self::Organ,
+        Self::Bass,
+        Self::Tr909,
+        Self::Tr808,
+    ];
+
+    pub(super) const fn is_kit(self) -> bool {
+        matches!(self, Self::Tr808 | Self::Tr909)
+    }
+
+    pub(super) const fn pads(self) -> &'static [Drum] {
+        match self {
+            Self::Tr808 => &[Drum::Kick, Drum::Snare, Drum::ClosedHat, Drum::OpenHat],
+            Self::Tr909 => &Drum::ALL,
+            _ => &[],
+        }
+    }
 
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "A part index plus an i8 fits i16"
     )]
     pub(super) fn turn(&mut self, detents: i8) {
-        let index = (i16::from(*self as u8) + i16::from(detents)).rem_euclid(4);
-        *self = Self::ALL[usize::try_from(index).expect("four instruments")];
+        let index = (i16::from(*self as u8) + i16::from(detents))
+            .rem_euclid(i16::try_from(Self::ALL.len()).expect("small catalog"));
+        *self = Self::ALL[usize::try_from(index).expect("wrapped instrument index")];
     }
 
     #[cfg(target_os = "none")]
@@ -67,7 +90,8 @@ impl Part {
             Self::Mono => "MONOSYNTH",
             Self::Organ => "M1 ORGAN",
             Self::Bass => "TB-303",
-            Self::Drums => "TR-909",
+            Self::Tr909 => "TR-909",
+            Self::Tr808 => "TR-808",
         }
     }
 }
@@ -110,7 +134,7 @@ impl Voice {
         self.waveform = match part {
             Part::Mono => position % 4,
             Part::Organ | Part::Bass => position % 2,
-            Part::Drums => 0,
+            Part::Tr808 | Part::Tr909 => 0,
         };
     }
 
@@ -132,7 +156,8 @@ impl Voice {
             Part::Organ => b"ANALOG  ",
             Part::Bass if self.waveform == 0 => b"SAW     ",
             Part::Bass => b"SQUARE  ",
-            Part::Drums => b"TR-909  ",
+            Part::Tr909 => b"TR-909  ",
+            Part::Tr808 => b"TR-808  ",
         }
     }
 
@@ -173,8 +198,9 @@ pub(super) struct Track {
     pub(super) organ_keys: [OrganKey; POLYPHONY],
     pub(super) mono_envelope: EnvelopeControls,
     pub(super) voice_tap: bool,
-    pub(super) panel_hits: [u8; Drum::ALL.len()],
-    drum_hits: [u8; Drum::ALL.len()],
+    pub(super) drums808: wavegraph_808::Controls,
+    pub(super) panel_hits: HitLog<8>,
+    pub(super) midi_hits: HitLog<32>,
 }
 
 impl Track {
@@ -186,15 +212,16 @@ impl Track {
             organ: OrganControls::INITIAL,
             organ_keys: [OrganKey::EMPTY; POLYPHONY],
             mono_envelope: EnvelopeControls::INITIAL,
-            voice_tap: matches!(assignment.part, Part::Drums),
-            panel_hits: [0; Drum::ALL.len()],
-            drum_hits: [0; Drum::ALL.len()],
+            voice_tap: assignment.part.is_kit(),
+            drums808: wavegraph_808::Controls::INITIAL,
+            panel_hits: HitLog::EMPTY,
+            midi_hits: HitLog::EMPTY,
         }
     }
 
     #[cfg(test)]
-    pub(super) const INITIAL: [Self; CHANNELS] = {
-        let a = Navigation::INITIAL.assignments;
+    pub(super) const TEST_TRACKS: [Self; CHANNELS] = {
+        let a = Navigation::SYNTH_RACK.assignments;
         [
             Self::new(a[0]),
             Self::new(a[1]),
@@ -203,19 +230,27 @@ impl Track {
         ]
     };
 
-    pub(super) const DEEP_HOUSE: [Self; CHANNELS] = {
-        let a = Navigation::INITIAL.assignments;
+    pub(super) const fn rack(a: [Assignment; CHANNELS]) -> [Self; CHANNELS] {
         [
-            Self::factory(a[0]),
-            Self::factory(a[1]),
-            Self::factory(a[2]),
-            Self::factory(a[3]),
+            Self::factory(Channel::One, a[0]),
+            Self::factory(Channel::Two, a[1]),
+            Self::factory(Channel::Three, a[2]),
+            Self::factory(Channel::Four, a[3]),
         ]
-    };
+    }
 
-    pub(super) const fn factory(assignment: Assignment) -> Self {
+    pub(super) const fn factory(channel: Channel, assignment: Assignment) -> Self {
+        let harmony = matches!((channel, assignment.part), (Channel::Two, Part::Bass));
         Self {
-            bass: Controls::DEEP_HOUSE,
+            bass: if harmony {
+                Controls::HARMONY
+            } else {
+                Controls::DEEP_HOUSE
+            },
+            voice: Voice {
+                waveform: harmony as u8,
+                ..Voice::INITIAL
+            },
             organ: OrganControls::DEEP_HOUSE,
             ..Self::new(assignment)
         }
@@ -227,7 +262,7 @@ impl Track {
                 self.voice.transpose = self.voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
             Part::Bass => self.bass.turn_select(detents),
-            Part::Drums => (),
+            Part::Tr808 | Part::Tr909 => (),
         }
     }
 
@@ -236,13 +271,22 @@ impl Track {
             Part::Mono => self.voice.turn_cutoff(detents[0]),
             Part::Organ => self.organ.turn_knobs(detents),
             Part::Bass => self.bass.turn_knobs(detents),
-            Part::Drums => (),
+            Part::Tr808 => {
+                let c = &mut self.drums808;
+                for (value, delta) in [
+                    &mut c.kick_tone,
+                    &mut c.kick_decay,
+                    &mut c.snare_tone,
+                    &mut c.snappy,
+                ]
+                .into_iter()
+                .zip(detents)
+                {
+                    *value = value.saturating_add_signed(delta).min(127);
+                }
+            }
+            Part::Tr909 => (),
         }
-    }
-
-    pub(super) fn hit(&mut self, drum: Drum) {
-        let hits = &mut self.drum_hits[drum as usize];
-        *hits = hits.wrapping_add(1);
     }
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
@@ -253,17 +297,14 @@ impl Track {
                 let old = old.unwrap_or_else(|| Self::new(self.assignment));
                 self.bass.events(old.bass, self.voice, old.voice)
             }
-            Part::Drums => {
+            Part::Tr808 | Part::Tr909 => {
                 let mut events = EventBatch::new();
-                let previous = old.unwrap_or_else(|| Self::new(self.assignment));
-                for (i, drum) in Drum::ALL.into_iter().enumerate() {
-                    if self.drum_hits[i] != previous.drum_hits[i]
-                        || self.panel_hits[i] != previous.panel_hits[i]
-                    {
-                        events
-                            .push(at(Message::Drum(DrumMessage::Trigger(drum))))
-                            .map_err(|_| Error::Capacity)?;
-                    }
+                if self.assignment.part == Part::Tr808
+                    && old.is_none_or(|t| t.drums808 != self.drums808)
+                {
+                    events
+                        .push(at(Message::Drum(DrumMessage::Controls808(self.drums808))))
+                        .map_err(|_| Error::Capacity)?;
                 }
                 events
             }
@@ -424,9 +465,9 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
 // Four organ note-offs, four note-ons, four panel values and a voicing event.
 const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
-// One note/gate transition and two automation updates in an FM-1 DMA block,
-// plus the bounded panel changes. Keep the channel queues off the IRQ stack.
-const MAX_ROUTED_EVENTS: usize = 32;
+// A drum channel can receive 32 USB strikes and 8 panel strikes along with
+// controls and a sequence step. The four routed queues live off the IRQ stack.
+const MAX_ROUTED_EVENTS: usize = 48;
 pub(super) type RoutedEvents = Vec<Event<Message>, MAX_ROUTED_EVENTS>;
 
 // Only the assigned engine occupies mutable storage on each channel.
@@ -445,7 +486,7 @@ enum Player<'a> {
 pub(super) struct Node<'a> {
     tuning: &'a Tuning,
     organ: &'a Organ,
-    drums: &'a DrumMachine,
+    drums: &'a DrumKits,
     sample_rate: f32,
     player: Player<'a>,
 }
@@ -454,7 +495,7 @@ impl<'a> Node<'a> {
     pub(super) const fn new(
         tuning: &'a Tuning,
         organ: &'a Organ,
-        drums: &'a DrumMachine,
+        drums: &'a DrumKits,
         sample_rate: f32,
     ) -> Self {
         Self {
@@ -489,7 +530,7 @@ impl Process<Message, I24> for Node<'_> {
                         .with_output_gain(0.0625)
                         .with_idle_suspension(),
                 ),
-                Part::Drums => Player::Drums(*self.drums),
+                part @ (Part::Tr909 | Part::Tr808) => Player::Drums(self.drums.assign(part)),
             };
         }
         if let Player::Drums(node) = &mut self.player {
@@ -568,7 +609,8 @@ fn dispatch<M>(
     cx: &mut ProcessContext<'_, '_, Message, I24>,
     unpack: impl Fn(Message) -> Option<M>,
 ) {
-    let events: Vec<_, MAX_ROUTED_EVENTS> = cx
+    // Only pitched synths and effects use this adapter.
+    let events: Vec<_, 32> = cx
         .events
         .iter()
         .filter_map(|e| {
@@ -599,7 +641,11 @@ impl Channel {
         buses: &[[I24; N]; BUS_COUNT],
     ) -> [i32; N] {
         // Leave room on the scope for the full-scale accented kick.
-        let shift = if part == Part::Drums { 4 } else { 0 };
+        let shift = match part {
+            Part::Tr909 => 4,
+            Part::Tr808 => 3,
+            _ => 0,
+        };
         buses[self.source_bus()].map(|sample| sample.inner() >> shift)
     }
 }
@@ -609,7 +655,7 @@ pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
     pub(super) fn decode() -> Result<Self, Error> {
-        // Each channel provides a pre-fader scope tap and an isolated 909 kick.
+        // Each channel provides a pre-fader scope tap and an isolated drum kick.
         const ROUTE: &[u8] = &[
             VERSION, 1, 0, 0, 2, // CALL channel 1 -> 0, 1
             1, 1, 0, 2, // CALL channel 2 -> 2, 3
@@ -713,7 +759,7 @@ impl Instrument<'_> {
                     .map_err(|_| Error::Capacity)?;
             }
             // Each synth's live gate takes over its own sequencer lane.
-            enabled[i] &= part == Part::Drums || track.voice.gate.note.is_none();
+            enabled[i] &= part.is_kit() || track.voice.gate.note.is_none();
             automated[i] = self.transport.playing() && enabled[i] && part == Part::Bass;
             let mut panel = track.events(old)?;
             if automated[i] {
@@ -727,6 +773,14 @@ impl Instrument<'_> {
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
+            if part.is_kit() {
+                track
+                    .panel_hits
+                    .append_since(old.map_or(0, |t| t.panel_hits.total()), events)?;
+                track
+                    .midi_hits
+                    .append_since(old.map_or(0, |t| t.midi_hits.total()), events)?;
+            }
         }
         let mut player = self.player;
         player.render(N, self.transport, assignments, enabled, |channel, event| {
@@ -811,7 +865,7 @@ fn event_order(event: &Event<Message>) -> (usize, u8) {
         Message::Mono(MonoMessage::NoteOn { .. })
         | Message::Organ(OrganMessage::NoteOn { .. })
         | Message::Bass(BassMessage::NoteOn { .. })
-        | Message::Drum(DrumMessage::Trigger(_)) => 3,
+        | Message::Drum(DrumMessage::Trigger(_, _)) => 3,
         _ => 2,
     };
     (event.frame, order)
@@ -850,8 +904,8 @@ mod tests {
             Self {
                 piano: Piano::new(),
                 keys: Keys::new(),
-                nav: Navigation::INITIAL,
-                tracks: Track::INITIAL,
+                nav: Navigation::SYNTH_RACK,
+                tracks: Track::TEST_TRACKS,
             }
         }
 
@@ -905,7 +959,7 @@ mod tests {
         let programs = Programs::decode()?;
         let tuning = Tuning::new(rate.0, rate.1).expect("audio sample clock");
         let organ = crate::organ::instrument(rate.0, rate.1);
-        let drums = DrumMachine::new(rate);
+        let drums = DrumKits::new(rate);
         let [one, two, three, four] =
             &mut core::array::from_fn(|_| Node::new(&tuning, &organ, &drums, rate_hz as f32));
         let mut mixer = FxMixer(ChannelMixer::new().with_boost());
@@ -1002,7 +1056,7 @@ mod tests {
                 keys.shift_octave(step);
             }
             keys.press(note(key, 100));
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             parts[0].turn_select(transpose);
             let voice = &mut parts[0].voice;
             voice.gate = keys.gates()[Part::Mono as usize];
@@ -1019,11 +1073,13 @@ mod tests {
             keys.press(note(65, 60));
             keys.shift_octave(1);
             keys.press(note(53, 100));
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             parts[1].organ_keys = keys.organ_keys();
             let strike = |velocity| at(OrganMessage::NoteOn { note: 65, velocity });
             assert_eq!(
-                parts[1].organ_events(Some(Track::INITIAL[1])).as_slice(),
+                parts[1]
+                    .organ_events(Some(Track::TEST_TRACKS[1]))
+                    .as_slice(),
                 &[strike(60), strike(100)]
             );
             let both = parts;
@@ -1042,7 +1098,7 @@ mod tests {
 
     #[test]
     fn knob_one_preserves_both_cutoffs_and_sends_the_initial_monosynth_cutoff() {
-        let mut parts = Track::INITIAL;
+        let mut parts = Track::TEST_TRACKS;
         let initial = parts;
         assert_eq!(initial[0].voice.cutoff_hz(), 5000);
         assert_eq!(
@@ -1091,7 +1147,7 @@ mod tests {
     #[test]
     fn mono_retriggers_after_a_short_gap_and_plays_overlapping_keys_legato() {
         let mut keys = Keyboard::<2>::new();
-        let mut parts = Track::INITIAL;
+        let mut parts = Track::TEST_TRACKS;
         keys.press(note(60, 80));
         parts[0].voice.gate = keys.gates()[0];
         let first = parts;
@@ -1132,7 +1188,7 @@ mod tests {
         // At this rate the 5 kHz default is above Nyquist, so the square keeps its exact levels.
         with_instrument(8_000, |instrument| {
             let mut buses = [[I24::default(); 32]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             parts[0]
                 .mono_envelope
                 .turn([i8::MIN, i8::MIN, i8::MAX, i8::MIN]);
@@ -1167,14 +1223,14 @@ mod tests {
     -> Result<(), Error> {
         use DrumLamp::{Off, Strike, Tail};
         with_instrument(44_100, |instrument| {
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             let channel = Channel::Two;
             let i = channel.index();
             let assignment = Assignment {
-                part: Part::Drums,
+                part: Part::Tr909,
                 generation: 1,
             };
-            parts[i] = Track::factory(assignment); // A second 909 beside the factory kit.
+            parts[i] = Track::factory(channel, assignment); // A second 909 beside the factory kit.
             let mut piano = Piano::<1>::new();
             let mut tap = |key: u8, track: &mut Track| {
                 piano.press(channel, assignment, note(53 + key, 127));
@@ -1198,7 +1254,7 @@ mod tests {
             );
             assert!(
                 channel
-                    .scope_samples(Part::Drums, &buses)
+                    .scope_samples(Part::Tr909, &buses)
                     .iter()
                     .any(|&s| s != 0)
             );
@@ -1219,7 +1275,7 @@ mod tests {
                 instrument.render(parts, &mut buses)?;
             }
             assert_eq!(instrument.drums[i], [Off; 6]);
-            assert_eq!(channel.scope_samples(Part::Drums, &buses), [0; 128]);
+            assert_eq!(channel.scope_samples(Part::Tr909, &buses), [0; 128]);
             Ok(())
         })
     }
@@ -1227,7 +1283,7 @@ mod tests {
     #[test]
     fn transport_plays_the_drum_bus_alongside_a_held_synth_note() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             instrument.sequences = [false, false, false, true];
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             let silence = instrument.render(parts, &mut buses)?.map(I24::inner);
@@ -1266,7 +1322,7 @@ mod tests {
     fn live_bass_takeover_preserves_both_sends_and_stop_preserves_the_live_key() -> Result<(), Error>
     {
         with_instrument(44_100, |instrument| {
-            let mut parts = Track::DEEP_HOUSE;
+            let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             let mut mixer = Mixer::DRY;
             mixer.0[2].level = 64;
@@ -1352,7 +1408,7 @@ mod tests {
     fn muting_the_bass_restores_edited_panel_values_without_stopping_other_tracks()
     -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
-            let mut parts = Track::DEEP_HOUSE;
+            let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             instrument.transport.toggle();
             instrument.render(parts, &mut buses)?;
@@ -1383,7 +1439,7 @@ mod tests {
     fn changing_routes_preserves_the_sounding_oscillators_phase() -> Result<(), Error> {
         with_instrument(1760, |instrument| {
             let mut buses = [[I24::default(); 3]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             parts[0].voice.gate.note = Some(note(69, 80));
             assert_eq!(parts[0].voice.note_name(), *b"A4  ");
             let dry = instrument.render(parts, &mut buses)?.map(I24::inner);
@@ -1404,7 +1460,7 @@ mod tests {
     fn both_voices_reach_the_mix_and_releasing_one_preserves_the_other() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             let mut keys = Keyboard::<2>::new();
             let sync = |parts: &mut [Track; CHANNELS], keys: &Keyboard<2>| *parts = keys.tracks;
             keys.press(note(69, 84));
@@ -1468,7 +1524,7 @@ mod tests {
 
     #[test]
     fn select_switches_the_legend_without_changing_the_sound_and_recalls_each_bank() {
-        let mut parts = Track::INITIAL;
+        let mut parts = Track::TEST_TRACKS;
         let voice = Voice {
             gate: Gate {
                 note: Some(note(53, 100)),
@@ -1527,7 +1583,7 @@ mod tests {
     fn shared_reverb_has_independent_sends_and_preserves_dry_audio() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             parts[0].voice.gate.note = Some(note(69, 110));
             instrument.set_mixer(Mixer::INITIAL);
             instrument.set_fx(Fx::INITIAL);
@@ -1579,7 +1635,7 @@ mod tests {
                 let mut reference =
                     SidechainDucker::<2>::new(44_118, 32, 176).expect("valid insert");
                 let mut buses = [[I24::default(); 128]; BUS_COUNT];
-                let mut parts = Track::DEEP_HOUSE;
+                let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
                 parts[0].voice.gate.note = Some(note(72, 120));
                 let mut mixer = Mixer::DRY;
                 for channel in [Channel::One, Channel::Two, Channel::Four] {
@@ -1625,8 +1681,9 @@ mod tests {
     #[test]
     fn two_reassigned_kits_key_both_bass_inserts_pre_fader() -> Result<(), Error> {
         with_instrument(44_118, |instrument| {
-            let mut tracks = [Part::Drums, Part::Bass, Part::Bass, Part::Drums]
-                .map(|part| Track::factory(Assignment::new(part)));
+            let mut tracks = Track::rack(
+                [Part::Tr909, Part::Bass, Part::Bass, Part::Tr909].map(Assignment::new),
+            );
             let mut mixer = Mixer::DRY;
             mixer.0[0].level = 0;
             mixer.0[3].level = 0;
@@ -1638,10 +1695,10 @@ mod tests {
                 [SidechainDucker::<2>::new(44_118, 32, 176).expect("valid insert"); 2];
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             for (block, kit) in [0, 3, 3].into_iter().enumerate() {
-                tracks[kit].hit(Drum::Kick);
+                tracks[kit].midi_hits.push(Drum::Kick, 127);
                 if block == 2 {
                     // Removing a ringing kit removes it from the key immediately.
-                    tracks[0] = Track::factory(Assignment::new(Part::Organ));
+                    tracks[0] = Track::factory(Channel::One, Assignment::new(Part::Organ));
                 }
                 instrument.render(tracks, &mut buses)?;
                 let first = &buses[Channel::One.source_bus() + 1];
@@ -1688,34 +1745,35 @@ mod tests {
     }
 
     #[test]
-    fn factory_chords_hold_their_place_beside_the_kit_with_headroom() -> Result<(), Error> {
+    fn factory_rack_leaves_headroom_with_both_acid_sends_ringing() -> Result<(), Error> {
         with_instrument(44_118, |instrument| {
+            let tracks = Track::rack(Navigation::INITIAL.assignments);
             instrument.set_mixer(Mixer::INITIAL);
             instrument.transport.toggle();
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
-            let mut chords = 0_i64;
-            let mut drums = 0_i64;
+            let mut energy = [0_i64; 6];
             let mut peak = 0;
-            for _ in 0..2713 {
-                // Four bars at 122 BPM, rounded up to a DMA block.
-                instrument.render(Track::DEEP_HOUSE, &mut buses)?;
+            // Two four-bar loops include tails across the loop boundary.
+            for _ in 0..5425 {
+                instrument.render(tracks, &mut buses)?;
                 for frame in 0..128 {
-                    let post_fader = |bus: usize, track: usize| {
-                        i64::from(
-                            (buses[bus][frame].inner() * i32::from(Mixer::INITIAL.0[track].level))
-                                >> 16,
-                        )
-                    };
-                    chords += post_fader(Channel::Two.source_bus(), 1).pow(2);
-                    drums += post_fader(Channel::Four.source_bus(), 3).pow(2);
+                    for (i, strip) in Mixer::INITIAL.0.iter().enumerate() {
+                        let value = (i64::from(buses[STRIP_BUS + i][frame].inner())
+                            * i64::from(strip.level))
+                            >> 15;
+                        energy[i] += value * value;
+                    }
+                    for (meter, bus) in [(4, REVERB_RETURN), (5, DELAY_RETURN)] {
+                        energy[meter] += i64::from(buses[bus][frame].inner() >> 8).pow(2);
+                    }
                     peak = peak.max(buses[MASTER_BUS][frame].inner().abs());
                 }
             }
-            assert!(
-                drums > 0 && chords * 4 > drums,
-                "chords within 6 dB RMS of the kit"
-            );
-            assert!(peak < 8_000_000, "headroom on the full-gain master");
+            let [bass, harmony, kit808, kit909, reverb, delay] = energy;
+            // Upper voice and both returns stay audible beside the dry foundation.
+            assert!(harmony > bass / 8 && kit808 > kit909 / 16);
+            assert!(reverb > bass / 256 && delay > bass / 8);
+            assert!(peak < 8_000_000, "full-gain master peak {peak}");
             Ok(())
         })
     }
@@ -1725,7 +1783,7 @@ mod tests {
         // Five milliseconds at 32 kHz is exactly one test block.
         with_instrument(32_000, |instrument| {
             let mut buses = [[I24::default(); 160]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             instrument.sequences = [false, false, false, true];
             parts[0].voice.gate.note = Some(note(69, 100));
             let mut mixer = Mixer::DRY;
@@ -1734,7 +1792,7 @@ mod tests {
             let mut fx = Fx::INITIAL;
             let mut page = FxPage::Reverb;
             page.turn(1);
-            fx.edit(page, [-74, 15, 64, 0], false);
+            fx.edit(page, [-74, 7, 64, 0], false);
             assert_eq!((fx.time_ms, fx.feedback, fx.delay.wet), (5, 50, 128));
             assert_eq!(fx.reverb, Fx::INITIAL.reverb);
             instrument.set_mixer(mixer);
@@ -1790,7 +1848,7 @@ mod tests {
     fn organ_chord_stays_live_while_bass_is_played() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
-            let mut parts = Track::INITIAL;
+            let mut parts = Track::TEST_TRACKS;
             let mut keys = Keyboard::<6>::new();
             keys.nav.focus = Channel::Two;
             for pitch in [60, 64, 67, 71] {
@@ -1932,7 +1990,7 @@ mod tests {
             );
             keys.clear(Channel::Two);
             tracks[1] = Track::new(Assignment {
-                part: Part::Drums,
+                part: Part::Tr909,
                 generation: 1,
             });
             keys.midi(Channel::Two, MidiAction::Off(47), &mut tracks[1]);
@@ -1958,10 +2016,120 @@ mod tests {
     }
 
     #[test]
+    fn rebirth_lineup_plays_and_each_drum_sidechain_follows_its_selected_kit() -> Result<(), Error>
+    {
+        use crate::fx::KeySource;
+        with_instrument(44_118, |instrument| {
+            let nav = Navigation::INITIAL;
+            assert_eq!(
+                nav.assignments.map(|a| a.part),
+                [Part::Bass, Part::Bass, Part::Tr808, Part::Tr909]
+            );
+            let mut tracks = Track::rack(nav.assignments);
+            assert_eq!(instrument.sequences, [true; 4]);
+            tracks[1].voice.gate.note = Some(note(65, 100));
+            tracks[2].midi_hits.push(Drum::Kick, 96);
+            instrument.transport.toggle();
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            for (key, source) in [
+                (KeySource::Kick, 7),
+                (KeySource::Kick808, 5),
+                (KeySource::Kit808, 4),
+                (KeySource::Kit, 6),
+            ] {
+                instrument.set_fx(Fx { key, ..Fx::INITIAL });
+                instrument.render(tracks, &mut buses)?;
+                assert_eq!(buses[12], buses[source]);
+                assert_ne!(buses[4], buses[6]);
+                for c in Channel::ALL {
+                    assert!(buses[c.source_bus()].iter().any(|s| s.inner() != 0));
+                }
+            }
+            // Reassign channel four mid-kick. Channel three's tail must survive
+            // and the new 808 must start silent until the next programmed hit.
+            tracks[3] = Track::factory(
+                Channel::Four,
+                Assignment {
+                    part: Part::Tr808,
+                    generation: 1,
+                },
+            );
+            instrument.render(tracks, &mut buses)?;
+            assert!(buses[4].iter().any(|s| s.inner() != 0));
+            assert!(buses[6].iter().all(|s| s.inner() == 0));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn an_808_in_any_slot_accepts_only_its_own_midi_and_four_panel_pads() -> Result<(), Error> {
+        for channel in Channel::ALL {
+            with_instrument(44_118, |instrument| {
+                let mut tracks = Track::TEST_TRACKS;
+                let i = channel.index();
+                let assignment = Assignment {
+                    part: Part::Tr808,
+                    generation: 1,
+                };
+                tracks[i] = Track::factory(channel, assignment);
+                let mut keys = Keys::<2>::new();
+                let mut piano = Piano::<2>::new();
+                let mut buses = [[I24::default(); 128]; BUS_COUNT];
+                let mut reference = wavegraph_808::Tr808::new(44_118, 1).expect("audio clock");
+                // A fresh assignment plus a completed panel tap and two MIDI
+                // strikes (with different velocities) all precede its first render.
+                for pad in [53, 55, 57] {
+                    piano.press(channel, assignment, note(pad, 64));
+                    piano.release(pad);
+                }
+                piano.pads[i].apply(&mut tracks[i]);
+                for n in [note(38, 31), note(38, 105), note(39, 127)] {
+                    let packet = [9, 0x90 | channel as u8, n.number, n.velocity];
+                    let (dest, action) = decode_midi(packet).expect("USB MIDI note");
+                    keys.midi(dest, action, &mut tracks[dest.index()]);
+                }
+                for (voice, velocity) in [
+                    (wavegraph_808::Voice::Kick, 64),
+                    (wavegraph_808::Voice::Snare, 64),
+                    (wavegraph_808::Voice::ClosedHat, 64),
+                    (wavegraph_808::Voice::Snare, 31),
+                    (wavegraph_808::Voice::Snare, 105),
+                ] {
+                    reference.trigger(voice, velocity);
+                }
+                for _ in 0..2 {
+                    instrument.render(tracks, &mut buses)?;
+                    let mut mix = [I24::default(); 128];
+                    let mut kick = mix;
+                    reference.render_mix_kick(&mut mix, &mut kick);
+                    assert_eq!(buses[channel.source_bus()], mix);
+                    assert_eq!(buses[channel.source_bus() + 1], kick);
+                    for other in Channel::ALL.into_iter().filter(|&other| other != channel) {
+                        assert!(buses[other.source_bus()].iter().all(|s| s.inner() == 0));
+                    }
+                }
+                assert_eq!(
+                    instrument.drums[i],
+                    [
+                        DrumLamp::Strike,
+                        DrumLamp::Strike,
+                        DrumLamp::Off,
+                        DrumLamp::Strike,
+                        DrumLamp::Off,
+                        DrumLamp::Off
+                    ]
+                );
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn overlapping_303_assignments_take_over_and_reassign_independently() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
-            let mut tracks = Track::DEEP_HOUSE;
-            tracks[0] = Track::factory(Assignment::new(Part::Bass));
+            let mut tracks = Track::rack(Navigation::SYNTH_RACK.assignments);
+            tracks[0] = Track::factory(Channel::One, Assignment::new(Part::Bass));
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             instrument.sequences = [true, false, true, false];
             instrument.transport.toggle();
@@ -1980,11 +2148,14 @@ mod tests {
                 buses[Channel::Three.source_bus()]
             );
 
-            tracks[0] = Track::factory(Assignment {
-                part: Part::Drums,
-                generation: 1,
-            });
-            tracks[0].hit(Drum::Clap);
+            tracks[0] = Track::factory(
+                Channel::One,
+                Assignment {
+                    part: Part::Tr909,
+                    generation: 1,
+                },
+            );
+            tracks[0].midi_hits.push(Drum::Clap, 127);
             let previous_phase = instrument.position;
             instrument.render(tracks, &mut buses)?;
             assert_ne!(instrument.position, previous_phase);

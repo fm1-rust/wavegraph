@@ -82,6 +82,12 @@ impl Controls {
         ..Self::INITIAL
     };
 
+    /// Shorter, less driven voice for the upper Dm7/Cmaj7 line.
+    pub(super) const HARMONY: Self = Self {
+        values: [21, 72, 26, 21, 120, 4, 68, 16],
+        ..Self::INITIAL
+    };
+
     /// Hand the three automated controls back to their retained panel settings.
     pub(super) fn automation_reset(self) -> [Message; 3] {
         let params = self.voice_params();

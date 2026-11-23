@@ -840,6 +840,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavegraph-808"
+version = "0.1.0"
+dependencies = [
+ "wavegraph",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
 name = "wavegraph-909"
 version = "0.1.0"
 dependencies = [
@@ -871,6 +880,7 @@ dependencies = [
  "static_cell",
  "wavegraph",
  "wavegraph-303",
+ "wavegraph-808",
  "wavegraph-909",
  "wavegraph-adsr",
  "wavegraph-fx",
