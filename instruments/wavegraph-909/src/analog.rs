@@ -104,8 +104,11 @@ impl BassDrum {
     /// Construct for a rational graph clock, returning `None` for a zero clock.
     #[must_use]
     pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
-        let clock = Clock::new(numerator, denominator)?;
-        Some(Self {
+        Some(Self::from_clock(Clock::new(numerator, denominator)?, 1.0))
+    }
+
+    pub(crate) fn from_clock(clock: Clock, decay: f32) -> Self {
+        Self {
             oscillator: Oscillator::new(clock, 49.5),
             noise: 0x8469_f235,
             body: 0.0,
@@ -113,10 +116,10 @@ impl BassDrum {
             click: 0.0,
             hold: 0,
             hold_frames: clock.frames(0.049),
-            body_decay: clock.decay(0.070),
+            body_decay: clock.decay(0.070 * decay),
             bend_decay: clock.decay(0.0107),
             click_decay: clock.decay(0.0014),
-        })
+        }
     }
 
     /// Retrigger the oscillator and its pitch, attack and volume envelopes.
@@ -172,8 +175,11 @@ impl SnareDrum {
     /// Construct for a rational graph clock, returning `None` for a zero clock.
     #[must_use]
     pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
-        let clock = Clock::new(numerator, denominator)?;
-        Some(Self {
+        Some(Self::from_clock(Clock::new(numerator, denominator)?, 1.0))
+    }
+
+    pub(crate) fn from_clock(clock: Clock, decay: f32) -> Self {
+        Self {
             shells: [172.0, 272.0].map(|hz| Oscillator::new(clock, hz)),
             noise: 0x9352_6a7d,
             low: 0.0,
@@ -183,10 +189,10 @@ impl SnareDrum {
             body: 0.0,
             snap: 0.0,
             bend: 0.0,
-            body_decay: clock.decay(0.036),
-            snap_decay: clock.decay(0.048),
+            body_decay: clock.decay(0.036 * decay),
+            snap_decay: clock.decay(0.048 * decay),
             bend_decay: clock.decay(0.007),
-        })
+        }
     }
 
     /// Retrigger the shells and snare-wire noise envelopes.

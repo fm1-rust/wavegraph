@@ -36,8 +36,8 @@ impl EnvelopeControls {
     pub(super) const HOUSE_CHORDS: Self = Self(Adsr {
         attack_us: 4_000,
         decay_us: 180_000,
-        sustain_percent: 68,
-        release_us: 180_000,
+        sustain_percent: 92,
+        release_us: 200_000,
     });
 
     fn turn_shape(&mut self, [a, d, s]: [i8; 3], attack: &[u32], decay: &[u32]) {

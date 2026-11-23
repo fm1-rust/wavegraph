@@ -112,10 +112,26 @@ impl<'a> Tr909<'a> {
         numerator: u32,
         denominator: u32,
     ) -> Option<Self> {
+        Self::with_decay(samples, numerator, denominator, 100)
+    }
+
+    /// Construct at a rational sample rate with shorter modeled drum tails.
+    /// `decay_percent` scales their amplitude decay times (100 is stock,
+    /// larger values select 100). Pitch sweeps, clap burst timing and sampled
+    /// cymbals keep their original timing.
+    #[must_use]
+    pub fn with_decay(
+        samples: Samples<'a>,
+        numerator: u32,
+        denominator: u32,
+        decay_percent: u8,
+    ) -> Option<Self> {
+        let clock = analog::Clock::new(numerator, denominator)?;
+        let decay = f32::from(decay_percent.min(100)) / 100.0;
         Some(Self {
-            clap: HandClap::new(numerator, denominator)?,
-            kick: BassDrum::new(numerator, denominator)?,
-            snare: SnareDrum::new(numerator, denominator)?,
+            clap: HandClap::from_clock(clock, decay),
+            kick: BassDrum::from_clock(clock, decay),
+            snare: SnareDrum::from_clock(clock, decay),
             closed_hat: Sampler::from_pcm16le(samples.closed_hat)?,
             open_hat: Sampler::from_pcm16le(samples.open_hat)?,
             ride: Sampler::from_pcm16le(samples.ride)?,
@@ -155,8 +171,9 @@ impl<'a> Tr909<'a> {
         self.opened_this_frame = false;
     }
 
+    /// Advance all six voices one frame and return dry PCM in [`Voice::ALL`] order.
     #[inline]
-    fn next_voices(&mut self) -> [i16; 6] {
+    pub fn next_voices(&mut self) -> [i16; 6] {
         self.opened_this_frame = false;
         [
             self.kick.next_frame(),

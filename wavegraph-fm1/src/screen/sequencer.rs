@@ -12,7 +12,7 @@ use fm1_rticx::{
     bsp::display::{Display, Error},
     time::Clock,
 };
-use wavegraph_909::{DEMO_PATTERN, Voice};
+use wavegraph_909::Voice;
 
 const LEFT: usize = 48;
 const TOP: usize = 48;
@@ -145,7 +145,7 @@ impl Grid {
                 if seq.track == Track::Drums {
                     Cell {
                         pixels: if row < DRUMS.len()
-                            && DEMO_PATTERN[absolute % DEMO_PATTERN.len()].contains(&DRUMS[row].0)
+                            && pattern::drums(absolute).contains(&DRUMS[row].0)
                         {
                             0x7fe
                         } else {

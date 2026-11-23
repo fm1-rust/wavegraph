@@ -1,4 +1,4 @@
-//! Factory audition pattern shared by the host example and the FM-1.
+//! Two-bar audition pattern for the full kit.
 use crate::Voice::{self, *};
 
 /// Two bars of straight sixteenths. Each slice lists the voices struck together.

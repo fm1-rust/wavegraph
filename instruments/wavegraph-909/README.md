@@ -49,12 +49,14 @@ assert_eq!(buses[0], buses[Voice::ClosedHat.outlet()]);
 The [service notes][service] describe the original analog signal paths. The
 kick sweeps a shaped triangle oscillator down to about 50 Hz, with a separate
 short noise attack. The snare mixes two pitched shells with filtered noise.
-Both models have fixed tunings and decay settings.
+The standalone models use stock decay settings. `Tr909::with_decay` sets
+the kit's modeled amplitude decays as a percentage of stock.
 
 `BassDrum`, `SnareDrum` and `HandClap` can each run independently as a
 one-output `Process` with a unit trigger message. To embed the whole kit in
 a mono instrument, call `Tr909::trigger` and `next_mix_frame`. The latter
-renders directly into the mix without allocating stem buffers.
+renders directly into the mix without allocating stem buffers. Use
+`next_voices` for one dry PCM frame per voice when mixing or keying an effect.
 
 ### Hand clap
 
@@ -71,7 +73,7 @@ the envelopes and carries the noise and filter state into the next hit.
 
 ## Play the kit
 
-The FM-1 and host example share a two-bar pattern with a four-on-the-floor kick,
+The host example auditions all six voices in a two-bar pattern with a four-on-the-floor kick,
 snare and clap on two and four, offbeat open hats, closed hats and ride accents.
 The host plays it at 126 BPM and lets the voices ring out. The three PCM hits
 come from Fugue State Audio's synthesized `x0xproc1` kit. They occupy

@@ -19,10 +19,8 @@ pub const DEFAULT_ENVELOPE: Adsr = Adsr {
     release_us: Params::INITIAL.release_ms as u32 * 1_000,
 };
 
-// Q16.16 key transient with Q15 peak amplitude. Each voice is roughly -24 dBFS at full
-// velocity, allowing four notes to mix without saturating Q23 output.
+// Q16.16 key transient with Q15 peak amplitude.
 const FULL: u32 = 32767 << 16;
-const Q31_SHIFT: u32 = 12;
 
 /// Two oscillator recipes based on independent M1 Organ 2 recreation techniques.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -258,6 +256,7 @@ pub struct Organ {
     steps: [u32; 128],
     voices: [Voice; POLYPHONY],
     params: Params,
+    voice_level: u8,
     serial: u32,
     rate_num: u32,
     rate_den: u32,
@@ -300,6 +299,7 @@ impl Organ {
             steps,
             voices: [Voice::SILENT; POLYPHONY],
             params,
+            voice_level: 8,
             serial: 0,
             rate_num: numerator,
             rate_den: denominator,
@@ -310,6 +310,15 @@ impl Organ {
         };
         organ.decay_step = organ.ramp_step(params.decay_ms);
         Some(organ)
+    }
+
+    /// Set the per-voice gain in units of 1/128. The default is 8 (about
+    /// −24 dB). Levels above 128 select unity. The polyphonic sum saturates
+    /// at the output rails.
+    #[must_use]
+    pub const fn with_voice_level(mut self, level: u8) -> Self {
+        self.voice_level = if level > 128 { 128 } else { level };
+        self
     }
 
     /// The current panel settings.
@@ -460,13 +469,15 @@ impl Organ {
             output.fill_with(|| S::from_sample_(0));
             return;
         }
+        // Convert the Q15 voice sum to Q31 and apply the voice level in one multiply.
+        let scale = i32::from(self.voice_level) << 9;
         for sample in output {
             let sum: i32 = self
                 .voices
                 .iter_mut()
                 .map(|v| v.next(self.params, &self.timing, self.decay_step))
                 .sum();
-            *sample = S::from_sample_(sum << Q31_SHIFT);
+            *sample = S::from_sample_(sum.saturating_mul(scale));
         }
     }
 }
