@@ -1267,6 +1267,10 @@ mod tests {
     const REVERB_RETURN: usize = 16;
     const DELAY_RETURN: usize = 17;
     const BASS_INSERT: usize = STRIP_BUS + Channel::Three.index();
+    const FX_WITHOUT_DYNAMICS: Fx = Fx {
+        dynamics_enabled: false,
+        ..Fx::INITIAL
+    };
 
     fn note(number: u8, velocity: u8) -> Note {
         Note { number, velocity }
@@ -1868,6 +1872,7 @@ mod tests {
     #[test]
     fn changing_routes_preserves_the_sounding_oscillators_phase() -> Result<(), Error> {
         with_instrument(1760, |instrument| {
+            instrument.set_fx(FX_WITHOUT_DYNAMICS);
             let mut buses = [[I24::default(); 3]; BUS_COUNT];
             let mut parts = Track::TEST_TRACKS;
             parts[0].voice.gate.note = Some(note(69, 80));
@@ -1890,6 +1895,7 @@ mod tests {
     #[test]
     fn both_voices_reach_the_mix_and_releasing_one_preserves_the_other() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
+            instrument.set_fx(FX_WITHOUT_DYNAMICS);
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             let mut parts = Track::TEST_TRACKS;
             let mut keys = Keyboard::<2>::new();
@@ -2020,7 +2026,8 @@ mod tests {
             let mut parts = Track::TEST_TRACKS;
             parts[0].voice.gate.note = Some(note(69, 110));
             instrument.set_mixer(Mixer::INITIAL);
-            instrument.set_fx(Fx::INITIAL);
+            let mut fx = FX_WITHOUT_DYNAMICS;
+            instrument.set_fx(fx);
             let mut audible_wet = false;
             for _ in 0..30 {
                 instrument.render(parts, &mut buses)?;
@@ -2029,7 +2036,6 @@ mod tests {
                     .any(|sample| sample.inner() != 0);
             }
             assert!(audible_wet, "shared send must reach the reverb tank");
-            let mut fx = Fx::INITIAL;
             fx.reverb.enabled = false;
             instrument.set_fx(fx);
             instrument.render(parts, &mut buses)?;
