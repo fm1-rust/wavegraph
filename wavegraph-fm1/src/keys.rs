@@ -8,6 +8,7 @@ use crate::{
 use heapless::Vec;
 use wavegraph::bytecode::Error;
 use wavegraph_909::Voice as Drum;
+use wavegraph_arp::Chord;
 use wavegraph_organ::POLYPHONY;
 
 /// A polyphonic key and its strike generation, retained across dropped scans.
@@ -129,23 +130,28 @@ impl<const KEYS: usize> Piano<KEYS> {
 
     pub(super) fn press(&mut self, channel: Channel, assignment: Assignment, key: Note) {
         self.release(key.number);
-        if assignment.part.is_kit() {
-            if let Some(i) = [53, 55, 57, 59, 60, 62]
+        let pitch = if assignment.part.is_kit() {
+            let Some(drum) = [53, 55, 57, 59, 60, 62]
                 .iter()
                 .position(|&n| n == key.number)
-                && let Some(&drum) = assignment.part.pads().get(i)
-            {
-                let pads = &mut self.pads[channel.index()];
-                if pads.generation != assignment.generation {
-                    *pads = PanelPads {
-                        generation: assignment.generation,
-                        strikes: HitLog::EMPTY,
-                    };
-                }
-                pads.strikes.push(drum, key.velocity);
+                .and_then(|i| assignment.part.pads().get(i).copied())
+            else {
+                return;
+            };
+            let pads = &mut self.pads[channel.index()];
+            if pads.generation != assignment.generation {
+                *pads = PanelPads {
+                    generation: assignment.generation,
+                    strikes: HitLog::EMPTY,
+                };
             }
-            return;
-        }
+            pads.strikes.push(drum, key.velocity);
+            [36, 38, 39, 42, 46, 51][drum as usize]
+        } else {
+            key.number
+                .saturating_add_signed(self.octave.saturating_mul(12))
+                .min(127)
+        };
         self.serial = self.serial.wrapping_add(1);
         self.held
             .push(Press {
@@ -153,9 +159,7 @@ impl<const KEYS: usize> Piano<KEYS> {
                 channel,
                 generation: assignment.generation,
                 note: Note {
-                    number: key
-                        .number
-                        .saturating_add_signed(self.octave.saturating_mul(12)),
+                    number: pitch,
                     velocity: key.velocity,
                 },
                 strike: self.serial,
@@ -204,6 +208,9 @@ struct ChannelKeys<const PANEL: usize> {
     panel: Vec<Held, PANEL>,
     serial: u32,
     phrase: u32,
+    chord: Chord,
+    latch: bool,
+    chord_has_midi: bool,
 }
 
 impl<const PANEL: usize> ChannelKeys<PANEL> {
@@ -213,6 +220,9 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
             panel: Vec::new(),
             serial: 0,
             phrase: 0,
+            chord: Chord::new(),
+            latch: false,
+            chord_has_midi: false,
         }
     }
 
@@ -222,13 +232,18 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
             Key::Panel(_) => &mut self.panel[..],
         };
         if let Some(index) = held.iter().position(|held| held.key == key) {
-            match key {
-                Key::Midi(_) => {
-                    self.midi.remove(index);
-                }
-                Key::Panel(_) => {
-                    self.panel.remove(index);
-                }
+            let old = match key {
+                Key::Midi(_) => self.midi.remove(index),
+                Key::Panel(_) => self.panel.remove(index),
+            };
+            if !self
+                .midi
+                .iter()
+                .chain(&self.panel)
+                .any(|held| held.note.number == old.note.number)
+            {
+                self.chord
+                    .input(MidiAction::Off(old.note.number), self.latch);
             }
         }
     }
@@ -237,8 +252,11 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
         self.release(key);
         if self.midi.is_empty() && self.panel.is_empty() {
             self.phrase = self.phrase.wrapping_add(1);
+            self.chord_has_midi = false;
         }
         self.serial = self.serial.wrapping_add(1);
+        self.chord_has_midi |= matches!(key, Key::Midi(_));
+        self.chord.input(MidiAction::On(note), self.latch);
         let held = Held {
             key,
             note,
@@ -255,6 +273,15 @@ impl<const PANEL: usize> ChannelKeys<PANEL> {
             MidiAction::On(note) => self.press(source, note),
             MidiAction::Off(_) => self.release(source),
             MidiAction::Control(..) => (),
+        }
+    }
+
+    fn clear_midi(&mut self) {
+        self.midi.clear();
+        self.chord_has_midi = false;
+        self.chord.clear();
+        for held in &self.panel {
+            self.chord.input(MidiAction::On(held.note), false);
         }
     }
 
@@ -286,11 +313,17 @@ impl<const PANEL: usize> Keys<PANEL> {
         let keys = &mut self.channels[channel.index()];
         keys.midi.clear();
         keys.panel.clear();
+        keys.chord.clear();
+        keys.latch = false;
+        keys.chord_has_midi = false;
     }
 
     pub(super) fn clear_midi(&mut self) {
         for keys in &mut self.channels {
-            keys.midi.clear();
+            // A cable or session change must not interrupt a panel-only latch.
+            if keys.chord_has_midi {
+                keys.clear_midi();
+            }
         }
     }
 
@@ -313,14 +346,15 @@ impl<const PANEL: usize> Keys<PANEL> {
         let keys = &mut self.channels[channel.index()];
         match action {
             MidiAction::On(note) if track.assignment.part.is_kit() => {
+                keys.event(Key::Midi(note.number), action);
                 if let Some(voice) = track.assignment.part.drum(note.number) {
                     track.midi_hits.push(voice, note.velocity);
                 }
             }
             MidiAction::On(note) => keys.event(Key::Midi(note.number), action),
             MidiAction::Off(note) => keys.event(Key::Midi(note), action),
-            MidiAction::Control(123, _) => {
-                keys.midi.clear();
+            MidiAction::Control(120 | 123, _) => {
+                keys.clear_midi();
                 track.bass.slide = false;
             }
             MidiAction::Control(cc, value) if track.assignment.part == Part::Bass => {
@@ -330,8 +364,26 @@ impl<const PANEL: usize> Keys<PANEL> {
         }
     }
 
+    pub(super) fn chord(&self, channel: Channel) -> &Chord {
+        &self.channels[channel.index()].chord
+    }
+
+    pub(super) fn set_latch(&mut self, channel: Channel, latch: bool) {
+        let keys = &mut self.channels[channel.index()];
+        if keys.latch && !latch {
+            keys.chord.release_latch();
+        }
+        keys.latch = latch;
+    }
+
     pub(super) fn snapshot(&self, channel: Channel, track: &mut Track) {
         let keys = &self.channels[channel.index()];
+        if track.arp.enabled {
+            track.arp_revision = keys.chord.revision();
+        }
+        if track.assignment.part.is_kit() {
+            return;
+        }
         let notes = keys.latest();
         track.voice.gate = Gate {
             note: notes[0].note,

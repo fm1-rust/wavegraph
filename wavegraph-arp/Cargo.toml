@@ -1,0 +1,17 @@
+[package]
+name = "wavegraph-arp"
+description = "A frame-clocked MIDI arpeggiator for WaveGraph patches"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+keywords = ["audio", "midi", "arpeggiator", "puredata"]
+
+[dependencies]
+heapless.workspace = true
+wavegraph-core.workspace = true
+
+[lints]
+workspace = true

@@ -2,22 +2,25 @@
 
 use crate::{bass::CC_SLIDE, panel::Channel};
 use heapless::{Deque, Vec};
-use wavegraph::midi::MidiMessage;
+use wavegraph::{Event, midi::MidiMessage};
 
 type Packet = [u8; 4];
 
 #[derive(Default)]
 pub(super) struct Batch {
-    packets: Vec<Packet, 96>,
+    packets: Vec<(usize, Packet), 96>,
     lost: bool,
 }
 
 impl Batch {
-    pub(super) fn push(&mut self, channel: Channel, message: MidiMessage) {
-        if let Some([status, key, value]) = message.encode(channel as u8) {
+    pub(super) fn push(&mut self, channel: Channel, event: Event<MidiMessage>) {
+        if let Some([status, key, value]) = event.message.encode(channel as u8) {
+            // Clip and arp producers each emit in frame order. USB drains one
+            // merged batch, retaining insertion order for pairs at the same frame.
+            let i = self.packets.partition_point(|(at, _)| *at <= event.frame);
             self.lost |= self
                 .packets
-                .push([status >> 4, status, key, value])
+                .insert(i, (event.frame, [status >> 4, status, key, value]))
                 .is_err();
         }
     }
@@ -61,7 +64,7 @@ impl OutputQueue {
             }
         }
         if !batch.lost {
-            for &packet in &batch.packets {
+            for &(_, packet) in &batch.packets {
                 self.queue.push_back(packet).expect("reserved above");
             }
         }
@@ -90,19 +93,64 @@ mod tests {
     use super::*;
     use wavegraph::midi::Note;
 
+    fn at(frame: usize, message: MidiMessage) -> Event<MidiMessage> {
+        Event {
+            frame,
+            port: 0,
+            message,
+        }
+    }
+
+    #[test]
+    fn independent_arpeggiators_and_clips_merge_in_frame_order() {
+        let mut out = OutputQueue::default();
+        out.connect(true);
+        let mut batch = Batch::default();
+        for (channel, frame, message) in [
+            (Channel::One, 48, MidiMessage::Control(74, 120)),
+            (Channel::Two, 30, MidiMessage::Off(60)),
+            (
+                Channel::Two,
+                30,
+                MidiMessage::On(Note {
+                    number: 64,
+                    velocity: 87,
+                }),
+            ),
+            (Channel::Four, 4, MidiMessage::Off(42)),
+        ] {
+            batch.push(channel, at(frame, message));
+        }
+        out.append(&batch);
+        let mut packets = [[0; 4]; 4];
+        assert_eq!(out.peek(&mut packets).1, 4);
+        assert_eq!(
+            packets,
+            [
+                [8, 0x83, 42, 64],
+                [8, 0x81, 60, 64],
+                [9, 0x91, 64, 87],
+                [11, 0xb0, 74, 120]
+            ]
+        );
+    }
+
     #[test]
     fn partial_usb_writes_retry_the_suffix_and_retire_stale_sessions() {
         let mut out = OutputQueue::default();
         let mut batch = Batch::default();
         batch.push(
             Channel::Two,
-            MidiMessage::On(Note {
-                number: 45,
-                velocity: 100,
-            }),
+            at(
+                0,
+                MidiMessage::On(Note {
+                    number: 45,
+                    velocity: 100,
+                }),
+            ),
         );
-        batch.push(Channel::Two, MidiMessage::Control(74, 89));
-        batch.push(Channel::Two, MidiMessage::Off(45));
+        batch.push(Channel::Two, at(0, MidiMessage::Control(74, 89)));
+        batch.push(Channel::Two, at(0, MidiMessage::Off(45)));
         let mut packets = [[0; 4]; 16];
         out.append(&batch);
         assert_eq!(out.peek(&mut packets).1, 0);
@@ -119,7 +167,7 @@ mod tests {
         out.connect(false);
         out.connect(true);
         batch.clear();
-        batch.push(Channel::Four, MidiMessage::Off(51));
+        batch.push(Channel::Four, at(0, MidiMessage::Off(51)));
         out.append(&batch);
         out.sent(revision, 2);
         assert_eq!(out.peek(&mut packets).1, 1);
@@ -132,7 +180,7 @@ mod tests {
         out.connect(true);
         let mut batch = Batch::default();
         for _ in 0..80 {
-            batch.push(Channel::One, MidiMessage::Control(74, 50));
+            batch.push(Channel::One, at(0, MidiMessage::Control(74, 50)));
         }
         out.append(&batch);
         out.append(&batch);

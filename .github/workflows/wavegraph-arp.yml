@@ -1,0 +1,35 @@
+name: wavegraph-arp
+
+on:
+  pull_request:
+    paths: &wavegraph-arp-paths
+      - 'wavegraph-arp/**'
+      - 'wavegraph-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wavegraph-arp.yml'
+  push:
+    branches: [main]
+    paths: *wavegraph-arp-paths
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --target thumbv7em-none-eabihf --no-self-update
+      - name: Host tests
+        run: cargo +stable test -p wavegraph-arp --locked
+      - name: no_std build
+        run: cargo +stable build -p wavegraph-arp --lib --release --no-default-features --target thumbv7em-none-eabihf --locked

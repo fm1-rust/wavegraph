@@ -18,6 +18,14 @@ use crate::{
     wavetable::Program as WaveProgram,
 };
 use fm1_audio::MasterLevel;
+use wavegraph_arp::Chord;
+
+// Publish the chord and its settings under one lock. Only changed, armed
+// channels copy chord storage between the input and audio tasks.
+pub struct Performance {
+    settings: Settings,
+    chords: &'static mut [Chord; CHANNELS],
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Settings {
@@ -46,6 +54,7 @@ impl Settings {
             channel,
             assignments: self.nav.assignments.map(|assignment| assignment.part),
             voice: track.voice,
+            arp: track.arp,
             focus: track.assignment.part,
             bass: track.bass,
             organ: track.organ,
@@ -69,6 +78,7 @@ impl Settings {
 
     fn sel_lamp(self) -> bool {
         match self.nav.view {
+            View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
             View::Fx => {
                 self.nav.bass_insert() && self.tracks[self.nav.focus.index()].bass_fx.enabled
             }
@@ -88,6 +98,7 @@ pub(super) struct Labels {
     pub(super) channel: Channel,
     pub(super) assignments: [Part; CHANNELS],
     pub(super) voice: Voice,
+    pub(super) arp: crate::arp::Controls,
     pub(super) focus: Part,
     pub(super) bass: Controls,
     pub(super) organ: OrganControls,
@@ -114,6 +125,7 @@ pub struct Motion {
     pub(super) bass_automation: Option<(Channel, Automation)>,
     pub(super) banks: [BankPosition; CHANNELS],
     pub(super) peaks: [u8; CHANNELS],
+    pub(super) arp_notes: [Option<u8>; CHANNELS],
     pub(super) reduction: u8,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
     pub(super) wave_frames: [u8; CHANNELS],
@@ -127,7 +139,7 @@ pub struct Frame {
 
 #[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
 mod app {
-    use super::{Frame, Labels, Motion, Settings};
+    use super::{Frame, Labels, Motion, Performance, Settings};
     use crate::{
         bumper::Bumper,
         capture::{Capture, FLAT, Scale},
@@ -203,7 +215,7 @@ mod app {
 
     #[shared]
     struct Shared {
-        settings: Settings,
+        settings: Performance,
         bumper: Bumper,
         leds: Leds,
         frame: Frame,
@@ -299,6 +311,10 @@ mod app {
         let (scans, input) = make_channel!(PanelFrame, SCANS);
         let (wake_usb, outbound) = make_channel!((), 1);
         let (midi_out, midi_in) = make_channel!(MidiEvent, MIDI_EVENTS);
+        // The RTICX entry frame lives on the user stack while interrupts run.
+        // Keep full MIDI chords in SRAM alongside the key-owner tables.
+        static CHORDS: ConstStaticCell<[wavegraph_arp::Chord; CHANNELS]> =
+            ConstStaticCell::new([const { wavegraph_arp::Chord::new() }; CHANNELS]);
         static KEYS: ConstStaticCell<Keys<PIANO_KEYS>> = ConstStaticCell::new(Keys::new());
         static PIANO: ConstStaticCell<Piano<PIANO_KEYS>> = ConstStaticCell::new(Piano::new());
         static HELD: ConstStaticCell<Vec<Press, PIANO_KEYS>> = ConstStaticCell::new(Vec::new());
@@ -308,7 +324,10 @@ mod app {
         leds.set(Button::Sel, Settings::INITIAL.sel_lamp());
         (
             Shared {
-                settings: Settings::INITIAL,
+                settings: Performance {
+                    settings: Settings::INITIAL,
+                    chords: CHORDS.take(),
+                },
                 bumper: Bumper::default(),
                 leds,
                 frame: Frame {
@@ -423,6 +442,7 @@ mod app {
                 (Button::Glo, PageButton::Glo),
                 (Button::Fx, PageButton::Fx),
                 (Button::Env, PageButton::Env),
+                (Button::Arp, PageButton::Arp),
                 (Button::Seq, PageButton::Seq),
             ]
             .into_iter()
@@ -495,6 +515,7 @@ mod app {
                 matches!(self.nav.view, View::Fx | View::MasterFx(_)),
             );
             self.leds.set(Button::Env, self.nav.view == View::Envelope);
+            self.leds.set(Button::Arp, self.nav.view == View::Arp);
             let now = cycles();
             // Time the recovery chord against the crystal even if scan interrupts run late.
             if scan.is_down(Button::OctaveDown) && scan.is_down(Button::OctaveUp) {
@@ -630,10 +651,6 @@ mod app {
                         self.keys.midi(event.channel, event.action, track);
                     }
                 }
-                for channel in Channel::ALL {
-                    self.keys
-                        .snapshot(channel, &mut self.settings.tracks[channel.index()]);
-                }
                 let knobs = [
                     Encoder::Knob1,
                     Encoder::Knob2,
@@ -647,6 +664,9 @@ mod app {
                 match view {
                     View::Mixer => self.settings.mixer.turn_faders(knobs),
                     View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
+                    View::Arp => self.settings.tracks[channel.index()]
+                        .arp
+                        .edit(select, knobs, sel),
                     View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
                     View::Fx => {
                         if nav.bass_insert() {
@@ -670,9 +690,24 @@ mod app {
                 if let Some(master) = scan.master() {
                     self.settings.master = master;
                 }
+                for channel in Channel::ALL {
+                    let track = &mut self.settings.tracks[channel.index()];
+                    self.keys
+                        .set_latch(channel, track.arp.enabled && track.arp.config.latch);
+                    self.keys.snapshot(channel, track);
+                }
                 if before != self.settings {
                     let settings = self.settings;
-                    self.shared().settings.lock(|current| *current = settings);
+                    self.shared().settings.lock(|current| {
+                        for channel in Channel::ALL {
+                            let i = channel.index();
+                            let track = &settings.tracks[i];
+                            if track.arp_chord_changed(Some(&before.tracks[i])) {
+                                current.chords[i].clone_from(self.keys.chord(channel));
+                            }
+                        }
+                        current.settings = settings;
+                    });
                 }
                 let sel_lamp = self.settings.sel_lamp();
                 if before.sel_lamp() != sel_lamp {
@@ -710,7 +745,14 @@ mod app {
     impl RticTask for Audio {
         fn exec(&mut self) {
             let started = cycles();
-            let settings = self.shared().settings.lock(|s| *s);
+            let settings = self.shared().settings.lock(|s| {
+                for channel in Channel::ALL {
+                    let i = channel.index();
+                    self.instrument
+                        .sync_chord(channel, &s.settings.tracks[i], &s.chords[i]);
+                }
+                s.settings
+            });
             let mut bumper = self.shared().bumper;
             let mut revision = None;
             self.wire.clear();
@@ -731,9 +773,7 @@ mod app {
                 self.instrument.cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
                 let mono = self
                     .instrument
-                    .render_with_midi(settings.tracks, self.buses, |c, e| {
-                        self.wire.push(c, e.message)
-                    })
+                    .render_with_midi(settings.tracks, self.buses, |c, e| self.wire.push(c, e))
                     .expect("fixed patch");
                 for (frame, sample) in out.iter_mut().zip(mono) {
                     *frame = [sample.inner(); 2];
@@ -773,6 +813,7 @@ mod app {
                         reduction,
                         drums,
                         wave_frames,
+                        arp_notes: Channel::ALL.map(|channel| self.instrument.arp_note(channel)),
                     };
                 });
             }
@@ -781,7 +822,9 @@ mod app {
                 let labels = settings.labels(self.instrument.half_gain);
                 let block = ScopeBlock {
                     samples: match (labels.view, labels.voice_tap) {
-                        (View::Mixer | View::Channel | View::MasterFx(_), _) => [0; OUTPUT_FRAMES],
+                        (View::Arp | View::Mixer | View::Channel | View::MasterFx(_), _) => {
+                            [0; OUTPUT_FRAMES]
+                        }
                         (View::Fx, _) | (View::Scope, true) => {
                             labels
                                 .channel
@@ -923,7 +966,7 @@ mod app {
                     self.shared().midi_epoch.lock(|current| *current = epoch);
                 }
                 if !packets.is_empty() {
-                    let assignments = self.shared().settings.lock(|s| s.nav.assignments);
+                    let assignments = self.shared().settings.lock(|s| s.settings.nav.assignments);
                     for (channel, action) in packets.iter().copied().filter_map(decode_midi) {
                         let generation = assignments[channel.index()].generation;
                         if self

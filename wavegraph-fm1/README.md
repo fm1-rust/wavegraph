@@ -25,6 +25,10 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Control | Action |
 | --- | --- |
 | PLAY/STOP | Start all enabled patterns on beat one from any page (green). Press again to release sequenced notes, silence the kit and stop (red). Live held keys keep sounding. |
+| ARP on an instrument | Open that channel’s arpeggiator. ARP or HOME returns to the instrument. PRESETS browses channels while the editor is open. |
+| SEL in ARP | Enable or bypass the displayed channel’s arpeggiator. Each channel starts bypassed. |
+| KNOBS 1–4 in ARP | Set order (up, down, up/down, as played, random), rate (1/4 through 1/32, including triplets), octave range (1–4), and gate (1–100%). |
+| SELECT in ARP | Turn clockwise to latch the chord. Release all keys and play a new chord to replace it. Turn counterclockwise to release unheld keys. |
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first four white keys (F, G, A, B) select slots 1–4. All four keys light and the active slot flashes. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
@@ -308,6 +312,20 @@ Releasing them rejoins the clip at the next scheduled note. Inside the pattern
 view the piano keys operate the bank. USB MIDI still addresses its assigned
 instrument. The transport, gates and controller events share the existing
 audio-frame clock. Changing tempo retains the position within the step.
+
+## Live arpeggiator
+
+Play a chord on the panel or send notes to USB MIDI channel 1–4. The first
+step sounds on the first keypress, then follows the master BPM even with PLAY
+stopped. Each step reaches both the assigned instrument and the corresponding
+USB MIDI output channel with its strike velocity. The ARP page highlights
+the outgoing pitch on a miniature keyboard in the instrument’s colors.
+
+A live or latched chord takes over its own pattern lane. The clip keeps its
+place and resumes when the chord is released. The other channels continue to
+play. The 808 and 909 pads use their kit MIDI notes, so the arp can repeat a
+single drum or alternate hits. Octave transposition can produce pitches the
+local kit leaves silent. Reassigning an instrument resets that channel’s arp.
 
 ## MIDI files and USB MIDI
 
