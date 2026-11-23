@@ -67,6 +67,7 @@ pub struct MasterBus {
     pending: u8,
     target: f32,
     comp_gain: f32,
+    comp_rate: f32,
     limit_gain: f32,
 }
 
@@ -106,11 +107,13 @@ impl MasterBus {
             pending: WINDOW,
             target: 1.0,
             comp_gain: 1.0,
+            comp_rate: 0.0, // Both gains start at unity until the first detector window.
             limit_gain: 1.0,
         })
     }
 
     /// Apply one insert edit. Filter and detector state survive parameter edits.
+    #[cold]
     pub fn edit(&mut self, control: MasterControls) {
         let mut gains = self.target_gains;
         match control {
@@ -132,6 +135,7 @@ impl MasterBus {
                 self.pending = WINDOW;
                 self.target = 1.0;
                 self.comp_gain = 1.0;
+                self.comp_rate = self.release;
                 self.limit_gain = 1.0;
             }
         }
@@ -165,22 +169,31 @@ impl MasterBus {
     }
 
     fn compress(&mut self, x: f32) -> f32 {
-        self.peak = self.peak.max(x.abs());
+        // Samples come from a bounded integer mix and finite EQ gains.
+        let magnitude = x.abs();
+        if magnitude > self.peak {
+            self.peak = magnitude;
+        }
         self.pending -= 1;
         if self.pending == 0 {
             self.target = self.reduction(self.peak * self.inv_threshold);
+            // Between detector updates the gain approaches a fixed target monotonically.
+            self.comp_rate = if self.target < self.comp_gain {
+                self.attack
+            } else {
+                self.release
+            };
             self.pending = WINDOW;
             self.peak = 0.0;
         }
-        let rate = if self.target < self.comp_gain {
-            self.attack
-        } else {
-            self.release
-        };
-        self.comp_gain += rate * (self.target - self.comp_gain);
+        self.comp_gain += self.comp_rate * (self.target - self.comp_gain);
         let boosted = x * self.comp_gain * self.gains[3];
-        self.limit_gain += self.limit_release * (1.0 - self.limit_gain);
-        let out = boosted * self.limit_gain;
+        let out = if self.limit_gain == 1.0 {
+            boosted
+        } else {
+            self.limit_gain += self.limit_release * (1.0 - self.limit_gain);
+            boosted * self.limit_gain
+        };
         if out.abs() > self.ceiling {
             self.limit_gain = self.ceiling / boosted.abs();
             self.ceiling.copysign(out)

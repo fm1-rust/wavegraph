@@ -16,6 +16,8 @@ wavegraph-sample.workspace = true
 wavegraph = { version = "0.1", path = "../../wavegraph" }
 
 [features]
+# The FM-1 startup copies .data to executable SRAM before the first audio interrupt.
+fm1-ram-code = []
 raw = ["dep:libm"]
 
 [lints]

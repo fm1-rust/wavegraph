@@ -140,6 +140,12 @@ impl Tb303 {
         self
     }
 
+    // SAFETY: the FM-1 linker places .data in executable SRAM and startup copies it before use.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio")
+    )]
     fn render<S: OutputSample>(&mut self, output: &mut [S]) {
         if output.is_empty() {
             return;

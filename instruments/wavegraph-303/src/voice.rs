@@ -158,6 +158,12 @@ impl DiodeLadder {
         y
     }
 
+    // SAFETY: the FM-1 linker places .data in executable SRAM and startup copies it before use.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio")
+    )]
     fn process(&mut self, x: f32, k: f32) -> f32 {
         // Zero-delay feedback: each stage is y = G x + (1 - G) z, so the
         // chain's output is Gamma u + Sigma, and the loop u = x - k (y - hp)

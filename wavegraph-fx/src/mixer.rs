@@ -122,13 +122,56 @@ impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, MixerMessage, I24>) {
-        let mut events = cx.events.iter().peekable();
-        for frame in 0..cx.frames {
-            while events.peek().is_some_and(|event| event.frame == frame) {
-                self.control(events.next().expect("peeked mixer event").message);
+        let mut start = 0;
+        for event in cx.events {
+            self.render(cx.inputs, cx.outputs, start..event.frame);
+            self.control(event.message);
+            start = event.frame;
+        }
+        self.render(cx.inputs, cx.outputs, start..cx.frames);
+    }
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "Q23 samples, byte gains and sums of up to four tracks fit i32"
+)]
+impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
+    fn render(
+        &self,
+        inputs: &[&[I24]],
+        outputs: &mut [&mut [I24]],
+        frames: core::ops::Range<usize>,
+    ) {
+        if frames.is_empty() {
+            return;
+        }
+        if let (Some(inputs), Some(outputs)) = (
+            inputs.first_chunk::<TRACKS>(),
+            outputs.first_chunk_mut::<OUTPUTS>(),
+        ) {
+            let signals = inputs.each_ref().map(|signal| &signal[frames.clone()]);
+            let mut buses = outputs.each_mut().map(|out| &mut out[frames.clone()]);
+            let gains = self.gains.map(|row| row.map(i32::from));
+            for frame in 0..frames.len() {
+                let post: [i32; TRACKS] = core::array::from_fn(|track| {
+                    (signals[track][frame].inner() * gains[0][track]) >> 7
+                });
+                buses[0][frame] = pcm(post.iter().sum::<i32>() >> self.dry_shift);
+                for (bus, send) in buses[1..].iter_mut().zip(&gains[1..]) {
+                    let sum = post
+                        .iter()
+                        .zip(send)
+                        .map(|(sample, gain)| (sample * gain) >> 7)
+                        .sum();
+                    bus[frame] = pcm(sum);
+                }
             }
+            return;
+        }
+        for frame in frames {
             let mut sums = [0_i32; OUTPUTS];
-            for (track, input) in cx.inputs.iter().enumerate().take(TRACKS) {
+            for (track, input) in inputs.iter().enumerate().take(TRACKS) {
                 let post_fader = (input[frame].inner() * i32::from(self.gains[0][track])) >> 7;
                 sums[0] += post_fader;
                 for (sum, gains) in sums[1..].iter_mut().zip(&self.gains[1..]) {
@@ -136,14 +179,8 @@ impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
                 }
             }
             sums[0] >>= self.dry_shift;
-            for (out, sum) in cx.outputs.iter_mut().zip(sums) {
+            for (out, sum) in outputs.iter_mut().zip(sums) {
                 out[frame] = pcm(sum);
-            }
-        }
-        // Match other WaveGraph processors: an empty block still updates state.
-        if cx.frames == 0 {
-            for event in cx.events {
-                self.control(event.message);
             }
         }
     }

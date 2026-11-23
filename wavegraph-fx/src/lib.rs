@@ -121,19 +121,19 @@ impl<'a> Line<'a> {
         }
     }
 
-    fn read(&self) -> i32 {
-        self.samples[self.index]
-    }
-
+    // Visit the ring in contiguous spans so only a wrap splits the sample loop.
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "Advancing a bounded circular index"
+        reason = "Each span ends within the ring"
     )]
-    fn write(&mut self, value: i32) {
-        self.samples[self.index] = value;
-        self.index += 1;
-        if self.index == self.samples.len() {
-            self.index = 0;
+    fn spans(&mut self, frames: usize, mut visit: impl FnMut(usize, &mut [i32], &mut i32)) {
+        let mut start = 0;
+        while start < frames {
+            let count = (frames - start).min(self.samples.len() - self.index);
+            let end = self.index + count;
+            visit(start, &mut self.samples[self.index..end], &mut self.lowpass);
+            self.index = if end == self.samples.len() { 0 } else { end };
+            start += count;
         }
     }
 }
@@ -186,28 +186,44 @@ impl<'a> Reverb<'a> {
         clippy::cast_possible_truncation,
         reason = "Four Q23 taps fit in i32. The Q23 × Q15 feedback fits Q23 after shifting."
     )]
-    fn sample(&mut self, input: i32) -> I24 {
-        let mut sum = 0_i32;
-        for comb in &mut self.combs {
-            let delayed = comb.read();
-            // One-pole HF damping in the feedback path.
-            comb.lowpass += (delayed - comb.lowpass) >> 1;
-            let echoed = ((i64::from(comb.lowpass) * i64::from(self.feedback)) >> 15) as i32;
-            comb.write(clamp_pcm(input / 8 + echoed));
-            sum += delayed;
-        }
-        let mut wet = clamp_pcm(sum >> 2);
-        // Two all-pass diffusers, with gain 0.5, following the parallel combs.
-        for allpass in &mut self.diffusion {
-            let delayed = allpass.read();
-            let v = clamp_pcm(wet + (delayed >> 1));
-            allpass.write(v);
-            wet = clamp_pcm(delayed - (v >> 1));
-        }
-        if self.enabled {
-            pcm((wet * i32::from(self.wet)) >> 7)
-        } else {
-            I24::default()
+    fn render(&mut self, input: &[I24], output: &mut [I24]) {
+        // Four Q23 taps need a wider accumulator until their sum is divided by four.
+        let mut sum = [0_i32; 64];
+        for (input, output) in input.chunks(sum.len()).zip(output.chunks_mut(sum.len())) {
+            let sum = &mut sum[..input.len()];
+            sum.fill(0);
+            for comb in &mut self.combs {
+                comb.spans(input.len(), |start, taps, lowpass| {
+                    for ((tap, sample), total) in
+                        taps.iter_mut().zip(&input[start..]).zip(&mut sum[start..])
+                    {
+                        let delayed = *tap;
+                        *lowpass += (delayed - *lowpass) >> 1;
+                        let echo = ((i64::from(*lowpass) * i64::from(self.feedback)) >> 15) as i32;
+                        *tap = clamp_pcm(sample.inner() / 8 + echo);
+                        *total += delayed;
+                    }
+                });
+            }
+            for wet in &mut *sum {
+                *wet >>= 2;
+            }
+            for diffuser in &mut self.diffusion {
+                diffuser.spans(input.len(), |start, taps, _| {
+                    for (tap, wet) in taps.iter_mut().zip(&mut sum[start..]) {
+                        let delayed = *tap;
+                        *tap = clamp_pcm(*wet + (delayed >> 1));
+                        *wet = clamp_pcm(delayed - (*tap >> 1));
+                    }
+                });
+            }
+            if self.enabled {
+                for (out, wet) in output.iter_mut().zip(sum) {
+                    *out = pcm((*wet * i32::from(self.wet)) >> 7);
+                }
+            } else {
+                output.fill(I24::default());
+            }
         }
     }
 }
@@ -239,18 +255,25 @@ impl Process<Message, I24> for Reverb<'_> {
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
-        let mut events = cx.events.iter().peekable();
-        for frame in 0..cx.frames {
-            while events.peek().is_some_and(|e| e.frame == frame) {
-                self.control(events.next().expect("peeked event").message);
-            }
-            cx.outputs[0][frame] = self.sample(cx.inputs[0][frame].inner());
-        }
         if cx.frames == 0 {
-            for e in cx.events {
-                self.control(e.message);
+            for event in cx.events {
+                self.control(event.message);
             }
+            return;
         }
+        let mut start = 0;
+        for event in cx.events {
+            self.render(
+                &cx.inputs[0][start..event.frame],
+                &mut cx.outputs[0][start..event.frame],
+            );
+            self.control(event.message);
+            start = event.frame;
+        }
+        self.render(
+            &cx.inputs[0][start..cx.frames],
+            &mut cx.outputs[0][start..cx.frames],
+        );
     }
 }
 
