@@ -31,6 +31,8 @@ impl EnvelopeControls {
         release_us: 125_000,
     });
 
+    pub(super) const WAVETABLE: Self = Self(wavegraph_wavetable::DEFAULT_ENVELOPE);
+
     pub(super) const ORGAN: Self = Self(wavegraph_organ::DEFAULT_ENVELOPE);
 
     pub(super) const HOUSE_CHORDS: Self = Self(Adsr {

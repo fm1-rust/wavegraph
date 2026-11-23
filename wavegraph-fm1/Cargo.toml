@@ -21,6 +21,7 @@ wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
 wavegraph-organ = { path = "../instruments/wavegraph-organ" }
 wavegraph-sample.workspace = true
 wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
+wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
 embedded-graphics = "0.8.2"

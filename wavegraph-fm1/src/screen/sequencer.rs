@@ -322,6 +322,7 @@ fn pixel(
                 match track {
                     Part::Mono => palette::GREEN,
                     Part::Supersaw => super::jp8080::STYLE.trace,
+                    Part::Wavetable => super::microwave::STYLE.trace,
                     Part::Organ => super::ORGAN_LIME,
                     Part::Bass if cell.accent => RESONANCE,
                     Part::Bass => ACID,
