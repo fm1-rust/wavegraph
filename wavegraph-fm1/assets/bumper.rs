@@ -147,7 +147,7 @@ fn main() {
     fs::write(
         out.join("bumper_index.rs"),
         format!(
-            "const FRAMES: usize = {}; const OFFSETS: &[u16] = &{offsets:?};",
+            "const FRAMES: usize = {}; const OFFSETS: &[u16] = flash_asset!(u16, &{offsets:?});",
             pcm.len()
         ),
     )

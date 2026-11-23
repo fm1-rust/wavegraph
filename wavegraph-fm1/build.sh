@@ -14,4 +14,4 @@ cargo build --manifest-path "$root/Cargo.toml" --locked -p wavegraph-fm1 --profi
     --target "$PI32V2_TARGET" --target-dir "$out" \
     -Zbuild-std=core,compiler_builtins -Zbuild-std-features=compiler-builtins-mem -Zjson-target-spec
 image="$out/pi32v2-none/firmware/wavegraph-fm1"
-python3 "$PI32V2_ISA/tools/hwtest/fm1app.py" "$image.fwsc" --from-elf "$image"
+PYTHONPATH="$PI32V2_ISA/tools/hwtest" python3 "$root/wavegraph-fm1/assets/package.py" "$image"

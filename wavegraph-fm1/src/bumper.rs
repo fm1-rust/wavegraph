@@ -1,6 +1,11 @@
 //! One-shot playback of the logo cue, mixed before the physical MASTER gain.
 
-const PCM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bumper.delta"));
+use crate::assets::flash_asset;
+
+const PCM: &[u8] = flash_asset!(
+    u8,
+    include_bytes!(concat!(env!("OUT_DIR"), "/bumper.delta"))
+);
 include!(concat!(env!("OUT_DIR"), "/bumper_index.rs"));
 
 /// One range of the lossless PCM stream, starting at an independently decodable block.

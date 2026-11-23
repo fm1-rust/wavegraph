@@ -44,7 +44,7 @@ struct Sprite<'a> {
 
 const TITLE: Sprite<'_> = Sprite {
     width: 208,
-    data: include_bytes!("../../assets/wordmark.2bpp"),
+    data: crate::assets::flash_asset!(u8, include_bytes!("../../assets/wordmark.2bpp")),
     inks: [
         Rgb565::new(0, 17, 4),
         Rgb565::new(0, 35, 7),
@@ -53,7 +53,7 @@ const TITLE: Sprite<'_> = Sprite {
 };
 const MODEL: Sprite<'_> = Sprite {
     width: TITLE.width / 2,
-    data: include_bytes!("../../assets/fm1.2bpp"),
+    data: crate::assets::flash_asset!(u8, include_bytes!("../../assets/fm1.2bpp")),
     inks: [
         Rgb565::new(16, 1, 10),
         Rgb565::new(31, 2, 18),

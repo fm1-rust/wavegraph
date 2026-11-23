@@ -7,7 +7,7 @@ use crate::{
 };
 use pattern::{Automation, BAR, Clip, Slot};
 use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error, midi::MidiMessage};
-use wavegraph_909::{Samples, Tr909, Voice};
+use wavegraph_909::{Tr909, Voice};
 use wavegraph_sample::I24;
 
 pub(super) mod pattern;
@@ -645,7 +645,7 @@ impl DrumKits {
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
             tr808: wavegraph_808::Tr808::new(rate.0, rate.1).expect("808 clock"),
-            tr909: Tr909::with_decay(Samples::X0XPROC1, rate.0, rate.1, 55)
+            tr909: Tr909::with_decay(crate::assets::CYMBALS, rate.0, rate.1, 55)
                 .expect("909 clock and PCM"),
             flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16,
         }

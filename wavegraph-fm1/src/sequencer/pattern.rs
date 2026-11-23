@@ -1,6 +1,6 @@
 //! Factory clips compiled from the editable Standard MIDI Files in `patterns/`.
 
-use crate::{bass, instrument::Part, panel::Channel};
+use crate::{assets::flash_asset, bass, instrument::Part, panel::Channel};
 use wavegraph::midi::MidiMessage;
 
 pub(crate) const BAR: u16 = 128; // eight ticks per sixteenth
