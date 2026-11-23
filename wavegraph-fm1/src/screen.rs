@@ -23,6 +23,7 @@ use fm1_rticx::{
 use static_cell::{ConstStaticCell, StaticCell};
 
 mod drums;
+mod jp8080;
 mod mixer;
 mod selector;
 mod sequencer;
@@ -104,6 +105,7 @@ pub(super) struct Screen {
     selector: &'static mut Selector,
     drums: drums::Panel,
     bass: tb303::Panel,
+    jp: jp8080::Panel,
     mixer: mixer::Surface,
     sequence: sequencer::Grid,
     beam: Beam,
@@ -140,6 +142,7 @@ impl Screen {
             selector: SELECTOR.take(),
             drums: drums::Panel::new(),
             bass: tb303::Panel::default(),
+            jp: jp8080::Panel::default(),
             mixer: mixer::Surface::default(),
             sequence: sequencer::Grid::new(),
             page: None,
@@ -319,6 +322,7 @@ impl Screen {
                 Part::Bass => b"SEQ 303 LOW",
                 Part::Tr909 => b"SEQ TR-909",
                 Part::Tr808 => b"SEQ TR-808",
+                Part::Supersaw => b"SEQ JP-8080",
             };
             self.text.text(0, 0, title, palette::WHITE);
             self.text.text(
@@ -475,15 +479,23 @@ impl Screen {
                         .paint_envelope(lcd, clock, labels.focus, controls)
                         .await;
                 }
-                Part::Tr808 | Part::Tr909 => (),
+                Part::Tr808 | Part::Tr909 | Part::Supersaw => (),
             }
         }
         let fx = labels.view == View::Fx;
         let bass = !fx && labels.focus == Part::Bass;
         let organ = !fx && labels.focus == Part::Organ;
         let drums = !fx && labels.focus.is_kit();
+        let saw = !fx && labels.focus == Part::Supersaw;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
+        } else if saw {
+            (
+                jp8080::STYLE,
+                jp8080::AMBER,
+                jp8080::EDGE,
+                jp8080::STYLE.trace,
+            )
         } else if labels.focus == Part::Tr808 && drums {
             (
                 drums::STYLE_808,
@@ -519,6 +531,9 @@ impl Screen {
         let trace = if drums {
             // LCD y=60..179, including the halo and dirty tiles within y=56..183.
             frame.trace.map(|y| (36 + u16::from(y) * 5 / 8) as u8)
+        } else if saw {
+            // The 168-pixel scope spans LCD y=32..199, with room for dirty tiles.
+            frame.trace.map(|y| (20 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
             // Trace at LCD y=34..205. The halo and dirty tiles fit inside y=32..207.
             frame.trace.map(|y| (10 + u16::from(y) * 9 / 10) as u8)
@@ -539,6 +554,8 @@ impl Screen {
                 (56, 56)
             } else if bass {
                 (tb303::MARGIN, tb303::MARGIN)
+            } else if saw {
+                (32, 40)
             } else if organ || fx {
                 (16, 32)
             } else {
@@ -546,6 +563,8 @@ impl Screen {
             };
             if bass {
                 self.dot_background = self.selector.shade(tb303::METAL);
+            } else if saw {
+                self.dot_background = self.selector.shade(jp8080::FACE);
             }
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 lcd.fill_rect(0, y, SIZE, height, self.dot_background.into_storage())?;
@@ -641,6 +660,12 @@ impl Screen {
             }
             return self.text.paint_async(lcd, clock).await;
         }
+        if saw {
+            return self
+                .jp
+                .paint(lcd, clock, self.strip, self.selector, labels, changed_page)
+                .await;
+        }
         if drums {
             self.drums
                 .paint(
@@ -706,7 +731,7 @@ impl Screen {
             (false, _) => b"DAC",
             (true, Part::Mono) => b"VCA",
             (true, Part::Organ) => b"ORG",
-            (true, Part::Bass) => b"SRC",
+            (true, Part::Bass | Part::Supersaw) => b"SRC",
             (true, Part::Tr808 | Part::Tr909) => b"KIT",
         };
         self.text.text(16, 0, source, muted);
@@ -773,6 +798,13 @@ fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
             4..=9 => (OXIDE_RED, None),
             10..TRAIL => (Rgb565::new(8, 9, 5), None),
             _ => (SILVER.trace, None),
+        };
+    }
+    if track == Part::Supersaw {
+        return match age {
+            0..=3 => (palette::WHITE, Some(jp8080::EDGE)),
+            4..=12 => (Rgb565::new(24, 63, 28), None),
+            _ => (jp8080::STYLE.trace, None),
         };
     }
     if track == Part::Organ {

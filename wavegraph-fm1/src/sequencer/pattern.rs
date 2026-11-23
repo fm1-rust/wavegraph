@@ -62,6 +62,20 @@ const MONO: [Step; STEPS] = {
     pattern
 };
 
+// Leave long upper-register gates so the detuned saws have time to beat.
+const SUPER_SAW: [Step; STEPS] = {
+    let mut p = [REST; STEPS];
+    p[0] = note(&[69], 100, 36, false);
+    p[10] = note(&[65], 86, 12, false);
+    p[16] = note(&[72], 98, 42, false);
+    p[27] = note(&[69], 90, 16, false);
+    p[32] = note(&[67], 100, 36, false);
+    p[42] = note(&[64], 86, 12, false);
+    p[48] = note(&[71], 98, 42, false);
+    p[59] = note(&[67], 90, 16, false);
+    p
+};
+
 // Rootless Dm7 and Cmaj7. Put the third on top, clear of the acid bass,
 // and alternate held chords with shorter answers.
 const ORGAN: [Step; STEPS] = {
@@ -135,6 +149,7 @@ pub(crate) fn step(part: Part, channel: Channel, index: usize) -> Step {
     let index = index % STEPS;
     match part {
         Part::Mono => MONO[index],
+        Part::Supersaw => SUPER_SAW[index],
         Part::Organ => ORGAN[index],
         Part::Bass if channel == Channel::Two => HARMONY[index],
         Part::Bass => BASS[index],

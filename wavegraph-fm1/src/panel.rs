@@ -112,10 +112,10 @@ impl Navigation {
             PageButton::Glo => View::Mixer,
             PageButton::Fx if self.view != View::Fx => View::Fx,
             PageButton::Seq if self.view != View::Sequencer => View::Sequencer,
-            PageButton::Env if self.view != View::Envelope && !self.part().is_kit() => {
+            PageButton::Env if self.view != View::Envelope && self.part().has_envelope() => {
                 View::Envelope
             }
-            PageButton::Env if self.part().is_kit() => self.view,
+            PageButton::Env if !self.part().has_envelope() => self.view,
             _ => View::Scope,
         };
     }

@@ -1,14 +1,12 @@
 //! FM-1 master transport and one audio-clocked player for all factory patterns.
 
 use crate::{
-    instrument::{Message, Part},
+    instrument::{Message, Note, Part},
     panel::{Assignment, CHANNELS, Channel, Navigation},
 };
 use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error};
 use wavegraph_303::Message as BassMessage;
 use wavegraph_909::{Samples, Tr909, Voice};
-use wavegraph_monosynth::Message as MonoMessage;
-use wavegraph_organ::Message as OrganMessage;
 use wavegraph_sample::I24;
 
 pub(super) mod pattern;
@@ -347,12 +345,7 @@ impl PatternPlayer {
     ) -> Result<(), Error> {
         let i = channel.index();
         for &note in self.gates[i].held {
-            let message = match self.assignments[i].part {
-                Part::Mono => Message::Mono(MonoMessage::NoteOff(note)),
-                Part::Organ => Message::Organ(OrganMessage::NoteOff(note)),
-                Part::Bass => Message::Bass(BassMessage::NoteOff(note)),
-                Part::Tr808 | Part::Tr909 => unreachable!("only synth instruments hold gates"),
-            };
+            let message = self.assignments[i].part.note_off(note);
             emit(channel, event(frame, message))?;
         }
         self.gates[i] = PatternGate::CLOSED;
@@ -418,22 +411,13 @@ impl PatternPlayer {
                 self.release(channel, frame, emit)?;
             }
             for &note in data.notes {
-                let message = match part {
-                    Part::Mono => Message::Mono(MonoMessage::NoteOn {
-                        note,
+                let message = part.note_on(
+                    Note {
+                        number: note,
                         velocity: data.velocity,
-                    }),
-                    Part::Organ => Message::Organ(OrganMessage::NoteOn {
-                        note,
-                        velocity: data.velocity,
-                    }),
-                    Part::Bass => Message::Bass(BassMessage::NoteOn {
-                        note,
-                        accent: data.velocity >= 96,
-                        slide,
-                    }),
-                    Part::Tr808 | Part::Tr909 => unreachable!("drum hits were emitted above"),
-                };
+                    },
+                    slide,
+                );
                 emit(channel, event(frame, message))?;
             }
             let slide = part == Part::Bass && data.slide;

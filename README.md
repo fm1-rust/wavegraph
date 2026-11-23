@@ -22,6 +22,7 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
 | [`wavegraph-sampler`](instruments/wavegraph-sampler/) | One-shot mono PCM player | Unpublished | [Playback guide](instruments/wavegraph-sampler/README.md) | [![Build status][sampler-build]][sampler-ci] |
+| [`wavegraph-supersaw`](instruments/wavegraph-supersaw/) | JP-inspired seven-saw unison with detune and mix | Unpublished | [Instrument guide](instruments/wavegraph-supersaw/README.md) | [![Build status][supersaw-build]][supersaw-ci] |
 
 The libraries support Rust 1.88 and build without `std` or a heap allocator.
 To browse their API documentation locally, run `cargo doc --workspace --no-deps --open`.
@@ -56,3 +57,5 @@ cargo +stable test -p wavegraph --test patch --locked
 [sample-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sample.yml
 [sampler-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sampler.yml/badge.svg?branch=main&event=push
 [sampler-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-sampler.yml
+[supersaw-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-supersaw.yml/badge.svg?branch=main&event=push
+[supersaw-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-supersaw.yml
