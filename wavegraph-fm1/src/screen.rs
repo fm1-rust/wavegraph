@@ -6,7 +6,7 @@ use crate::{
     capture::{HEIGHT, Trace, WIDTH},
     envelope::EnvelopeControls,
     firmware::Frame,
-    instrument::Part,
+    instrument::{Mixer, MixerBank, Part},
     sequencer::{SeqPage, Transport},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
@@ -83,6 +83,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 enum Page {
     Scope(Part),
     Fx,
+    Mixer,
     Sequencer(SeqPage),
     Envelope(Part, EnvelopeControls),
     BassEnvelope(Controls),
@@ -145,6 +146,56 @@ impl Screen {
         *self.text = TextGrid::with_background(style.background);
         self.beam.old_head = None;
         self.beam.old_trace = None;
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "All mixer rows and fader bars fit within the 20 by 15 text grid"
+    )]
+    async fn paint_mixer(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        mixer: Mixer,
+        bank: MixerBank,
+    ) -> Result<(), Error> {
+        let background = STYLE.background;
+        if self.page.replace(Page::Mixer) != Some(Page::Mixer) {
+            self.change_view(STYLE);
+            lcd.fill_rect(0, 0, SIZE, SIZE, background.into_storage())?;
+        }
+        self.text.text(0, 0, b"MIXER", palette::WHITE);
+        self.text.text(
+            11,
+            0,
+            match bank {
+                MixerBank::Volume => b"LEVEL ".as_slice(),
+                MixerBank::Reverb => b"REVERB".as_slice(),
+            },
+            palette::CYAN,
+        );
+        let names: [&[u8]; 4] = [b"1 MONOSYNTH", b"2 M1 ORGAN", b"3 TB-303", b"4 TR-909"];
+        let colors = [palette::GREEN, ORGAN_LIME, palette::RED, palette::CYAN];
+        let values = match bank {
+            MixerBank::Volume => mixer.volume,
+            MixerBank::Reverb => mixer.reverb,
+        };
+        for (track, (&name, &ink)) in names.iter().zip(&colors).enumerate() {
+            let y = 2 + 3 * track;
+            self.text.text(0, y, name, ink);
+            self.text.number(17, y, 3, u32::from(values[track]), ink);
+            let filled = usize::from(values[track]) * 16 / 128;
+            self.text
+                .text(2, y + 1, &b"################"[..filled], ink);
+            self.text.text(
+                2 + filled,
+                y + 1,
+                &b"----------------"[..16 - filled],
+                palette::MUTED,
+            );
+        }
+        self.text.text(12, 14, b"GLO EXIT", palette::MUTED);
+        self.text.paint_async(lcd, clock).await
     }
 
     async fn paint_envelope(
@@ -370,6 +421,8 @@ impl Screen {
         let labels = frame.labels;
         let browsing = labels.seq.page.is_none()
             && !labels.env_mode
+            && !labels.fx_view
+            && !labels.mixer_view
             && labels
                 .menu_since
                 .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS);
@@ -381,6 +434,11 @@ impl Screen {
         if let Some(page) = labels.seq.page {
             return self
                 .paint_sequencer(lcd, clock, page, labels.seq.transport)
+                .await;
+        }
+        if labels.mixer_view {
+            return self
+                .paint_mixer(lcd, clock, labels.mixer, labels.mixer_bank)
                 .await;
         }
         if labels.env_mode && !labels.fx_view {
@@ -463,14 +521,11 @@ impl Screen {
                 if labels.half_gain { b"HALF" } else { b"FULL" },
                 muted,
             );
-            self.text.text(0, 13, b"1:M", muted);
-            self.text.number(4, 13, 3, u32::from(labels.fx.mono), ink);
-            self.text.text(8, 13, b"2:303", muted);
-            self.text.number(15, 13, 3, u32::from(labels.fx.bass), ink);
-            self.text.text(0, 14, b"3:DEC", muted);
-            self.text.number(6, 14, 3, u32::from(labels.fx.decay), ink);
-            self.text.text(11, 14, b"4:WET", muted);
-            self.text.number(17, 14, 3, u32::from(labels.fx.wet), ink);
+            self.text.text(0, 13, b"1 DECAY", muted);
+            self.text.number(8, 13, 3, u32::from(labels.fx.decay), ink);
+            self.text.text(12, 13, b"2 WET", muted);
+            self.text.number(17, 13, 3, u32::from(labels.fx.wet), ink);
+            self.text.text(0, 14, b"SENDS IN GLO MIXER", muted);
             return self.text.paint_async(lcd, clock).await;
         }
         if bass {

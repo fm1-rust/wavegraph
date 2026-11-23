@@ -8,7 +8,7 @@ use crate::{
     bass::Controls,
     capture::Trace,
     envelope::EnvelopeControls,
-    instrument::{Fx, Part, Parts, Voice},
+    instrument::{Fx, Mixer, MixerBank, Part, Parts, Voice},
     organ::{Controls as OrganControls, OrganKey},
     sequencer::Sequencer,
 };
@@ -20,6 +20,9 @@ pub struct Settings {
     focus: Part,
     env_mode: bool,
     fx_view: bool,
+    mixer_view: bool,
+    mixer_bank: MixerBank,
+    mixer: Mixer,
     seq: Sequencer,
     fx: Fx,
     master: MasterLevel,
@@ -33,6 +36,9 @@ impl Settings {
         focus: Part::Mono,
         env_mode: false,
         fx_view: false,
+        mixer_view: false,
+        mixer_bank: MixerBank::Volume,
+        mixer: Mixer::INITIAL,
         seq: Sequencer::INITIAL,
         fx: Fx::INITIAL,
         master: MasterLevel::MIN,
@@ -50,6 +56,9 @@ impl Settings {
             menu_since: self.menu_since,
             env_mode: self.env_mode,
             fx_view: self.fx_view,
+            mixer_view: self.mixer_view,
+            mixer_bank: self.mixer_bank,
+            mixer: self.mixer,
             seq: self.seq,
             fx: self.fx,
             mono_envelope: self.parts.mono_envelope,
@@ -69,6 +78,9 @@ pub(super) struct Labels {
     pub(super) menu_since: Option<u32>,
     pub(super) env_mode: bool,
     pub(super) fx_view: bool,
+    pub(super) mixer_view: bool,
+    pub(super) mixer_bank: MixerBank,
+    pub(super) mixer: Mixer,
     pub(super) seq: Sequencer,
     pub(super) fx: Fx,
     pub(super) mono_envelope: EnvelopeControls,
@@ -88,7 +100,7 @@ mod app {
     use crate::{
         capture::{Capture, FLAT},
         instrument::{
-            BUS_COUNT, FxReverb, FxSend, Gate, Instrument, Keyboard, Message, Node, Note, Part,
+            BUS_COUNT, FxMixer, FxReverb, Gate, Instrument, Keyboard, Message, Node, Note, Part,
             Programs,
         },
         overload::Overloads,
@@ -117,7 +129,7 @@ mod app {
         control::{Controller, EditQueue, Host},
     };
     use wavegraph_303::Tb303;
-    use wavegraph_fx::{REVERB_SAMPLES, Reverb, SendMixer};
+    use wavegraph_fx::{ChannelMixer, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::{Monosynth, Tuning};
     use wavegraph_organ::Organ;
 
@@ -170,7 +182,7 @@ mod app {
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
-        static EFFECTS: StaticCell<(FxSend, FxReverb<'static>)> = StaticCell::new();
+        static EFFECTS: StaticCell<(FxMixer, FxReverb<'static>)> = StaticCell::new();
         static DRUMS: StaticCell<DrumMachine> = StaticCell::new();
         type Nodes = [&'static mut dyn Process<Message, I24>; 6];
         static NODES: StaticCell<Nodes> = StaticCell::new();
@@ -184,14 +196,14 @@ mod app {
                 ),
             ]
         });
-        let (send, reverb) = EFFECTS.init_with(|| {
+        let (mixer, reverb) = EFFECTS.init_with(|| {
             (
-                FxSend(SendMixer::new()),
+                FxMixer(ChannelMixer::new()),
                 FxReverb(Reverb::new(REVERB_STORAGE.take())),
             )
         });
         let drums = DRUMS.init_with(|| DrumMachine::new(FRAME_RATE));
-        let nodes = NODES.init_with(|| [mono, organ, bass, send, reverb, drums]);
+        let nodes = NODES.init_with(|| [mono, organ, bass, mixer, reverb, drums]);
         let instrument = programs.bind(nodes).expect("instrument ports");
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
@@ -294,6 +306,7 @@ mod app {
             } else if scan.pressed(Button::Home)
                 || scan.pressed(Button::Env)
                 || scan.pressed(Button::Fx)
+                || scan.pressed(Button::Glo)
                 || scan.encoder_delta(Encoder::Presets) != 0
             {
                 self.seq.page = None;
@@ -376,6 +389,7 @@ mod app {
                 if seq.page.is_some() {
                     self.settings.env_mode = false;
                     self.settings.fx_view = false;
+                    self.settings.mixer_view = false;
                     self.settings.menu_since = None;
                 }
                 if before.focus != focus || scan.encoder_delta(Encoder::Presets) != 0 {
@@ -387,13 +401,28 @@ mod app {
                     self.settings.env_mode = !self.settings.env_mode;
                     if self.settings.env_mode {
                         self.settings.fx_view = false;
+                        self.settings.mixer_view = false;
                     }
                 }
                 if scan.pressed(Button::Fx) {
                     self.settings.fx_view = !self.settings.fx_view;
                     if self.settings.fx_view {
                         self.settings.env_mode = false;
+                        self.settings.mixer_view = false;
                     }
+                }
+                if scan.pressed(Button::Glo) {
+                    self.settings.mixer_view = !self.settings.mixer_view;
+                    if self.settings.mixer_view {
+                        self.settings.menu_since = None;
+                        self.settings.env_mode = false;
+                        self.settings.fx_view = false;
+                    }
+                }
+                if scan.pressed(Button::Home) {
+                    self.settings.env_mode = false;
+                    self.settings.fx_view = false;
+                    self.settings.mixer_view = false;
                 }
                 for (voice, gate) in self.settings.parts.voices.iter_mut().zip(gates) {
                     voice.gate = gate;
@@ -407,6 +436,14 @@ mod app {
                 ]
                 .map(|encoder| scan.encoder_delta(encoder));
                 let route_changed = if seq.page.is_some() {
+                    false
+                } else if self.settings.mixer_view {
+                    self.settings
+                        .mixer_bank
+                        .turn(scan.encoder_delta(Encoder::Select));
+                    self.settings
+                        .mixer
+                        .turn_knobs(self.settings.mixer_bank, knobs);
                     false
                 } else if self.settings.fx_view {
                     self.settings.fx.turn_knobs(knobs);
@@ -446,18 +483,23 @@ mod app {
                 if before.voice_tap != self.settings.voice_tap
                     || before.env_mode != self.settings.env_mode
                     || before.fx_view != self.settings.fx_view
+                    || before.mixer_view != self.settings.mixer_view
                     || before.fx.enabled != self.settings.fx.enabled
                 {
                     let env = self.settings.env_mode;
                     let fx_view = self.settings.fx_view;
+                    let mixer_view = self.settings.mixer_view;
                     let sel = if fx_view {
                         self.settings.fx.enabled
+                    } else if mixer_view {
+                        false
                     } else {
                         self.settings.voice_tap
                     };
                     self.shared().leds.lock(|leds| {
                         leds.set(Button::Env, env);
                         leds.set(Button::Fx, fx_view);
+                        leds.set(Button::Glo, mixer_view);
                         leds.set(Button::Sel, sel);
                     });
                 }
@@ -488,6 +530,7 @@ mod app {
                     self.host
                         .begin_block(|half| self.instrument.set_half_gain(half)),
                 );
+                self.instrument.set_mixer(settings.mixer);
                 self.instrument.set_fx(settings.fx);
                 self.instrument.transport = settings.seq.transport;
                 let mono = self
@@ -506,7 +549,7 @@ mod app {
             self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
             if result == Refill::Written && !self.tap.is_full() {
                 let block = ScopeBlock {
-                    samples: if settings.voice_tap && !settings.fx_view {
+                    samples: if settings.voice_tap && !settings.fx_view && !settings.mixer_view {
                         self.buses[settings.focus.tap()].map(I24::inner)
                     } else {
                         core::array::from_fn(|i| self.output.block()[i][0])
@@ -554,6 +597,7 @@ mod app {
                         } else if frame.labels.focus != block.labels.focus
                             || frame.labels.voice_tap != block.labels.voice_tap
                             || frame.labels.fx_view != block.labels.fx_view
+                            || frame.labels.mixer_view != block.labels.mixer_view
                         {
                             frame.trace = FLAT;
                         }

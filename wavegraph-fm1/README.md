@@ -26,10 +26,12 @@ monosynth, with sine selected and the cutoff at 5 kHz. The drum transport starts
 | ENV | Open or close the selected instrument’s envelope page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth or organ ENV | Adjust attack, decay, sustain and release for the selected part. |
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
-| MASTER | Set the volume of the stereo mix. |
-| PLAY/STOP | Reserved for a future sequencer. |
-| FX | Open or close the global reverb view. The FX button stays illuminated while that page is visible. |
-| Knobs 1–4 in FX | Monosynth send, 303 send, decay and wet return level (0–128, except decay 0–127). |
+| MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
+| GLO | Open or close the four-strip mixer; its lamp stays on while the mixer is visible. HOME closes the page. |
+| SELECT encoder in mixer | Choose the LEVEL or REVERB SEND bank for all four knobs. |
+| Knobs 1–4 in mixer | Set tracks 1–4 independently, 0–128: monosynth, organ, 303, and TR-909. |
+| FX | Open or close the global reverb return view. The FX button stays illuminated while that page is visible. |
+| Knobs 1–2 in FX | Reverb decay (0–127) and wet return (0–128); per-track sends are now in GLO. |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
 | SEL button in FX | Mute or unmute the wet return without clearing the reverb tail. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
@@ -155,27 +157,36 @@ change presets. The 303 still discharges its accent capacitor while silent.
 
 [cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
 
-## Global reverb
+## Four-track mixer and global reverb
 
-FX and ENV are mutually exclusive views; opening either closes the other.
-The FX view stays global while PRESETS changes the selected instrument.
-The instrument's own knob assignments remain unchanged outside FX.
-The global page always scopes the final DAC mix, regardless of the instrument
-scope-tap selection.
+Press GLO to enter the mixer. Its four horizontal strips show the currently
+selected LEVEL or REVERB SEND bank as numerical values and proportional bars.
+Knobs 1–4 edit the corresponding tracks directly and SELECT switches banks;
+press GLO again or HOME to leave. GLO, FX, and ENV are mutually exclusive.
+PRESETS continues to change the keyboard's selected instrument without
+changing the mixer page or its bank. All four strips are live, including
+the sequenced TR-909.
 
-The independent send levels are initially 32/128 (monosynth) and 24/128
-(303). The organ currently bypasses the reverb sends and joins the dry mix.
-Disable the return with SEL to hear dry audio while the reverb continues
-processing. The same reverb tank stays alive across full/half graph edits.
-This first mono, fixed-point effect uses approximately 17 KiB of static delay
-storage; it is not an emulation of the Roland DEP-5.
+The volume defaults are 128/128/32/128 (mono, organ, 303, 909). The 303's
+quarter gain preserves its previous relative balance. Reverb sends start at
+32/0/24/0; unlike the earlier graph, the organ can now send to the same reverb
+tank. **Sends are post-fader**, so lowering an instrument also lowers its wet
+contribution. All gains are 0–128, with 128 representing unity.
+
+FX retains the global reverb return settings: knob 1 edits decay, knob 2 edits
+wet level, and SEL mutes the wet return without clearing the tail. The FX page
+always scopes the final DAC mix, regardless of voice-tap selection. The
+shared reverb tank survives full/half graph edits and uses approximately 17
+KiB of static delay storage; it is not an emulation of the Roland DEP-5.
+Future global effects can add send banks without changing the four-strip
+control layout.
 
 ## Audio and display
 
-Every 128-frame ALNK0 block calls the three persistent synths, the drum
-machine, a shared send mixer and a reverb processor. WaveGraph bytecode trims the 303 to quarter
-gain, creates independent monosynth and 303 sends, and adds the dry organ and
-the wet return and the 909 before duplicating the mix to both stereo channels.
+Every 128-frame ALNK0 block calls three persistent synths, the sequenced
+909, a four-input/two-output Q23 channel mixer, and a shared reverb processor.
+The mixer applies per-track dry levels and post-fader sends; its dry sum is
+combined with the wet reverb return before output to both stereo channels.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
