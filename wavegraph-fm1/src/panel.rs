@@ -4,6 +4,12 @@ use crate::{fx::Device, instrument::Part};
 
 pub(super) const CHANNELS: usize = 4;
 
+/// Elapsed 100 Hz ticks while PRESETS feedback is visible.
+pub(super) fn preset_age(since: u32, now: u32) -> Option<u32> {
+    let age = now.wrapping_sub(since);
+    (age < 150).then_some(age)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Channel {
     #[default]
@@ -80,6 +86,7 @@ pub(super) enum PageButton {
 pub(super) struct Navigation {
     pub(super) view: View,
     pub(super) focus: Channel,
+    pub(super) preset_since: Option<u32>,
     fx_parent: View,
     show_sends: bool,
     pub(super) assignments: [Assignment; CHANNELS],
@@ -89,6 +96,7 @@ impl Navigation {
     pub(super) const INITIAL: Self = Self {
         view: View::Scope,
         focus: Channel::One,
+        preset_since: None,
         fx_parent: View::Mixer,
         show_sends: false,
         assignments: [
@@ -224,6 +232,14 @@ impl Navigation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preset_feedback_expires_after_150_ticks_across_clock_wrap() {
+        let since = u32::MAX - 20;
+        assert_eq!(preset_age(since, since), Some(0));
+        assert_eq!(preset_age(since, 128), Some(149));
+        assert_eq!(preset_age(since, 129), None);
+    }
 
     #[test]
     fn both_button_orders_reach_the_same_rack_and_home_retraces_the_route() {

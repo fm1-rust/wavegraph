@@ -76,7 +76,7 @@ impl Surface {
         lcd: &mut Display,
         clock: &mut Clock,
         pixels: &mut [[u8; 2]; BAND * WIDTH],
-        selector: &Selector,
+        selector: &mut Selector,
         labels: Labels,
         peaks: [u8; CHANNELS],
     ) -> Result<(), Error> {
@@ -91,6 +91,7 @@ impl Surface {
                     band.label(label, Point::new(x, 9), Alignment::Center, LABEL);
                 }
                 band.compose(selector);
+                band.compose_badge(&mut selector.badge);
                 lcd.write_rect_buffered(0, y, SIZE, band.height, band.pixels.as_flattened())
                     .await?;
             }
@@ -108,6 +109,7 @@ impl Surface {
                     let mut band = Band::new(pixels, 0, row, SIZE, BAND as u16, BACKGROUND);
                     band.strip(i, y, strip, peaks[i]);
                     band.compose(selector);
+                    band.compose_badge(&mut selector.badge);
                     lcd.write_rect_buffered(0, row, SIZE, BAND as u16, band.pixels.as_flattened())
                         .await?;
                 }
@@ -390,6 +392,15 @@ impl<'a> Band<'a> {
         )
         .draw(self)
         .expect("infallible strip");
+    }
+
+    pub(super) fn compose_badge(&mut self, badge: &mut super::badge::ChannelBadge) {
+        badge.compose(
+            usize::from(self.x),
+            usize::from(self.y),
+            usize::from(self.width),
+            self.pixels,
+        );
     }
 
     fn compose(&mut self, list: &Selector) {

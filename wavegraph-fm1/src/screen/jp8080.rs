@@ -50,11 +50,11 @@ impl Panel {
         lcd: &mut Display,
         clock: &mut Clock,
         pixels: &mut [[u8; 2]],
-        selector: &Selector,
+        selector: &mut Selector,
         labels: Labels,
         entering: bool,
     ) -> Result<(), Error> {
-        let ink = |color| selector.shade(color);
+        let ink = selector.shader();
         let mut lcd = lcd.as_async(clock)?;
         if entering {
             for y in (0..32).step_by(BAND) {
@@ -63,10 +63,12 @@ impl Panel {
                 band.rect(Point::new(66, 23), Size::new(49, 1), ink(EDGE));
                 band.rect(Point::new(0, 30), Size::new(240, 1), ink(EDGE));
                 band.rect(Point::new(0, 31), Size::new(240, 1), ink(BLACK));
+                band.compose_badge(&mut selector.badge);
                 lcd.write_rect_buffered(0, y, SIZE, 8, band.pixels.as_flattened())
                     .await?;
             }
             wordmark(pixels, ink(FACE), ink(AMBER));
+            selector.badge.compose(7, 2, 100, &mut pixels[..1600]);
             lcd.write_rect_buffered(7, 2, 100, 16, pixels[..1600].as_flattened())
                 .await?;
         }

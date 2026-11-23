@@ -84,7 +84,12 @@ impl Panel {
         }
     }
 
-    fn title(&mut self, lcd: &mut Display, selector: &Selector, part: Part) -> Result<(), Error> {
+    fn title(
+        &mut self,
+        lcd: &mut Display,
+        selector: &mut Selector,
+        part: Part,
+    ) -> Result<(), Error> {
         // Expand a one-bit wordmark in stripes, borrowing the keycap scratch buffer.
         type Title = Framebuffer<BinaryColor, RawU1, BigEndian, 56, 16, 112>;
         let mut mask = Title::new();
@@ -117,7 +122,11 @@ impl Panel {
                     };
                 }
             }
-            lcd.write_rect_buffered(10, 1 + 8 * band as u16, 112, 8, pixels)?;
+            let y = 1 + 8 * band;
+            selector
+                .badge
+                .compose(10, y, 112, pixels.as_chunks_mut::<2>().0);
+            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels)?;
         }
         Ok(())
     }
@@ -216,7 +225,7 @@ impl Panel {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
-        selector: &Selector,
+        selector: &mut Selector,
         entering: bool,
         part: Part,
         lamps: [DrumLamp; 6],

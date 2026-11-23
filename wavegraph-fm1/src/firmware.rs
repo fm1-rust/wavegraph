@@ -26,7 +26,6 @@ pub struct Settings {
     seq: Sequencer,
     fx: Fx,
     master: MasterLevel,
-    menu_since: Option<u32>,
 }
 
 impl Settings {
@@ -37,7 +36,6 @@ impl Settings {
         seq: Sequencer::INITIAL,
         fx: Fx::INITIAL,
         master: MasterLevel::MIN,
-        menu_since: None,
     };
 
     fn labels(self, half_gain: bool) -> Labels {
@@ -54,7 +52,7 @@ impl Settings {
             saw: track.saw,
             wave_scan: track.wave.scan(track.voice.waveform % 2),
             poly_keys: track.poly_keys,
-            menu_since: self.menu_since,
+            preset_since: self.nav.preset_since,
             view: self.nav.view,
             bass_fx: track.bass_fx,
             bass_insert: self.nav.bass_insert(),
@@ -95,7 +93,7 @@ pub(super) struct Labels {
     pub(super) saw: SawControls,
     pub(super) wave_scan: wavegraph_wavetable::Scan,
     pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
-    pub(super) menu_since: Option<u32>,
+    pub(super) preset_since: Option<u32>,
     pub(super) view: View,
     pub(super) bass_fx: BassFx,
     pub(super) bass_insert: bool,
@@ -137,7 +135,7 @@ mod app {
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
         mixer::Meter,
         overload::Overloads,
-        panel::{Assignment, CHANNELS, Channel, Navigation, PageButton, View},
+        panel::{Assignment, CHANNELS, Channel, Navigation, PageButton, View, preset_age},
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer},
     };
@@ -413,6 +411,8 @@ mod app {
             .into_iter()
             .find(|(button, _)| scan.pressed(*button));
             let home = scan.pressed(Button::Home);
+            let previous_view = self.nav.view;
+            let previous_channel = self.nav.focus;
             if !matches!(self.nav.view, View::MasterFx(_))
                 && ((scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
                     || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo)))
@@ -423,11 +423,23 @@ mod app {
             {
                 self.nav.press(button);
             }
+            let presets = scan.encoder_delta(Encoder::Presets);
             if !home {
-                self.nav.turn(
-                    scan.encoder_delta(Encoder::Select),
-                    scan.encoder_delta(Encoder::Presets),
-                );
+                self.nav.turn(scan.encoder_delta(Encoder::Select), presets);
+            }
+            // Keep the detent time in the navigation snapshot even if the scan queue is full.
+            let channel_changed = self.nav.focus != previous_channel;
+            if !home && presets != 0 && (channel_changed || self.nav.view == View::Channel) {
+                self.nav.preset_since = Some(ticks());
+            } else if home
+                || channel_changed
+                || self.nav.view != previous_view
+                || self
+                    .nav
+                    .preset_since
+                    .is_some_and(|since| preset_age(since, ticks()).is_none())
+            {
+                self.nav.preset_since = None;
             }
             if (self.nav.view == View::Sequencer) != self.seq.page.is_some() {
                 self.seq.toggle_page();
@@ -549,18 +561,6 @@ mod app {
                 let view = nav.view;
                 self.settings.nav = nav;
                 self.settings.seq = seq;
-                if before.nav.view != view
-                    || before.nav.focus != channel
-                    || scan.pressed(Button::Home)
-                {
-                    self.settings.menu_since = None;
-                }
-                if scan.encoder_delta(Encoder::Presets) != 0
-                    && !scan.pressed(Button::Home)
-                    && matches!(view, View::Scope | View::Channel)
-                {
-                    self.settings.menu_since = Some(ticks());
-                }
                 let tracks = &mut self.settings.tracks;
                 for channel in Channel::ALL {
                     let assignment = nav.assignments[channel.index()];

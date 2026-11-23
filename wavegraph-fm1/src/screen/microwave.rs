@@ -43,13 +43,13 @@ impl Panel {
         &mut self,
         lcd: &mut AsyncDisplay<'_, Clock>,
         pixels: &mut [[u8; 2]],
-        selector: &Selector,
+        selector: &mut Selector,
         labels: &Labels,
         frame: u8,
         entering: bool,
     ) -> Result<(), Error> {
         use Alignment::{Center, Left};
-        let ink = |color| selector.shade(color);
+        let ink = selector.shader();
         let bank = labels.voice.waveform;
         if entering || self.bank != Some(bank) {
             let mut top = Band::new(pixels, 4, 0, 112, 16, ink(FACE));
@@ -61,6 +61,7 @@ impl Panel {
             )
             .draw(&mut top)
             .expect("infallible strip");
+            top.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(4, 0, 112, 16, top.pixels.as_flattened())
                 .await?;
             let mut sub = Band::new(pixels, 4, 16, 112, 16, ink(FACE));
@@ -70,6 +71,7 @@ impl Panel {
                 Left,
                 ink(PRINT),
             );
+            sub.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(4, 16, 112, 16, sub.pixels.as_flattened())
                 .await?;
             self.bank = Some(bank);

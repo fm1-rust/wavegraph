@@ -42,6 +42,7 @@ pub(super) enum Menu {
 pub(super) struct Selector {
     menu: Option<Menu>,
     mask: Mask,
+    pub(super) badge: super::badge::ChannelBadge,
 }
 
 impl Selector {
@@ -49,6 +50,7 @@ impl Selector {
         Self {
             menu: None,
             mask: Mask::new(),
+            badge: super::badge::ChannelBadge::new(),
         }
     }
 
@@ -114,10 +116,17 @@ impl Selector {
     }
 
     pub(super) fn shade(&self, color: Rgb565) -> Rgb565 {
-        if self.visible() {
-            Rgb565::new(color.r() / 2, color.g() / 2, color.b() / 2)
-        } else {
-            color
+        self.shader()(color)
+    }
+
+    pub(super) fn shader(&self) -> impl Fn(Rgb565) -> Rgb565 + use<> {
+        let dimmed = self.visible();
+        move |color| {
+            if dimmed {
+                Rgb565::new(color.r() / 2, color.g() / 2, color.b() / 2)
+            } else {
+                color
+            }
         }
     }
 
