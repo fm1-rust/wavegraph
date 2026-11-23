@@ -57,6 +57,7 @@ pub struct Tb303 {
     pub params: VoiceParams,
     voice: Voice,
     held_note: Option<u8>,
+    last_cycle_start: Option<usize>,
     suspend_idle: bool,
     output_gain: f32,
 }
@@ -69,6 +70,7 @@ impl Tb303 {
             params: VoiceParams::default(),
             voice: Voice::new(sample_rate),
             held_note: None,
+            last_cycle_start: None,
             suspend_idle: false,
             output_gain: 1.0,
         }
@@ -140,13 +142,21 @@ impl Tb303 {
         self
     }
 
+    /// Zero-based frame of the last oscillator wrap in the most recent process block,
+    /// or `None` if the oscillator did not wrap.
+    /// A scope can trigger here while displaying the filtered signal, including during slides.
+    #[must_use]
+    pub fn last_cycle_start(&self) -> Option<usize> {
+        self.last_cycle_start
+    }
+
     // SAFETY: the FM-1 linker places .data in executable SRAM and startup copies it before use.
     #[cfg_attr(
         all(target_os = "none", feature = "fm1-ram-code"),
         allow(unsafe_code),
         unsafe(link_section = ".data.wavegraph_audio")
     )]
-    fn render<S: OutputSample>(&mut self, output: &mut [S]) {
+    fn render<S: OutputSample>(&mut self, output: &mut [S], start: usize) {
         if output.is_empty() {
             return;
         }
@@ -156,10 +166,14 @@ impl Tb303 {
             }
         } else {
             let gain = self.output_gain;
-            self.voice
+            let cycle = self
+                .voice
                 .render_with(&self.params, output, |sample, value| {
                     S::write(sample, value * gain);
                 });
+            if let Some(frame) = cycle {
+                self.last_cycle_start = start.checked_add(frame);
+            }
         }
     }
 }
@@ -175,13 +189,14 @@ impl<S: OutputSample> Process<Message, S> for Tb303 {
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, S>) {
         let output = &mut cx.outputs[0];
+        self.last_cycle_start = None;
         let mut start = 0;
         for event in cx.events {
-            self.render(&mut output[start..event.frame]);
+            self.render(&mut output[start..event.frame], start);
             self.apply(event.message);
             start = event.frame;
         }
-        self.render(&mut output[start..]);
+        self.render(&mut output[start..], start);
     }
 }
 

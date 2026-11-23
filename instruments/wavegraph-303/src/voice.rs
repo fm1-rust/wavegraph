@@ -243,7 +243,7 @@ impl Voice {
         p: &VoiceParams,
         out: &mut [S],
         mut write: impl FnMut(&mut S, f32),
-    ) {
+    ) -> Option<usize> {
         // The upstream scheduler updates panel coefficients once per call.
         let glide = if self.sliding {
             tau_to_coef(p.slide_s / 3.0, self.sr)
@@ -262,7 +262,8 @@ impl Voice {
         };
         let base_oct = p.base_octaves();
         let fixed_inc = midi_to_hz(self.target + p.tuning_st) / self.sr;
-        for sample in out {
+        let mut last_cycle = None;
+        for (frame, sample) in out.iter_mut().enumerate() {
             let inc = if self.sliding {
                 self.pitch += (self.target - self.pitch) * glide;
                 midi_to_hz(self.pitch + p.tuning_st) / self.sr
@@ -281,6 +282,11 @@ impl Voice {
             }
             self.square_mix +=
                 ((if p.square { 1.0 } else { 0.0 }) - self.square_mix) * self.waveform_slew;
+            self.phase += inc;
+            if self.phase >= 1.0 {
+                self.phase -= 1.0;
+                last_cycle = Some(frame);
+            }
             let x = self.osc(inc, self.square_mix, p.pulse_width) * input_gain;
             // Hold the input for both filter steps and retain the upstream sum and gain.
             let mut y = 0.0;
@@ -298,13 +304,10 @@ impl Voice {
             }
             write(sample, self.envelopes.amplify(y) * 0.265);
         }
+        last_cycle
     }
 
-    fn osc(&mut self, inc: f32, square: f32, pw: f32) -> f32 {
-        self.phase += inc;
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-        }
+    fn osc(&self, inc: f32, square: f32, pw: f32) -> f32 {
         let saw = 2.0 * self.phase - 1.0 - Self::blep(self.phase, inc);
         if square < 1e-4 {
             return saw;

@@ -109,10 +109,14 @@ fn main() {
     }
     let peak = mix.iter().copied().map(f32::abs).fold(0.0, f32::max);
     let scale = f32::from(i16::MAX) * 0.25 / peak;
-    let pcm: Vec<u8> = mix
+    let mut pcm: Vec<_> = mix
         .iter()
-        .flat_map(|x| ((x * scale).round() as i16).to_le_bytes())
+        .map(|x| ((x * scale).round() as i16).to_le_bytes())
         .collect();
+    // An exhausted cue mixes as silence. Omit trailing zero frames from flash.
+    while pcm.last() == Some(&[0, 0]) {
+        pcm.pop();
+    }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo output directory"));
-    fs::write(out.join("bumper.s16le"), pcm).expect("write boot cue");
+    fs::write(out.join("bumper.s16le"), pcm.as_flattened()).expect("write boot cue");
 }

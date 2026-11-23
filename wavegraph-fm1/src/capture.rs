@@ -1,6 +1,8 @@
 //! A triggered sweep, assembled from consecutive blocks accepted by the DAC.
 
 pub(super) const WIDTH: usize = 240;
+// 1,200 audio frames span 27.2 ms, or two cycles of the factory bass line's low D.
+const BASS_SAMPLES_PER_COLUMN: u8 = 5;
 const LAST_ROW: u8 = 191;
 pub(super) const HEIGHT: usize = LAST_ROW as usize + 1;
 const CENTER: u8 = LAST_ROW / 2 + 1;
@@ -18,6 +20,9 @@ pub(super) struct Capture {
     filled: usize,
     previous: Option<i32>,
     holdoff: u8,
+    column_sum: i32,
+    column_len: u8,
+    silence_reported: bool,
 }
 
 impl Capture {
@@ -27,7 +32,19 @@ impl Capture {
             filled: 0,
             previous: None,
             holdoff: 0,
+            column_sum: 0,
+            column_len: 0,
+            silence_reported: false,
         }
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.filled = 0;
+        self.previous = None;
+        self.holdoff = 0;
+        self.column_sum = 0;
+        self.column_len = 0;
+        self.silence_reported = false;
     }
 
     /// An actual silent output also acquires, so stopping clears the last note.
@@ -35,12 +52,7 @@ impl Capture {
         clippy::arithmetic_side_effects,
         reason = "The x coordinate resets at WIDTH; the holdoff decrements only when positive."
     )]
-    pub(super) fn push(&mut self, samples: &[i32], gap: bool, scale: Scale) -> Option<Trace> {
-        if gap {
-            self.filled = 0;
-            self.holdoff = 0;
-            self.previous = None;
-        }
+    pub(super) fn push(&mut self, samples: &[i32], scale: Scale) -> Option<Trace> {
         let silent = samples.iter().all(|&sample| sample == 0);
         if self.holdoff > 0 && !silent {
             self.holdoff -= 1;
@@ -62,6 +74,49 @@ impl Capture {
             }
         }
         None
+    }
+
+    /// Trigger on a real oscillator wrap and average five filtered samples per column.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "Five shifted Q23 samples fit in i32. Both counters reset at their bounds."
+    )]
+    pub(super) fn push_bass(&mut self, samples: &[i32], cycle: Option<usize>) -> Option<Trace> {
+        let mut active = self.filled != 0 || self.column_len != 0;
+        if !active && cycle.is_none() {
+            if !self.silence_reported && !samples.is_empty() && samples.iter().all(|&s| s == 0) {
+                self.silence_reported = true;
+                return Some(FLAT);
+            }
+            return None;
+        }
+
+        let mut trace = None;
+        for (frame, &sample) in samples.iter().enumerate() {
+            if !active {
+                if cycle != Some(frame) {
+                    continue;
+                }
+                active = true;
+                self.silence_reported = false;
+            }
+            self.column_sum += sample >> 7;
+            self.column_len += 1;
+            if self.column_len == BASS_SAMPLES_PER_COLUMN {
+                self.samples[self.filled] = self.column_sum / i32::from(BASS_SAMPLES_PER_COLUMN);
+                self.column_sum = 0;
+                self.column_len = 0;
+                self.filled += 1;
+                if self.filled == WIDTH {
+                    trace = Some(self.trace(Scale::Auto));
+                    self.filled = 0;
+                    // A low D can wrap again just two samples after this sweep.
+                    // Keep the rest of the DMA block available to the next trigger.
+                    active = false;
+                }
+            }
+        }
+        trace
     }
 
     #[allow(
@@ -95,34 +150,61 @@ mod tests {
     fn triggers_across_blocks_and_rearms_after_a_gap() {
         assert_eq!(HEIGHT, 192);
         let mut scope = Capture::new();
-        assert_eq!(scope.push(&[-4096; 128], false, Scale::Fixed), None);
-        assert_eq!(scope.push(&[4096; 128], false, Scale::Fixed), None);
-        assert_eq!(scope.push(&[4096; 128], true, Scale::Fixed), None);
-        assert_eq!(scope.push(&[4096; 128], false, Scale::Fixed), None);
-        assert_eq!(scope.push(&[-4096; 128], false, Scale::Fixed), None);
-        assert_eq!(scope.push(&[524288; 128], false, Scale::Fixed), None);
+        assert_eq!(scope.push(&[-4096; 128], Scale::Fixed), None);
+        assert_eq!(scope.push(&[4096; 128], Scale::Fixed), None);
+        scope.reset();
+        assert_eq!(scope.push(&[4096; 128], Scale::Fixed), None);
+        assert_eq!(scope.push(&[4096; 128], Scale::Fixed), None);
+        assert_eq!(scope.push(&[-4096; 128], Scale::Fixed), None);
+        assert_eq!(scope.push(&[524288; 128], Scale::Fixed), None);
         let trace = scope
-            .push(&[-524288; 128], false, Scale::Fixed)
+            .push(&[-524288; 128], Scale::Fixed)
             .expect("contiguous sweep");
         assert_eq!(trace[..128], [12; 128]);
         assert_eq!(trace[128..], [180; WIDTH - 128]);
-        assert_eq!(scope.push(&[0; 128], false, Scale::Fixed), None);
-        assert_eq!(scope.push(&[0; 128], false, Scale::Fixed), Some(FLAT));
+        assert_eq!(scope.push(&[0; 128], Scale::Fixed), None);
+        assert_eq!(scope.push(&[0; 128], Scale::Fixed), Some(FLAT));
     }
 
     #[test]
     fn auto_range_preserves_shape_and_lets_quiet_tails_fade() {
         let sweep = |peak: i32| {
             let mut scope = Capture::new();
-            scope.push(&[-1], false, Scale::Auto);
+            scope.push(&[-1], Scale::Auto);
             let wave = core::array::from_fn::<_, WIDTH, _>(|x| [peak, peak / 2, -peak, 0][x % 4]);
-            scope
-                .push(&wave, false, Scale::Auto)
-                .expect("one complete sweep")
+            scope.push(&wave, Scale::Auto).expect("one complete sweep")
         };
         assert_eq!(sweep(1 << 17)[..4], [8, 52, 184, CENTER]);
         assert_eq!(sweep(1 << 22), sweep(1 << 17));
         assert_eq!(sweep(1 << 14)[..4], [85, 91, 107, CENTER]);
         assert_eq!(sweep(0), FLAT);
+    }
+
+    #[test]
+    fn bass_averages_from_each_wrap_across_dma_blocks() {
+        let mut scope = Capture::new();
+        let expected: Trace = core::array::from_fn(|x| if x % 120 < 60 { 8 } else { 184 });
+        let mut completed = Vec::new();
+        for block in 0..21 {
+            // The first wrap lands two frames before the end of the first block.
+            let phase = |i: usize| (block * 128 + i + 600 - 126) % 600;
+            let samples: [i32; 128] = core::array::from_fn(|i| {
+                let p = phase(i);
+                let ring = [3, -1, 2, -2, 3][p % 5] << 17;
+                if p < 300 { ring } else { -ring }
+            });
+            let wrap = (0..128).find(|&i| phase(i) == 0);
+            if let Some(trace) = scope.push_bass(&samples, wrap) {
+                assert_eq!(trace, expected);
+                completed.push(block);
+            }
+        }
+        assert_eq!(completed, [10, 19]);
+
+        // Drop a partial column at a queue gap and wait for a fresh wrap.
+        scope.reset();
+        assert_eq!(scope.push_bass(&[-1024, 1024], None), None);
+        assert_eq!(scope.push_bass(&[0; 128], None), Some(FLAT));
+        assert_eq!(scope.push_bass(&[0; 128], None), None);
     }
 }
