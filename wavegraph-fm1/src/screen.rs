@@ -22,6 +22,7 @@ use fm1_rticx::{
 };
 use static_cell::{ConstStaticCell, StaticCell};
 
+mod channel_fx;
 mod drums;
 mod jp8080;
 mod master_fx;
@@ -90,7 +91,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Channel, Part),
-    Fx(Channel, Part, bool),
+    Fx(Channel, Part),
     MasterFx,
     Mixer,
     Sequencer(SeqPage, Channel, Part),
@@ -110,6 +111,7 @@ pub(super) struct Screen {
     wave: microwave::Panel,
     mixer: mixer::Surface,
     rack: master_fx::Rack,
+    channel_fx: channel_fx::Rack,
     sequence: sequencer::Grid,
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
@@ -150,6 +152,7 @@ impl Screen {
             wave: microwave::Panel::default(),
             mixer: mixer::Surface::default(),
             rack: master_fx::Rack::default(),
+            channel_fx: channel_fx::Rack::default(),
             sequence: sequencer::Grid::new(),
             page: None,
             dot: None,
@@ -516,6 +519,37 @@ impl Screen {
         if labels.view.is_mixer() {
             return self.paint_mixer(lcd, clock, labels, motion.peaks).await;
         }
+        let head = motion
+            .position
+            .map(|p| usize::from(p.beat_phase) * WIDTH / 256);
+        if labels.view == View::Fx {
+            let page = Page::Fx(labels.channel, labels.focus);
+            let entering = self.page.replace(page) != Some(page);
+            if entering {
+                self.change_view(STYLE);
+                self.dot_background = mixer::BACKGROUND;
+            }
+            self.channel_fx
+                .paint(lcd, clock, self.strip, &labels, entering)
+                .await?;
+            let rows = channel_fx::SCOPE;
+            let height = rows.end - rows.start;
+            // Two pixels of margin keep the phosphor halo inside the plot at full scale.
+            let trace = frame
+                .trace
+                .map(|y| (rows.start + 2 + u16::from(y) * (height - 4) / HEIGHT as u16) as u8);
+            let center = rows.start + height / 2;
+            return self
+                .paint_scope(
+                    lcd,
+                    clock,
+                    Sweep { trace, head },
+                    STYLE,
+                    Part::Mono,
+                    (rows, center),
+                )
+                .await;
+        }
         if labels.view == View::Envelope {
             match labels.focus {
                 Part::Bass => return self.paint_bass_envelope(lcd, clock, labels.bass).await,
@@ -534,12 +568,11 @@ impl Screen {
                 Part::Tr808 | Part::Tr909 => (),
             }
         }
-        let fx = labels.view == View::Fx;
-        let bass = !fx && labels.focus == Part::Bass;
-        let organ = !fx && labels.focus == Part::Organ;
-        let drums = !fx && labels.focus.is_kit();
-        let saw = !fx && labels.focus == Part::Supersaw;
-        let wave = !fx && labels.focus == Part::Wavetable;
+        let bass = labels.focus == Part::Bass;
+        let organ = labels.focus == Part::Organ;
+        let drums = labels.focus.is_kit();
+        let saw = labels.focus == Part::Supersaw;
+        let wave = labels.focus == Part::Wavetable;
         let (style, ink, muted, bright) = if bass {
             (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
         } else if saw {
@@ -577,11 +610,7 @@ impl Screen {
         };
         let style = self.selector.style(style);
         let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
-        let page = if fx {
-            Page::Fx(labels.channel, labels.focus, labels.bass_insert)
-        } else {
-            Page::Scope(labels.channel, labels.focus)
-        };
+        let page = Page::Scope(labels.channel, labels.focus);
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
             self.change_view(style);
@@ -593,7 +622,7 @@ impl Screen {
             frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
             frame.trace.map(|y| (34 + u16::from(y) * 9 / 10) as u8)
-        } else if organ || fx {
+        } else if organ {
             frame.trace.map(|y| (36 + u16::from(y) * 7 / 8) as u8)
         } else {
             frame.trace.map(|y| y + TOP as u8)
@@ -604,7 +633,7 @@ impl Screen {
             (tb303::MARGIN, tb303::MARGIN)
         } else if saw || wave {
             (32, 40)
-        } else if organ || fx {
+        } else if organ {
             (16, 32)
         } else {
             (16, 16)
@@ -626,15 +655,16 @@ impl Screen {
                 }
             }
         }
-        let pulse_track = if fx { Part::Mono } else { labels.focus };
-        let sweep = Sweep {
-            trace,
-            head: motion
-                .position
-                .map(|p| usize::from(p.beat_phase) * WIDTH / 256),
-        };
-        self.paint_scope(lcd, clock, sweep, style, pulse_track, header..SIZE - footer)
-            .await?;
+        let sweep = Sweep { trace, head };
+        self.paint_scope(
+            lcd,
+            clock,
+            sweep,
+            style,
+            labels.focus,
+            (header..SIZE - footer, SIZE / 2),
+        )
+        .await?;
         if bass {
             let automation = motion
                 .bass_automation
@@ -654,68 +684,6 @@ impl Screen {
                     changed_page,
                 )
                 .await;
-        }
-        if fx {
-            self.text.text(0, 0, b"CH", muted);
-            self.text
-                .number(2, 0, 1, u32::from(labels.channel as u8) + 1, ink);
-            self.text.text(
-                4,
-                0,
-                if labels.bass_insert {
-                    b"303 COMP"
-                } else {
-                    b"FX SENDS"
-                },
-                ink,
-            );
-            if labels.bass_insert {
-                self.text.text(
-                    13,
-                    0,
-                    if labels.bass_fx.enabled {
-                        b"ON "
-                    } else {
-                        b"OFF"
-                    },
-                    bright,
-                );
-                self.text.text(0, 13, b"1 KEY", muted);
-                self.text.text(6, 13, labels.bass_fx.key.name(), ink);
-                self.text.text(0, 14, b"2 DEP", muted);
-                self.text
-                    .number(5, 14, 3, u32::from(labels.bass_fx.depth), ink);
-                self.text.text(8, 14, b"%", muted);
-                self.text.text(10, 14, b"3 EQ", muted);
-                self.text
-                    .number(14, 14, 4, u32::from(labels.bass_fx.split_hz), ink);
-                self.text.text(18, 14, b"HZ", muted);
-            } else {
-                let strip = labels.mixer.0[labels.channel.index()];
-                self.text.text(0, 13, b"2 REVERB", muted);
-                self.text.number(9, 13, 3, u32::from(strip.reverb), ink);
-                self.text.text(12, 13, b"/128", muted);
-                self.text.text(0, 14, b"3 DELAY", muted);
-                self.text.number(9, 14, 3, u32::from(strip.delay), ink);
-                self.text.text(12, 14, b"/128", muted);
-            }
-            self.text.text(
-                16,
-                0,
-                if labels.half_gain { b"HALF" } else { b"FULL" },
-                muted,
-            );
-            self.text.text(
-                0,
-                1,
-                if labels.focus == Part::Bass {
-                    b"SELECT PAGE   GLO FX".as_slice()
-                } else {
-                    b"GLO: MASTER FX"
-                },
-                muted,
-            );
-            return self.text.paint_async(lcd, clock).await;
         }
         if wave {
             let mut lcd = lcd.as_async(clock)?;
@@ -902,7 +870,7 @@ impl Screen {
         sweep: Sweep,
         style: WaveformStyle,
         track: Part,
-        rows: core::ops::Range<u16>,
+        (rows, center): (core::ops::Range<u16>, u16),
     ) -> Result<(), Error> {
         if self.sweep.as_ref() == Some(&sweep) {
             return Ok(());
@@ -934,7 +902,7 @@ impl Screen {
         for window in damage.windows() {
             for w in window.strips(self.strip.len()) {
                 let pixels = &mut self.strip[..w.width * w.height];
-                sweep.render(w, palette, pixels);
+                sweep.render(w, palette, usize::from(center), pixels);
                 list.overlay(w, pixels);
                 lcd.write_rect_buffered(
                     w.x as u16,

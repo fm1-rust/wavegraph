@@ -186,11 +186,11 @@ impl Sweep {
         }))
     }
 
-    pub(super) fn render(&self, w: Window, palette: &Palette, pixels: &mut [Pixel]) {
+    pub(super) fn render(&self, w: Window, palette: &Palette, center: usize, pixels: &mut [Pixel]) {
         let grid_row = &palette.row[w.x..w.x + w.width];
         for (dy, row) in pixels.chunks_exact_mut(w.width).enumerate() {
             let y = w.y + dy;
-            if y == WIDTH / 2 {
+            if y == center {
                 row.fill(palette.center);
             } else if y.is_multiple_of(usize::from(GRID)) {
                 row.fill(palette.grid);
@@ -277,7 +277,7 @@ mod tests {
             for w in damage.windows().flat_map(|w| w.strips(CAPACITY)) {
                 assert!(w.width * w.height <= CAPACITY);
                 let mut strip = vec![OUTSIDE; w.width * w.height];
-                sweep.render(w, &palette, &mut strip);
+                sweep.render(w, &palette, WIDTH / 2, &mut strip);
                 for (dy, row) in strip.chunks_exact(w.width).enumerate() {
                     let i = (w.y + dy) * WIDTH + w.x;
                     assert!(touched[i..i + w.width].iter().all(|&p| !p));

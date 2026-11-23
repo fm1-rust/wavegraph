@@ -119,6 +119,14 @@ impl Navigation {
                 View::MasterFx(None)
             }
             PageButton::Home if self.view == View::MasterFx(None) => self.fx_parent,
+            PageButton::Fx if matches!(self.view, View::MasterFx(_)) => {
+                if self.fx_parent == View::Channel {
+                    View::Channel
+                } else {
+                    View::Mixer
+                }
+            }
+            PageButton::Glo if matches!(self.view, View::MasterFx(_)) => View::Fx,
             PageButton::GlobalFx => {
                 if !matches!(self.view, View::MasterFx(_)) {
                     self.fx_parent = if self.view.is_mixer() {
@@ -247,6 +255,39 @@ mod tests {
     }
 
     #[test]
+    fn leaving_the_global_rack_toggles_only_the_button_pressed() {
+        for parent in [View::Mixer, View::Channel, View::Fx] {
+            for selected in [false, true] {
+                let mut nav = Navigation::INITIAL;
+                nav.focus = Channel::Two;
+                nav.view = parent;
+                nav.press(if parent.is_mixer() {
+                    PageButton::Fx
+                } else {
+                    PageButton::Glo
+                });
+                if selected {
+                    nav.turn(1, 0);
+                }
+                let mut glo_off = nav;
+                nav.press(PageButton::Fx);
+                assert_eq!(
+                    nav.view,
+                    if parent == View::Channel {
+                        View::Channel
+                    } else {
+                        View::Mixer
+                    }
+                );
+                assert_eq!(nav.focus, Channel::Two);
+                glo_off.press(PageButton::Glo);
+                assert_eq!(glo_off.view, View::Fx);
+                assert_eq!(glo_off.focus, Channel::Two);
+            }
+        }
+    }
+
+    #[test]
     fn instrument_fx_shows_only_the_selected_channels_insert_and_sends() {
         let mut nav = Navigation::INITIAL;
         nav.press(PageButton::Fx);
@@ -258,6 +299,10 @@ mod tests {
         nav.turn(0, 2);
         assert_eq!(nav.part(), Part::Tr808);
         assert!(!nav.bass_insert());
+        for turn in [-1, 1] {
+            nav.turn(turn, 0);
+            assert!(!nav.bass_insert());
+        }
     }
 
     #[test]

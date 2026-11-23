@@ -65,15 +65,15 @@ impl KeySource {
     }
 
     #[cfg(target_os = "none")]
-    pub(super) fn name(self) -> &'static [u8] {
+    pub(super) fn name(self) -> &'static str {
         match self {
-            Self::Bass => b"303 SELF",
-            Self::Kick => b"909 KICK",
-            Self::Kit => b"909 KIT ",
-            Self::Kick808 => b"808 KICK",
-            Self::Kit808 => b"808 KIT ",
-            Self::Organ => b"M1 ORGAN",
-            Self::Mono => b"MONO    ",
+            Self::Bass => "303 SELF",
+            Self::Kick => "909 KICK",
+            Self::Kit => "909 KIT",
+            Self::Kick808 => "808 KICK",
+            Self::Kit808 => "808 KIT",
+            Self::Organ => "M1 ORGAN",
+            Self::Mono => "MONO",
         }
     }
 }

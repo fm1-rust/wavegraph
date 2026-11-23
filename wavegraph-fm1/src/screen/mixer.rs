@@ -271,6 +271,35 @@ impl<'a> Band<'a> {
         }
     }
 
+    pub(super) fn rack_row(&mut self, y: i32, selected: bool) -> Rgb565 {
+        let face = if selected { SELECTED } else { STRIP };
+        self.rect(Point::new(4, y), Size::new(232, 38), face);
+        if selected {
+            self.rect(Point::new(4, y), Size::new(2, 38), palette::CYAN);
+            palette::CYAN
+        } else {
+            POINTER
+        }
+    }
+
+    pub(super) fn rack_dial(
+        &mut self,
+        top: Point,
+        label: &str,
+        position: u8,
+        readout: &str,
+        ink: Rgb565,
+    ) {
+        self.label(label, top, Alignment::Center, LABEL);
+        self.small_knob(top + Point::new(0, 17), position, UNITY, ink);
+        self.label(
+            readout,
+            top + Point::new(0, 27),
+            Alignment::Center,
+            palette::WHITE,
+        );
+    }
+
     pub(super) fn small_knob(&mut self, center: Point, value: u8, max: u8, ink: Rgb565) {
         self.draw_knob(
             center,
@@ -453,7 +482,7 @@ fn decibels(gain: u8) -> [u8; 5] {
     }
 }
 
-fn percent(gain: u8) -> [u8; 5] {
+pub(super) fn percent(gain: u8) -> [u8; 5] {
     let pct = (u16::from(gain) * 100 + 64) / u16::from(UNITY);
     let pct = u8::try_from(pct).expect("unity send");
     [
