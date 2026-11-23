@@ -9,7 +9,7 @@ use crate::{
     instrument::Part,
     panel::{CHANNELS, Channel, View, preset_age},
     scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
-    sequencer::{Position, SeqPage, Sequencer},
+    sequencer::{BankPosition, Position, SeqPage, Sequencer},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
@@ -345,30 +345,44 @@ impl Screen {
         view: SeqPage,
         seq: Sequencer,
         part: Part,
-        position: Option<Position>,
+        playback: (Option<Position>, BankPosition),
     ) -> Result<(), Error> {
+        let (position, bank) = playback;
+        let style = sequencer::style(part);
+        let ink = sequencer::ink(part);
+        let muted = if part == Part::Tr909 {
+            drums::GRAPHITE
+        } else {
+            palette::MUTED
+        };
+        let green = if part == Part::Tr909 {
+            Rgb565::new(3, 25, 7)
+        } else {
+            palette::GREEN
+        };
         let page = Page::Sequencer(view, seq.channel, part);
         if self.page.replace(page) != Some(page) {
-            self.change_view(STYLE);
+            self.change_view(style);
             self.selector
                 .badge
-                .fill_rows(lcd, 0, SIZE, STYLE.background)?;
+                .fill_rows(lcd, 0, SIZE, style.background)?;
             self.text.text(
                 12,
                 0,
                 [b"C1", b"C2", b"C3", b"C4"][seq.channel.index()],
-                palette::CYAN,
+                ink,
             );
             if view == SeqPage::Pattern {
-                self.text.text(15, 0, b"B", palette::MUTED);
-                self.text.text(16, 1, b"S", palette::MUTED);
+                self.text.text(4, 2, b"1   2   3   4", muted);
+                self.text.text(15, 0, b"B", muted);
+                self.text.text(16, 1, b"S", muted);
             } else {
-                self.text.text(0, 4, b"TEMPO 2/2", palette::MUTED);
-                self.text.text(0, 6, b"MASTER TEMPO", palette::WHITE);
-                self.text.text(0, 8, b"KNOB 3", palette::GREEN);
-                self.text.text(0, 14, b"SELECT FOR PATTERN", palette::MUTED);
+                self.text.text(0, 4, b"TEMPO 2/2", muted);
+                self.text.text(0, 6, b"MASTER TEMPO", ink);
+                self.text.text(0, 8, b"KNOB 3", green);
+                self.text.text(0, 14, b"SELECT FOR PATTERN", muted);
             }
-            self.text.text(8, 1, b"BPM", palette::MUTED);
+            self.text.text(8, 1, b"BPM", muted);
         }
         let title: &[u8] = match part {
             Part::Mono => b"SEQ MONO",
@@ -380,9 +394,7 @@ impl Screen {
             Part::Supersaw => b"SEQ JP-8080",
             Part::Wavetable => b"SEQ WAVE",
         };
-        self.selector
-            .badge
-            .header_text(self.text, 0, title, palette::WHITE);
+        self.selector.badge.header_text(self.text, 0, title, ink);
         self.selector.badge.header_text(
             self.text,
             1,
@@ -392,47 +404,30 @@ impl Screen {
                 b"STOP"
             },
             if seq.transport.playing() {
-                palette::GREEN
+                green
             } else {
                 palette::RED
             },
         );
-        self.text
-            .number(5, 1, 3, u32::from(seq.transport.bpm), palette::WHITE);
+        self.text.number(5, 1, 3, u32::from(seq.transport.bpm), ink);
         let enabled = seq.enabled[seq.channel.index()];
         self.text.text(
             12,
             1,
             if enabled { b"ON " } else { b"OFF" },
-            if enabled {
-                palette::GREEN
-            } else {
-                palette::MUTED
-            },
+            if enabled { green } else { palette::MUTED },
         );
         if view == SeqPage::Pattern {
-            self.text.text(
-                0,
-                13,
-                if seq.transport.playing() {
-                    b"PRESETS TRACK FOLLOW"
-                } else {
-                    b"PRESETS TRACK K2 BAR"
-                },
-                palette::MUTED,
-            );
-            self.text.text(
-                0,
-                14,
-                if enabled {
-                    b"SEL OFF  SELECT BPM"
-                } else {
-                    b"SEL ON   SELECT BPM"
-                },
-                palette::MUTED,
-            );
             self.sequence
-                .paint(lcd, clock, self.text, self.strip, (seq, part), position)
+                .paint(
+                    lcd,
+                    clock,
+                    self.text,
+                    self.strip,
+                    (seq, part),
+                    position,
+                    bank,
+                )
                 .await?;
         }
         self.text.paint_async(lcd, clock).await
@@ -506,7 +501,14 @@ impl Screen {
         }
         if let Some(page) = labels.seq.page {
             return self
-                .paint_sequencer(lcd, clock, page, labels.seq, labels.focus, motion.position)
+                .paint_sequencer(
+                    lcd,
+                    clock,
+                    page,
+                    labels.seq,
+                    labels.focus,
+                    (motion.position, motion.banks[labels.seq.channel.index()]),
+                )
                 .await;
         }
         if let View::MasterFx(selected) = labels.view {
@@ -690,10 +692,8 @@ impl Screen {
         if bass {
             let automation = motion
                 .bass_automation
-                .filter(|(channel, _, _)| *channel == labels.channel)
-                .map(|(channel, step, fraction)| {
-                    crate::sequencer::pattern::automation(channel, usize::from(step), fraction)
-                });
+                .filter(|(channel, _)| *channel == labels.channel)
+                .map(|(_, values)| values);
             let mut lcd = lcd.as_async(clock)?;
             return self
                 .bass

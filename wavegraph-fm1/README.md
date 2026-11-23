@@ -25,13 +25,14 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Control | Action |
 | --- | --- |
 | PLAY/STOP | Start all enabled patterns on beat one from any page (green). Press again to release sequenced notes, silence the kit and stop (red). Live held keys keep sounding. |
-| SEQ | View the selected channel's factory pattern. SEQ or HOME returns from the pattern to its instrument. |
+| SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
+| Piano keys in the SEQ pattern view | The first four white keys (F, G, A, B) select slots 1–4. All four keys light and the active slot flashes. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
-| KNOB 2 in SEQ | Browse the four bars while stopped. While playing, the view follows the audio playhead. |
+| KNOB 2 in SEQ | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
 | PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
-| Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
+| Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. |
 | SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
@@ -68,8 +69,7 @@ Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
 switch banks. The encoder numbers move and the knobs stay in place.
 
 Each cap points to its saved setting. During pattern playback a separate red
-mark on the Cutoff, Resonance and Drive scales follows the sequencer. Those
-marks disappear when you play the 303 live, mute its pattern or stop playback.
+mark on each automated knob follows the sequencer. The marks disappear when you play the 303 live, mute its pattern or stop playback.
 The scope opens on the selected 303’s pre-fader signal (SRC). Each sweep starts
 at an oscillator phase wrap and shows 27.2 ms of filtered audio, about two
 cycles of the factory bass line’s low D. The fixed time scale lets you see the
@@ -258,58 +258,88 @@ to the same live view.
 | Open hat | C4 | 46 |
 | Ride | D4 | 51 |
 
-## Preset sequencer and master tempo
+## Pattern banks
 
-SEQ opens on the active channel. Each channel plays the factory pattern for its
-assigned instrument and remembers its own mute setting. The compact grid shows
-one bar of sixteen steps, with the current step highlighted during playback.
-Pitched tracks show their occupied note lanes and gate lengths. The 303 adds
-`A` accent and `S` outgoing-slide marks plus `CUT`, `RES` and `DRV` curves.
-The drum grid shows the four 808 lanes or the six 909 lanes for the selected kit.
-Only changed playhead columns are redrawn between bar changes.
+Press **SEQ**, turn **PRESETS** to the instrument you want, and press one of the
+four lit white keys. **F, G, A, B** select the four numbered slots from left
+to right, even after an octave change. The active key flashes. While stopped,
+a selection immediately previews bar one. During playback, the grid and flashing
+key follow the sounding clip. An underline and **QUEUED** identify the incoming
+slot. Press another key to replace the request or the active key to cancel it.
 
-The factory sketch moves from Dm7 to Cmaj7. The saw 303 plays the original
-bass part. Channel two's square 303 breaks the M1 voicings A3–C4–F4 and
-G3–B3–E4 into short answers with slides from C to F and B to E. Its cutoff
-opens on different half-bars and its shorter envelope leaves space for echo.
-An organ assignment recalls the sustained chord part, and a monosynth plays
-its spare counterline. Edit `src/sequencer/pattern.rs` to change the notes,
-gates, accents, slides and automation.
+Each channel starts its new clip at step one on the next bar line. The other
+channels continue wherever they are in their phrases. This adapts ReBirth’s
+independent pattern selectors to WaveGraph’s multi-bar loops. Each strip
+remembers its selection for each instrument until power-off. **SEL** mutes the
+displayed channel. **KNOB 2** browses its bars while stopped. Turn **SELECT**
+clockwise and use **KNOB 3** to set the master tempo. [ReBirth operation manual,
+pp. 19–21][rebirth] · [TB-03 owner's manual][tb03-manual]
 
-The lower 303's cutoff sweeps from 180 to 1800 Hz, resonance from 74 to 94%, and
-overdrive from 12 to 28 dB over the four bars. Half-bar control points interpolate
-at an audio-clocked rate of one update per 128 samples, including across loop
-boundaries. Its filter envelope adds another three octaves, with 330 ms decay
-and 85% accent. The preset uses the existing 303 drive into the filter.
+| Key | Pattern | Bars | Factory rack |
+| --- | --- | ---: | --- |
+| F | 1 · Original | 4 | Sliding low 303 and high square answer over the four-on-the-floor 909. The 808 fills the gaps. |
+| G | 2 · Undertow | 2 | Low fifth-to-seventh slides answer the high line. Backbeat claps alternate with snares and an open-hat pickup. |
+| A | 3 · Jack Track | 1 | Octave bass stabs, a climbing upper voice and an extra 909 kick just before beat four. |
+| B | 4 · Negative Space | 2 | An off-downbeat bass leaves room for syncopated hats and a sparser backbeat. |
 
-While its pattern plays, the sequencer owns those three automated controls.
-The other voice controls remain live. Moving an automated knob retains its
-panel setting for when the track stops, is muted, or is taken over by live keys.
-Pressing keys temporarily takes over that melodic track; the other tracks
-continue. After key-up, the track rejoins at its next scheduled note. Browsing
-the drum pattern keeps the keyboard on the last selected melodic channel when
-available. With four drum kits assigned, the keyboard plays the displayed kit.
+The monosynth, M1 organ, Super Saw and wavetable also have four clips each.
+The melodic grid shows note lengths. On a 303, **A** marks an accent and **S**
+a note entered with slide. Three traces show the cutoff, resonance and drive
+messages in the clip. The drum grid puts each voice on its own row with sixteen
+steps grouped in fours. The charcoal 808 has four voice lanes and the ivory 909
+has six. The lower strip follows the current step. [ReDrum drum computer][redrum]
 
-The 909 repeats one bar. The kick hits all four beats, a short closed hat
-plays each offbeat, and snare and clap strike together on two and four.
-The kick blends its clean body with a saturated copy for extra low-mid
-harmonics. The kit runs its modeled amplitude decays at 55% of stock.
+| TR-808, queued change | TR-909, pattern 4 |
+| --- | --- |
+| ![TR-808 playing pattern 2 with 3 queued](assets/tr808-pattern-bank.png) | ![TR-909 step grid playing pattern 4](assets/tr909-pattern-bank.png) |
 
-The tempo control follows [the stock FM-1 sequencer][stock-seq]. Page 2 shows
-the current BPM and PLAY/STOP state. Tempo edits retain the position within
-the current sixteenth. One rational clock advances with the FM-1 audio frames
-and retains the fractional sample remainder across DMA blocks. Notes, short
-gates, slides, drum hits and automation therefore share the same transport;
-panel scans and LCD redraws do not quantize the beat. The bundled 44.1 kHz
-cymbals play at the hardware rate of about 44,118 Hz, a pitch difference of
-roughly 0.7 cent.
+Live keys outside the pattern view temporarily take over their melodic channel.
+Releasing them rejoins the clip at the next scheduled note. Inside the pattern
+view the piano keys operate the bank. USB MIDI still addresses its assigned
+instrument. The transport, gates and controller events share the existing
+audio-frame clock. Changing tempo retains the position within the step.
 
-## USB MIDI
+## MIDI files and USB MIDI
 
-USB MIDI channels 1–4 route to mixer channels 1–4. Note On, Note Off, and
-All Notes Off (CC 123) apply to the instrument currently assigned to that
-channel. A new assignment releases its old notes. Disconnecting USB releases
-notes from the host while panel keys remain playable.
+Each bank has four Standard MIDI Files under [patterns/](patterns/).
+For example, drag `patterns/tb303-low/01.mid` into a DAW to hear or edit the
+original bassline. For import, save a clip over `01.mid` through `04.mid` in
+the desired bank, then [build and flash](#build-and-flash). MIDI files are the
+source for both playback and the display. The build compiles them into flash.
+
+Export one instrument channel in SMF format 0 or 1, with PPQN timing and one to
+four bars of 4/4. End-of-track determines the length, rounded up to a bar.
+The compiler rounds events to 32 ticks per quarter and accepts notes and CCs.
+End each note, allow at least one tick for each gate, and keep chords to four
+notes. Each tick can carry up to sixteen messages, including up to six drum
+strikes for a kit. The master transport supplies the playback tempo.
+
+USB MIDI channels 1–4 address mixer channels 1–4. Playing patterns also send
+their notes and CCs on those channels, so a DAW can record a performance or
+route it to a TB-03 or plug-in. Incoming notes and CCs use the same MIDI message
+type as the clips. Disconnecting the host releases its held keys. The physical
+piano roll retains separate key ownership for overlapping panel and USB notes.
+
+| 303 parameter | MIDI |
+| --- | --- |
+| Filter cutoff / resonance | CC 74 / 71 |
+| Envelope modulation / decay | CC 12 / 75 |
+| Accent level / overdrive / tuning | CC 16 / 17 / 104 |
+| Accented note | Note-on velocity 100–127 |
+| Slide | CC 102 on at 64–127. Factory slides also overlap notes for legato synths. |
+| WaveGraph attack / waveform | CC 73 / 70. Waveform values 0–63 select saw and 64–127 select square. |
+
+The factory sweeps follow the original cutoff, resonance and drive contours at
+seven-bit MIDI resolution. The sequencer owns each voice control it automates
+until the clip gives it back to the retained knob or USB setting. Other CCs
+pass through to the host, including TB-03 delay time and feedback on CC 18
+and 19. The FM-1’s shared delay is edited in global FX. [Roland TB-03 MIDI
+implementation chart][tb03-midi]
+
+[rebirth]: https://www.deepsonic.ch/deep/docs_manuals/propellerhead_rebirth_rb338_v2.01_manual.pdf
+[tb03-manual]: https://static.roland.com/assets/media/pdf/TB-03_eng03_W.pdf
+[tb03-midi]: https://static.roland.com/assets/media/pdf/TB-03_MIDI_Imple_e01_W.pdf
+[redrum]: https://docs.reasonstudios.com/rackplugin12/redrum-drum-computer
 
 ## Audio overloads and USB log
 

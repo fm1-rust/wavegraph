@@ -1,21 +1,31 @@
-//! A cached, single-bar pattern grid. Only moving playhead columns are repainted.
+//! Single-bar clip preview. Rebuild the note and controller lanes on a bar or slot
+//! change; the running playhead repaints just its old and new columns.
 #![allow(
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
-    reason = "All coordinates are bounded by a 240-pixel display and a 64-step pattern."
+    reason = "Grid coordinates fit the 240-pixel panel and clips are bounded to 512 ticks."
 )]
 
+use super::{drums, mixer::Band};
 use crate::{
+    bass::CC_SLIDE,
     instrument::Part,
-    panel::Channel,
-    sequencer::{Position, Sequencer, pattern},
+    sequencer::{
+        BankPosition, Position, Sequencer,
+        pattern::{BAR, Clip, Slot},
+    },
 };
-use embedded_graphics::pixelcolor::raw::ToBytes;
-use fm1_graphics::{Rgb565, TextGrid, palette};
+use embedded_graphics::{
+    pixelcolor::raw::ToBytes,
+    prelude::{Point, Size},
+    text::Alignment,
+};
+use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::display::{Display, Error},
     time::Clock,
 };
+use wavegraph::midi::MidiMessage;
 use wavegraph_909::Voice;
 
 const LEFT: usize = 48;
@@ -23,96 +33,389 @@ const TOP: usize = 48;
 const WIDTH: usize = 12;
 const HEIGHT: usize = 160;
 const HALF: usize = HEIGHT / 2;
-const ROW: usize = 16;
-const BACKGROUND: Rgb565 = super::STYLE.background;
-const GRID: Rgb565 = Rgb565::new(2, 9, 4);
-const BEAT: Rgb565 = Rgb565::new(4, 19, 9);
-const CURSOR: Rgb565 = Rgb565::new(3, 14, 9);
+const INKS: [Rgb565; 3] = [
+    palette::CYAN,
+    Rgb565::new(30, 49, 7),
+    Rgb565::new(28, 15, 20),
+];
 const ACID: Rgb565 = Rgb565::new(31, 24, 4);
-const RESONANCE: Rgb565 = Rgb565::new(30, 49, 7);
-const DRIVE: Rgb565 = Rgb565::new(28, 15, 20);
-fn drum_label(voice: Voice) -> &'static [u8] {
-    match voice {
-        Voice::Kick => b"BD",
-        Voice::Snare => b"SD",
-        Voice::Clap => b"CP",
-        Voice::ClosedHat => b"CH",
-        Voice::OpenHat => b"OH",
-        Voice::Ride => b"RD",
+
+pub(super) fn style(part: Part) -> WaveformStyle {
+    if part.is_kit() {
+        drums::style(part)
+    } else {
+        super::STYLE
+    }
+}
+
+pub(super) fn ink(part: Part) -> Rgb565 {
+    if part == Part::Tr909 {
+        drums::GRAPHITE
+    } else {
+        palette::WHITE
+    }
+}
+
+fn drum_label(v: Voice) -> &'static str {
+    match v {
+        Voice::Kick => "KICK",
+        Voice::Snare => "SNARE",
+        Voice::Clap => "CLAP",
+        Voice::ClosedHat => "CL HH",
+        Voice::OpenHat => "OP HH",
+        Voice::Ride => "RIDE",
     }
 }
 
 #[derive(Clone, Copy, Default)]
 struct Cell {
-    pixels: u16,
-    onset: bool,
+    gate: u8,
     accent: bool,
     slide: bool,
 }
 
+struct Roll {
+    cells: [[Cell; 16]; 10],
+    // 7-bit MIDI controls plus a sentinel for an unwritten lane.
+    curves: [[u8; 3]; 128],
+}
+
+impl Roll {
+    fn rows(part: Part, clip: &Clip) -> usize {
+        if part.is_kit() {
+            part.pads().len()
+        } else {
+            clip.pitches
+                .len()
+                .min(if part == Part::Bass { 7 } else { 10 })
+        }
+    }
+
+    fn pitch_row(clip: &Clip, rows: usize, pitch: u8) -> usize {
+        let rank = clip.pitches.partition_point(|&p| p > pitch);
+        rank * rows / clip.pitches.len()
+    }
+
+    fn read(&mut self, clip: &Clip, part: Part, bar: u8) {
+        self.cells = [[Cell::default(); 16]; 10];
+        self.curves.fill([255; 3]);
+        let rows = Self::rows(part, clip);
+        let mut held = [None; 4];
+        let mut events = clip.events.iter().peekable();
+        let mut lanes = [255; 3];
+        let mut slide = false;
+        let start = u16::from(bar) * BAR;
+        for tick in 0..start + BAR {
+            let t = usize::from(tick % BAR);
+            let step = t / 8;
+            while let Some(e) = events.next_if(|e| e.tick() == tick) {
+                match e.message() {
+                    MidiMessage::On(n) if part.is_kit() => {
+                        if tick >= start
+                            && let Some(voice) = part.drum(n.number)
+                            && let Some(row) = part.pads().iter().position(|&v| v == voice)
+                        {
+                            self.cells[row][step].gate = 255;
+                            self.cells[row][step].accent |= n.velocity >= 100;
+                        }
+                    }
+                    MidiMessage::On(n) => {
+                        let row = Self::pitch_row(clip, rows, n.number);
+                        if tick >= start {
+                            let cell = &mut self.cells[row][step];
+                            cell.accent |= n.velocity >= 100;
+                            cell.slide |= slide || held.iter().any(Option::is_some);
+                        }
+                        if matches!(part, Part::Wavetable | Part::Organ) {
+                            if !held.contains(&Some(n.number))
+                                && let Some(v) = held.iter_mut().find(|v| v.is_none())
+                            {
+                                *v = Some(n.number);
+                            }
+                        } else {
+                            held[0] = Some(n.number);
+                        }
+                    }
+                    MidiMessage::Off(n) => {
+                        if let Some(v) = held.iter_mut().find(|v| **v == Some(n)) {
+                            *v = None;
+                        }
+                    }
+                    MidiMessage::Control(CC_SLIDE, value) => slide = value >= 64,
+                    MidiMessage::Control(cc, value) => {
+                        if let Some(lane) = [74, 71, 17].iter().position(|&n| n == cc) {
+                            lanes[lane] = value;
+                        }
+                    }
+                }
+            }
+            if tick >= start {
+                self.curves[t] = lanes;
+                for &n in held.iter().flatten() {
+                    self.cells[Self::pitch_row(clip, rows, n)][step].gate |= 1 << (t % 8);
+                }
+            }
+        }
+    }
+
+    fn drum_pixel(
+        &self,
+        part: Part,
+        step: usize,
+        x: usize,
+        y: usize,
+        head: bool,
+        enabled: bool,
+    ) -> Rgb565 {
+        let skin = style(part);
+        // ReDrum-style voice lanes and a separate row of transport lamps.
+        let row_h = if part == Part::Tr808 { 32 } else { 22 };
+        let row = y / row_h;
+        let dy = y % row_h;
+        if row >= part.pads().len() {
+            if (140..146).contains(&y) && (2..10).contains(&x) {
+                return if head { drums::HOT } else { skin.grid };
+            }
+            if (151..154).contains(&y) && step.is_multiple_of(4) {
+                return skin.trace;
+            }
+            return skin.background;
+        }
+        if x < 2 && step.is_multiple_of(4) {
+            return skin.center;
+        }
+        if !(2..11).contains(&x) || !(3..row_h - 3).contains(&dy) {
+            return skin.background;
+        }
+        let cell = self.cells[row][step];
+        if cell.gate == 0 || !enabled {
+            return if head { skin.center } else { skin.grid };
+        }
+        let color = if part == Part::Tr808 {
+            [
+                Rgb565::new(30, 9, 3),
+                drums::HOT,
+                Rgb565::new(31, 40, 3),
+                drums::CREAM,
+            ][step / 4]
+        } else if cell.accent {
+            Rgb565::new(24, 18, 2)
+        } else {
+            Rgb565::new(15, 22, 16)
+        };
+        if head && dy < 7 { ink(part) } else { color }
+    }
+
+    fn pixel(
+        &self,
+        part: Part,
+        rows: usize,
+        step: usize,
+        x: usize,
+        y: usize,
+        head: bool,
+        enabled: bool,
+    ) -> Rgb565 {
+        if part.is_kit() {
+            return self.drum_pixel(part, step, x, y, head, enabled);
+        }
+        let row = y / 16;
+        let dy = y % 16;
+        let background = if head {
+            Rgb565::new(3, 14, 9)
+        } else {
+            super::STYLE.background
+        };
+        if row < rows {
+            let c = self.cells[row][step];
+            if part == Part::Bass && (1..=5).contains(&dy) {
+                let flag = if c.accent && (1..=3).contains(&x) {
+                    Some(([2, 5, 7, 5, 5], x - 1))
+                } else if c.slide && (7..=9).contains(&x) {
+                    Some(([3, 4, 2, 1, 6], x - 7))
+                } else {
+                    None
+                };
+                if flag.is_some_and(|(glyph, dx)| glyph[dy - 1] & (4 >> dx) != 0) {
+                    return if enabled {
+                        palette::WHITE
+                    } else {
+                        palette::MUTED
+                    };
+                }
+            }
+            if (7..=12).contains(&dy) && (c.gate & (1 << (x * 8 / WIDTH))) != 0 {
+                return if !enabled {
+                    palette::MUTED
+                } else if head {
+                    palette::WHITE
+                } else {
+                    match part {
+                        Part::Bass if c.accent => INKS[1],
+                        Part::Bass => ACID,
+                        Part::Wavetable => super::microwave::STYLE.trace,
+                        Part::Supersaw => super::jp8080::STYLE.trace,
+                        Part::Organ => super::ORGAN_LIME,
+                        _ => palette::GREEN,
+                    }
+                };
+            }
+        } else if part == Part::Bass && row < rows + 3 {
+            let lane = row - rows;
+            let t = step * 8 + x * 8 / WIDTH;
+            let v = self.curves[t][lane];
+            if v < 128 {
+                let height = |v: u8| 14 - usize::from(v) * 12 / 127;
+                let a = height(v);
+                let b = self.curves[t.saturating_sub(1)][lane];
+                let b = if b < 128 { height(b) } else { a };
+                if (a.min(b)..=a.max(b)).contains(&dy) {
+                    return if enabled { INKS[lane] } else { palette::MUTED };
+                }
+            }
+        } else {
+            return background;
+        }
+        if x == 0 || dy == 15 {
+            if step.is_multiple_of(4) {
+                super::STYLE.center
+            } else {
+                super::STYLE.grid
+            }
+        } else {
+            background
+        }
+    }
+}
+
 pub(super) struct Grid {
-    previous: Option<(Part, Channel, u8, bool)>,
+    previous: Option<(Slot, u8, bool)>,
+    buttons: Option<(Slot, Slot)>,
     head: Option<u8>,
-    pitches: [u8; 8],
-    rows: usize,
+    roll: Roll,
 }
 
 impl Grid {
     pub(super) const fn new() -> Self {
         Self {
             previous: None,
+            buttons: None,
             head: None,
-            pitches: [0; 8],
-            rows: 0,
+            roll: Roll {
+                cells: [[Cell {
+                    gate: 0,
+                    accent: false,
+                    slide: false,
+                }; 16]; 10],
+                curves: [[255; 3]; 128],
+            },
         }
     }
 
     pub(super) fn invalidate(&mut self) {
         self.previous = None;
+        self.buttons = None;
         self.head = None;
     }
 
-    fn labels(&mut self, text: &mut TextGrid, track: Part, channel: Channel) {
-        for row in 3..13 {
-            text.text(0, row, b"    ", palette::MUTED);
-        }
-        text.text(4, 2, b"1   2   3   4   ", palette::MUTED);
-        self.rows = 0;
-        if track.is_kit() {
-            for (row, &voice) in track.pads().iter().enumerate() {
-                text.text(0, row + 3, drum_label(voice), palette::MUTED);
-            }
-            self.rows = track.pads().len();
-            return;
-        }
-        // One pitch per occupied lane, rather than spending the small screen
-        // on semitones absent from this preset. High pitches are at the top.
-        for step in 0..pattern::STEPS {
-            for &note in pattern::step(track, channel, step).notes {
-                if !self.pitches[..self.rows].contains(&note) && self.rows < self.pitches.len() {
-                    self.pitches[self.rows] = note;
-                    self.rows += 1;
+    fn labels(
+        lcd: &mut Display,
+        strip: &mut [[u8; 2]],
+        part: Part,
+        clip: &Clip,
+    ) -> Result<(), Error> {
+        let rows = Roll::rows(part, clip);
+        let paper = style(part).background;
+        for y in (0..HEIGHT).step_by(16) {
+            let mut band = Band::new(strip, 0, 0, LEFT as u16, 16, paper);
+            if !part.is_kit() {
+                let row = y / 16;
+                if row < rows {
+                    let n = clip.pitches[(row * clip.pitches.len()).div_ceil(rows)];
+                    let name = note_name(n);
+                    band.label(
+                        core::str::from_utf8(&name)
+                            .expect("ASCII note")
+                            .trim_ascii_end(),
+                        Point::new(4, 4),
+                        Alignment::Left,
+                        ink(part),
+                    );
+                } else if part == Part::Bass && row < rows + 3 {
+                    band.label(
+                        ["CUT", "RES", "DRV"][row - rows],
+                        Point::new(4, 4),
+                        Alignment::Left,
+                        INKS[row - rows],
+                    );
                 }
             }
+            lcd.write_rect_buffered(
+                0,
+                (TOP + y) as u16,
+                LEFT as u16,
+                16,
+                band.pixels.as_flattened(),
+            )?;
         }
-        self.pitches[..self.rows].sort_unstable_by(|a, b| b.cmp(a));
-        for (row, &note) in self.pitches[..self.rows].iter().enumerate() {
-            text.text(0, row + 3, note_name(note), palette::MUTED);
-        }
-        if track == Part::Bass {
-            for (row, (label, ink)) in [
-                (b"CUT", palette::CYAN),
-                (b"RES", RESONANCE),
-                (b"DRV", DRIVE),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                text.text(0, self.rows + row + 3, label, ink);
+        if part.is_kit() {
+            let h = if part == Part::Tr808 { 32 } else { 22 };
+            for (i, v) in part.pads().iter().enumerate() {
+                let mut band = Band::new(strip, 0, 0, LEFT as u16, 12, paper);
+                band.label(drum_label(*v), Point::new(4, 1), Alignment::Left, ink(part));
+                lcd.write_rect_buffered(
+                    0,
+                    (TOP + i * h + (h - 12) / 2) as u16,
+                    LEFT as u16,
+                    12,
+                    band.pixels.as_flattened(),
+                )?;
             }
         }
+        Ok(())
     }
 
+    fn buttons(
+        lcd: &mut Display,
+        strip: &mut [[u8; 2]],
+        part: Part,
+        active: Slot,
+        next: Slot,
+    ) -> Result<(), Error> {
+        let skin = style(part);
+        for (i, label) in ["1", "2", "3", "4"].into_iter().enumerate() {
+            let number = i as u8 + 1;
+            let selected = number == active.number();
+            let pending = number == next.number() && next != active;
+            let mut button = Band::new(strip, 0, 0, 60, 16, skin.background);
+            let cap = if selected {
+                if part == Part::Tr909 {
+                    drums::GRAPHITE
+                } else {
+                    palette::WHITE
+                }
+            } else {
+                skin.grid
+            };
+            button.rect(Point::new(1, 2), Size::new(56, 14), cap);
+            button.label(
+                label,
+                Point::new(30, 4),
+                Alignment::Center,
+                if selected { skin.background } else { ink(part) },
+            );
+            if pending {
+                button.rect(Point::new(2, 14), Size::new(54, 2), drums::HOT);
+            }
+            lcd.write_rect_buffered(i as u16 * 60, 208, 60, 16, button.pixels.as_flattened())?;
+        }
+        Ok(())
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "The grid borrows the shared panel drawing buffers."
+    )]
     pub(super) async fn paint(
         &mut self,
         lcd: &mut Display,
@@ -121,76 +424,65 @@ impl Grid {
         strip: &mut [[u8; 2]],
         (seq, part): (Sequencer, Part),
         position: Option<Position>,
+        bank: BankPosition,
     ) -> Result<(), Error> {
+        let next = seq.slot(seq.channel, part);
         let position = position.filter(|_| seq.transport.playing());
-        let bar = position.map_or(seq.bar, |p| p.step / 16);
+        let slot = position.map_or(next, |_| bank.slot);
+        let clip = slot.clip(part, seq.channel);
+        let bar = position.map_or(seq.bar % clip.bars, |_| bank.bar % clip.bars);
         let head = position.map(|p| p.step % 16);
         let enabled = seq.enabled[seq.channel.index()];
-        let key = (part, seq.channel, bar, enabled);
+        let key = (slot, bar, enabled);
         let changed = self.previous != Some(key);
-        if changed
-            && self
-                .previous
-                .is_none_or(|(track, channel, _, _)| (track, channel) != (part, seq.channel))
-        {
-            self.labels(text, part, seq.channel);
+        if self.buttons != Some((slot, next)) {
+            Self::buttons(lcd, strip, part, slot, next)?;
+            self.buttons = Some((slot, next));
         }
-        text.number(16, 0, 1, u32::from(bar) + 1, palette::WHITE);
-        text.text(17, 0, b"/4", palette::MUTED);
-        if let Some(step) = head {
-            text.number(17, 1, 2, u32::from(step) + 1, palette::WHITE);
+        text.number(16, 0, 1, u32::from(bar) + 1, ink(part));
+        text.text(17, 0, [b'/', b'0' + clip.bars], ink(part));
+        if let Some(head) = head {
+            text.number(17, 1, 2, u32::from(head) + 1, ink(part));
         } else {
-            text.text(17, 1, b"--", palette::MUTED);
+            text.text(17, 1, b"--", ink(part));
         }
-        if !changed && self.head == head {
+        if slot != next {
+            text.text(0, 14, b"QUEUED   / NEXT BAR ", ink(part));
+            text.number(7, 14, 1, u32::from(next.number()), ink(part));
+        } else {
+            text.text(0, 14, b"F G A B  /  PATTERNS", ink(part));
+        }
+        if !changed && head == self.head {
             return Ok(());
         }
+        if changed {
+            if self.previous.is_none_or(|p| p.0 != slot) {
+                Self::labels(lcd, strip, part, clip)?;
+            }
+            self.roll.read(clip, part, bar);
+        }
         let mut lcd = lcd.as_async(clock)?;
-        for step in 0..16_u8 {
+        let rows = Roll::rows(part, clip);
+        for step in 0..16u8 {
             if !changed && self.head != Some(step) && head != Some(step) {
                 continue;
             }
-            let absolute = usize::from(bar) * 16 + usize::from(step);
-            let cells: [Cell; 8] = core::array::from_fn(|row| {
-                if part.is_kit() {
-                    Cell {
-                        pixels: if part
-                            .pads()
-                            .get(row)
-                            .is_some_and(|v| pattern::drums(part, absolute).contains(v))
-                        {
-                            0x7fe
-                        } else {
-                            0
-                        },
-                        onset: true,
-                        ..Cell::default()
-                    }
-                } else if row < self.rows {
-                    note_cell(part, seq.channel, absolute, self.pitches[row])
-                } else {
-                    Cell::default()
-                }
-            });
-            let automation: [[u8; WIDTH + 1]; 3] = core::array::from_fn(|lane| {
-                core::array::from_fn(|x| automation_height(seq.channel, absolute, x, lane))
-            });
             for top in [0, HALF] {
                 let pixels = &mut strip[..WIDTH * HALF];
                 for y in top..top + HALF {
                     for x in 0..WIDTH {
-                        pixels[(y - top) * WIDTH + x] = pixel(
-                            part,
-                            &cells,
-                            &automation,
-                            self.rows,
-                            step,
-                            head == Some(step),
-                            enabled,
-                            x,
-                            y,
-                        )
-                        .to_be_bytes();
+                        pixels[(y - top) * WIDTH + x] = self
+                            .roll
+                            .pixel(
+                                part,
+                                rows,
+                                usize::from(step),
+                                x,
+                                y,
+                                head == Some(step),
+                                enabled,
+                            )
+                            .to_be_bytes();
                     }
                 }
                 lcd.write_rect_buffered(
@@ -211,145 +503,18 @@ impl Grid {
 }
 
 fn note_name(note: u8) -> [u8; 4] {
-    const NAMES: [[u8; 2]; 12] = [
-        *b"C ", *b"C#", *b"D ", *b"D#", *b"E ", *b"F ", *b"F#", *b"G ", *b"G#", *b"A ", *b"A#",
-        *b"B ",
+    const NAMES: [&[u8; 2]; 12] = [
+        b"C ", b"C#", b"D ", b"D#", b"E ", b"F ", b"F#", b"G ", b"G#", b"A ", b"A#", b"B ",
     ];
-    let [letter, accidental] = NAMES[usize::from(note % 12)];
-    let octave = b'0' + (note / 12).saturating_sub(1);
-    if accidental == b'#' {
-        [letter, accidental, octave, b' ']
+    let [letter, accidental] = *NAMES[usize::from(note % 12)];
+    let octave = if note < 12 {
+        *b"-1"
     } else {
-        [letter, octave, b' ', b' ']
-    }
-}
-
-fn note_cell(track: Part, channel: Channel, absolute: usize, note: u8) -> Cell {
-    let strike = pattern::step(track, channel, absolute);
-    let mut cell = Cell {
-        onset: strike.notes.contains(&note),
-        accent: strike.velocity >= 96,
-        slide: strike.slide,
-        ..Cell::default()
+        [b'0' + note / 12 - 1, b' ']
     };
-    // A u8 gate spans at most 32 steps. Include notes tied over a bar boundary.
-    // The preset monophonic tracks terminate their old pitch at a new strike.
-    for age in 0..32 {
-        let step = pattern::step(
-            track,
-            channel,
-            (absolute + pattern::STEPS - age) % pattern::STEPS,
-        );
-        if step.notes.contains(&note) {
-            let gate = if step.slide {
-                step.gate.max(8)
-            } else {
-                step.gate
-            };
-            for x in 0..WIDTH {
-                let elapsed = age * 8 + x * 8 / WIDTH;
-                if elapsed < usize::from(gate) {
-                    cell.pixels |= 1 << x;
-                }
-            }
-        }
-        if track != Part::Organ && !step.notes.is_empty() {
-            break;
-        }
-    }
-    cell
-}
-
-fn automation_height(channel: Channel, step: usize, x: usize, lane: usize) -> u8 {
-    // Include the previous column's final point so adjacent strips meet.
-    let (step, fraction) = if x == 0 {
-        ((step + pattern::STEPS - 1) % pattern::STEPS, 234)
+    if accidental == b' ' {
+        [letter, octave[0], octave[1], b' ']
     } else {
-        (step, ((x - 1) * 256 / WIDTH) as u8)
-    };
-    let value = pattern::automation(channel, step, fraction);
-    let scaled = match lane {
-        0 => u32::from(value.cutoff_hz.saturating_sub(150)).min(1650) * 12 / 1650,
-        1 => u32::from(value.resonance.saturating_sub(64)).min(36) * 12 / 36,
-        _ => u32::from(value.overdrive_db).min(36) * 12 / 36,
-    };
-    14 - scaled as u8
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "One small strip is composed without a framebuffer."
-)]
-fn pixel(
-    track: Part,
-    cells: &[Cell; 8],
-    automation: &[[u8; WIDTH + 1]; 3],
-    rows: usize,
-    step: u8,
-    head: bool,
-    enabled: bool,
-    x: usize,
-    y: usize,
-) -> Rgb565 {
-    let row = y / ROW;
-    let dy = y % ROW;
-    let background = if head { CURSOR } else { BACKGROUND };
-    if row < rows {
-        let cell = cells[row];
-        if cell.onset && track == Part::Bass {
-            // Small A/S flags above each struck note: accent and outgoing slide.
-            let flag = if cell.accent && (1..=3).contains(&x) {
-                Some(([2, 5, 7, 5, 5], x - 1))
-            } else if cell.slide && (7..=9).contains(&x) {
-                Some(([3, 4, 2, 1, 6], x - 7))
-            } else {
-                None
-            };
-            if let Some((glyph, dx)) = flag
-                && (1..=5).contains(&dy)
-                && glyph[dy - 1] & (4 >> dx) != 0
-            {
-                return if enabled { palette::WHITE } else { BEAT };
-            }
-        }
-        let note_top = if track == Part::Bass { 7 } else { 3 };
-        if (note_top..=12).contains(&dy) && cell.pixels & (1 << x) != 0 {
-            return if !enabled {
-                BEAT
-            } else if head {
-                palette::WHITE
-            } else {
-                match track {
-                    Part::Mono => palette::GREEN,
-                    Part::Supersaw => super::jp8080::STYLE.trace,
-                    Part::Wavetable => super::microwave::STYLE.trace,
-                    Part::Organ => super::ORGAN_LIME,
-                    Part::Bass if cell.accent => RESONANCE,
-                    Part::Bass => ACID,
-                    Part::Tr909 => palette::CYAN,
-                    Part::Tr808 => super::drums::HOT,
-                }
-            };
-        }
-    } else if track == Part::Bass && row < rows + 3 {
-        let lane = row - rows;
-        let a = usize::from(automation[lane][x]);
-        let b = usize::from(automation[lane][x + 1]);
-        if (a.min(b)..=a.max(b)).contains(&dy) {
-            return if !enabled {
-                BEAT
-            } else if head {
-                palette::WHITE
-            } else {
-                [palette::CYAN, RESONANCE, DRIVE][lane]
-            };
-        }
-    } else {
-        return background;
-    }
-    if x == 0 || dy == 15 {
-        if step.is_multiple_of(4) { BEAT } else { GRID }
-    } else {
-        background
+        [letter, accidental, octave[0], octave[1]]
     }
 }

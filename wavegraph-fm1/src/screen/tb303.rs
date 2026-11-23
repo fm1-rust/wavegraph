@@ -109,13 +109,18 @@ impl Snapshot {
     fn dial(self, knob: Knob) -> Dial {
         let (min, max) = knob.limits();
         let marker = self.automation.and_then(|a| {
-            let value = match knob {
-                Knob::Cutoff => cutoff_detent(a.cutoff_hz),
-                Knob::Resonance => a.resonance,
-                Knob::Overdrive => a.overdrive_db,
-                _ => return None,
+            let cc = crate::bass::CONTROLLERS[knob as usize];
+            let midi = a.get(cc)?;
+            let value = if knob == Knob::Cutoff {
+                let wavegraph_303::Message::CutoffHz(hz) = crate::bass::midi_parameter(cc, midi)?
+                else {
+                    return None;
+                };
+                cutoff_detent(hz as u16)
+            } else {
+                ((u16::from(midi) * u16::from(max - min) + 63) / 127) as u8
             };
-            let tip = Band::knob_offset(value, max);
+            let tip = Band::knob_offset(value, max - min);
             Some(Point::new(tip.x * 13 / 7 - 1, tip.y * 11 / 7))
         });
         Dial {

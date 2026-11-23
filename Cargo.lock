@@ -432,6 +432,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b8215034f6bc076597465737e237afa33ca92c0f16c76647268a6953a4b7fcf"
 
 [[package]]
+name = "midly"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -875,8 +881,10 @@ dependencies = [
  "fm1-controls",
  "fm1-graphics",
  "fm1-rticx",
+ "futures-util",
  "heapless",
  "micromath",
+ "midly",
  "static_cell",
  "wavegraph",
  "wavegraph-303",

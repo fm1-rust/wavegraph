@@ -1,18 +1,18 @@
 //! FM-1 master transport and one audio-clocked player for all factory patterns.
 
+use crate::bass::{self, CC_SLIDE};
 use crate::{
-    instrument::{Message, Note, Part},
+    instrument::{Message, Part, Track},
     panel::{Assignment, CHANNELS, Channel, Navigation},
 };
-use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error};
-use wavegraph_303::Message as BassMessage;
+use pattern::{Automation, BAR, Clip, Slot};
+use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error, midi::MidiMessage};
 use wavegraph_909::{Samples, Tr909, Voice};
 use wavegraph_sample::I24;
 
 pub(super) mod pattern;
 
 const SUBSTEPS: usize = pattern::STEPS * 8;
-const AUTOMATION_FRAMES: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Transport {
@@ -51,6 +51,7 @@ pub(super) struct Sequencer {
     pub(super) channel: Channel,
     pub(super) bar: u8,
     pub(super) enabled: [bool; CHANNELS],
+    selected: [[Slot; Part::ALL.len()]; CHANNELS],
 }
 
 impl Sequencer {
@@ -60,7 +61,17 @@ impl Sequencer {
         channel: Channel::One,
         bar: 0,
         enabled: [true; CHANNELS],
+        selected: [[Slot::FIRST; Part::ALL.len()]; CHANNELS],
     };
+
+    pub(super) fn slot(&self, channel: Channel, part: Part) -> Slot {
+        self.selected[channel.index()][part as usize]
+    }
+
+    pub(super) fn choose(&mut self, part: Part, slot: Slot) {
+        self.selected[self.channel.index()][part as usize] = slot;
+        self.bar = 0;
+    }
 
     pub(super) fn toggle_page(&mut self) {
         self.page = if self.page.is_none() {
@@ -83,10 +94,13 @@ impl Sequencer {
         clippy::arithmetic_side_effects,
         reason = "A bar index plus an i8 delta fits i16."
     )]
-    pub(super) fn turn_bar(&mut self, detents: i8) {
+    pub(super) fn turn_bar(&mut self, part: Part, detents: i8) {
         if !self.transport.playing() {
-            self.bar = u8::try_from((i16::from(self.bar) + i16::from(detents)).rem_euclid(4))
-                .expect("four bars");
+            let bars = self.slot(self.channel, part).clip(part, self.channel).bars;
+            self.bar = u8::try_from(
+                (i16::from(self.bar) + i16::from(detents)).rem_euclid(i16::from(bars)),
+            )
+            .expect("four bars");
         }
     }
 
@@ -213,26 +227,21 @@ impl StepClock {
         frames
     }
 
-    /// Loop position and within-step fraction at the current or last rendered frame.
+    /// Loop position at the last rendered frame.
     /// Quarter-note phase shares the same sub-frame remainder as drum triggers.
     #[allow(
         clippy::arithmetic_side_effects,
         clippy::cast_possible_truncation,
         reason = "Normalized tick positions and their fractions stay within 0..256."
     )]
-    fn position(&self, last_frame: bool) -> (Position, u8) {
+    fn position(&self) -> Position {
         let tick = self.next.wrapping_sub(1) % SUBSTEPS;
-        let phase = self.phase - if last_frame { self.increment } else { 0 };
-        let fine = fraction_32(phase, self.threshold);
-        let fraction = (tick % 8) * 32 + usize::from(fine);
+        let fine = fraction_32(self.phase - self.increment, self.threshold);
         let beat_phase = (tick % 32) * 8 + usize::from(fine >> 2);
-        (
-            Position {
-                step: (tick / 8) as u8,
-                beat_phase: beat_phase as u8,
-            },
-            fraction as u8,
-        )
+        Position {
+            step: (tick / 8) as u8,
+            beat_phase: beat_phase as u8,
+        }
     }
 
     #[cfg(test)]
@@ -279,33 +288,187 @@ fn fraction_32(mut phase: u32, threshold: u32) -> u8 {
     fraction
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BankPosition {
+    pub(crate) slot: Slot,
+    pub(crate) bar: u8,
+}
+
 #[derive(Clone, Copy)]
-struct PatternGate {
-    held: &'static [u8],
-    off_at: Option<usize>,
+struct Lane {
+    position: BankPosition,
+    tick: u16,
+    cursor: usize,
+    held: [Option<u8>; 4],
+    automation: Automation,
     slide: bool,
+    waiting: bool,
 }
 
-impl PatternGate {
-    const CLOSED: Self = Self {
-        held: &[],
-        off_at: None,
+impl Lane {
+    const EMPTY: Self = Self {
+        position: BankPosition {
+            slot: Slot::FIRST,
+            bar: 0,
+        },
+        tick: 0,
+        cursor: 0,
+        held: [None; 4],
+        automation: Automation::EMPTY,
         slide: false,
+        waiting: false,
     };
+
+    fn start(slot: Slot) -> Self {
+        Self {
+            position: BankPosition { slot, bar: 0 },
+            ..Self::EMPTY
+        }
+    }
+
+    fn release(&mut self, route: &mut Route<'_>, cut_kit: bool) -> Result<(), Error> {
+        let part = route.track.assignment.part;
+        for held in &mut self.held {
+            if let Some(n) = held.take() {
+                route.wire(MidiMessage::Off(n));
+                route.graph(part.note_off(n))?;
+            }
+        }
+        if cut_kit && part.is_kit() {
+            route.graph(Message::Drum(DrumMessage::Stop))?;
+        }
+        if self.slide {
+            route.wire(MidiMessage::Control(CC_SLIDE, 0));
+        }
+        Ok(())
+    }
+
+    fn restore(&self, route: &mut Route<'_>) -> Result<(), Error> {
+        for (cc, _) in self.automation.values() {
+            if let Some(value) = route.track.bass.midi_value(cc, route.track.voice) {
+                route.wire(MidiMessage::Control(cc, value));
+            }
+            if let Some(message) = route.track.bass.restore(cc, route.track.voice) {
+                route.graph(Message::Bass(message))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn chase(&self, route: &mut Route<'_>) -> Result<(), Error> {
+        for (cc, value) in self.automation.values() {
+            if let Some(message) = bass::midi_parameter(cc, value) {
+                route.wire(MidiMessage::Control(cc, value));
+                route.graph(Message::Bass(message))?;
+            }
+        }
+        if self.slide {
+            route.wire(MidiMessage::Control(CC_SLIDE, 127));
+        }
+        Ok(())
+    }
+
+    fn dispatch(
+        &mut self,
+        midi: MidiMessage,
+        enabled: bool,
+        route: &mut Route<'_>,
+    ) -> Result<(), Error> {
+        let part = route.track.assignment.part;
+        if let MidiMessage::Control(cc, value) = midi
+            && part == Part::Bass
+        {
+            if cc == CC_SLIDE {
+                self.slide = value >= 64;
+            } else {
+                self.automation.set(cc, value);
+            }
+        }
+        if !enabled {
+            return Ok(());
+        }
+        route.wire(midi);
+        let message = match midi {
+            MidiMessage::On(n) if part.is_kit() => part
+                .drum(n.number)
+                .map(|v| Message::Drum(DrumMessage::Trigger(v, n.velocity))),
+            MidiMessage::Off(_) if part.is_kit() => None,
+            MidiMessage::On(n) => {
+                let legato = self.slide || self.held.iter().any(Option::is_some);
+                if matches!(part, Part::Organ | Part::Wavetable) {
+                    if !self.held.contains(&Some(n.number)) {
+                        let slot = self
+                            .held
+                            .iter_mut()
+                            .find(|slot| slot.is_none())
+                            .ok_or(Error::Capacity)?;
+                        *slot = Some(n.number);
+                    }
+                } else {
+                    self.held[0] = Some(n.number);
+                }
+                Some(part.note_on(n, legato))
+            }
+            MidiMessage::Off(n) => self.held.iter_mut().find(|v| **v == Some(n)).map(|slot| {
+                *slot = None;
+                part.note_off(n)
+            }),
+            MidiMessage::Control(cc, v) if part == Part::Bass => {
+                bass::midi_parameter(cc, v).map(Message::Bass)
+            }
+            MidiMessage::Control(..) => None,
+        };
+        if let Some(message) = message {
+            route.graph(message)?;
+        }
+        Ok(())
+    }
+
+    fn read(&mut self, clip: &Clip, enabled: bool, route: &mut Route<'_>) -> Result<(), Error> {
+        while let Some(e) = clip.events.get(self.cursor) {
+            if e.tick() != self.tick {
+                break;
+            }
+            self.dispatch(e.message(), enabled, route)?;
+            self.cursor = self.cursor.saturating_add(1);
+        }
+        Ok(())
+    }
 }
 
-/// One audio clock for notes, gates, drum strikes, automation and the playhead.
-/// Each mixer channel owns its sequence gates and can be taken over independently.
+/// One route preserves the MIDI stream for USB and translates it at the assigned graph inlet.
+struct Route<'a> {
+    frame: usize,
+    channel: Channel,
+    track: &'a Track,
+    graph: &'a mut dyn FnMut(Channel, Event<Message>) -> Result<(), Error>,
+    wire: &'a mut dyn FnMut(Channel, Event<MidiMessage>),
+}
+impl Route<'_> {
+    fn graph(&mut self, m: Message) -> Result<(), Error> {
+        (self.graph)(self.channel, event(self.frame, m))
+    }
+    fn wire(&mut self, m: MidiMessage) {
+        (self.wire)(
+            self.channel,
+            Event {
+                frame: self.frame,
+                port: 0,
+                message: m,
+            },
+        );
+    }
+}
+
+/// One audio clock for all four independent clip cursors.
 #[derive(Clone, Copy)]
 pub(super) struct PatternPlayer {
     clock: StepClock,
     transport: Transport,
     assignments: [Assignment; CHANNELS],
     enabled: [bool; CHANNELS],
-    gates: [PatternGate; CHANNELS],
-    automation_left: usize,
-    /// Clock position of the last set of 303 control messages sent to the graph.
-    pub(super) automation_phase: (u8, u8),
+    lanes: [Lane; CHANNELS],
+    pub(super) requested: [Slot; CHANNELS],
     position: Option<Position>,
 }
 
@@ -316,9 +479,8 @@ impl PatternPlayer {
             transport: Transport::INITIAL,
             assignments: Navigation::INITIAL.assignments,
             enabled: [false; CHANNELS],
-            gates: [PatternGate::CLOSED; CHANNELS],
-            automation_left: 0,
-            automation_phase: (0, 0),
+            lanes: [Lane::EMPTY; CHANNELS],
+            requested: [Slot::FIRST; CHANNELS],
             position: None,
         }
     }
@@ -327,147 +489,60 @@ impl PatternPlayer {
         self.position
     }
 
-    #[cfg(test)]
-    fn automation(&self) -> Option<pattern::Automation> {
-        self.position
-            .filter(|_| self.enabled[Channel::Three.index()])
-            .map(|_| {
-                let (position, fraction) = self.clock.position(true);
-                pattern::automation(Channel::Three, usize::from(position.step), fraction)
-            })
+    pub(super) fn banks(&self) -> [BankPosition; CHANNELS] {
+        self.lanes.map(|l| l.position)
     }
 
-    fn release(
-        &mut self,
-        channel: Channel,
-        frame: usize,
-        emit: &mut impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
-    ) -> Result<(), Error> {
+    pub(super) fn automation(&self, channel: Channel) -> Option<Automation> {
         let i = channel.index();
-        for &note in self.gates[i].held {
-            let message = self.assignments[i].part.note_off(note);
-            emit(channel, event(frame, message))?;
-        }
-        self.gates[i] = PatternGate::CLOSED;
-        Ok(())
+        (self.transport.playing() && self.enabled[i] && self.assignments[i].part == Part::Bass)
+            .then_some(self.lanes[i].automation)
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "Tick and bounded gate duration fit usize before the four-bar wrap."
-    )]
-    fn on_tick(
-        &mut self,
-        tick: usize,
-        frame: usize,
-        emit: &mut impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
-    ) -> Result<(), Error> {
-        for channel in Channel::ALL {
-            if self.gates[channel.index()].off_at == Some(tick) {
-                self.release(channel, frame, emit)?;
-            }
-        }
-        if !tick.is_multiple_of(8) {
-            return Ok(());
-        }
-        let step = tick / 8;
-        for channel in Channel::ALL {
-            let i = channel.index();
-            if !self.enabled[i] {
-                continue;
-            }
-            let part = self.assignments[i].part;
-            if part.is_kit() {
-                for &voice in pattern::drums(part, step) {
-                    let velocity = match (part, voice) {
-                        (Part::Tr808, Voice::Kick) => 96,
-                        (Part::Tr808, Voice::Snare) => {
-                            if step % 16 == 15 {
-                                90
-                            } else {
-                                62
-                            }
-                        }
-                        (Part::Tr808, Voice::ClosedHat) => 72,
-                        (Part::Tr808, Voice::OpenHat) => 86,
-                        _ => 127,
-                    };
-                    emit(
-                        channel,
-                        event(frame, Message::Drum(DrumMessage::Trigger(voice, velocity))),
-                    )?;
-                }
-                continue;
-            }
-            let data = pattern::step(part, channel, step);
-            if data.notes.is_empty() {
-                if self.gates[i].slide {
-                    self.release(channel, frame, emit)?;
-                }
-                continue;
-            }
-            let slide = self.gates[i].slide;
-            if !slide {
-                self.release(channel, frame, emit)?;
-            }
-            for &note in data.notes {
-                let message = part.note_on(
-                    Note {
-                        number: note,
-                        velocity: data.velocity,
-                    },
-                    slide,
-                );
-                emit(channel, event(frame, message))?;
-            }
-            let slide = part == Part::Bass && data.slide;
-            self.gates[i] = PatternGate {
-                held: data.notes,
-                slide,
-                off_at: (!slide).then(|| (tick + usize::from(data.gate.max(1))) % SUBSTEPS),
-            };
-        }
-        Ok(())
-    }
-
-    /// Emit offsets relative to this block. `enabled` includes each channel's
-    /// pattern mute and whether a live note presently owns its synth.
     pub(super) fn render(
         &mut self,
         frames: usize,
         transport: Transport,
-        assignments: [Assignment; CHANNELS],
+        tracks: &[Track; CHANNELS],
         enabled: [bool; CHANNELS],
         mut emit: impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
+        mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<(), Error> {
         if frames == 0 {
             return Ok(());
         }
         let restart = self.transport.generation != transport.generation;
-        let mut bass = [false; CHANNELS];
         for channel in Channel::ALL {
             let i = channel.index();
-            let changed = self.assignments[i] != assignments[i];
-            if changed {
-                // The old processor is being replaced in this block.
-                self.gates[i] = PatternGate::CLOSED;
-            } else if restart || (self.enabled[i] && !enabled[i]) {
-                if assignments[i].part.is_kit() {
-                    emit(channel, event(0, Message::Drum(DrumMessage::Stop)))?;
+            let mut route = Route {
+                frame: 0,
+                channel,
+                track: &tracks[i],
+                graph: &mut emit,
+                wire: &mut wire,
+            };
+            let changed = self.assignments[i] != tracks[i].assignment;
+            let lane = &mut self.lanes[i];
+            if self.transport.playing() && self.enabled[i] && (restart || changed || !enabled[i]) {
+                route.wire(MidiMessage::Control(123, 0));
+                if changed {
+                    route.wire(MidiMessage::Control(CC_SLIDE, 0));
                 } else {
-                    self.release(channel, 0, &mut emit)?;
+                    lane.release(&mut route, true)?;
+                    lane.restore(&mut route)?;
                 }
             }
-            bass[i] = enabled[i] && assignments[i].part == Part::Bass;
-            if bass[i] && (changed || !self.enabled[i]) {
-                self.automation_left = 0;
+            if restart || changed || !transport.playing() {
+                *lane = Lane::start(self.requested[i]);
+                lane.waiting = changed && !restart && transport.playing();
+            } else if enabled[i] && !self.enabled[i] {
+                lane.chase(&mut route)?;
             }
+            self.assignments[i] = tracks[i].assignment;
         }
         if restart {
             self.clock.restart();
-            self.automation_left = 0;
         }
-        self.assignments = assignments;
         self.enabled = enabled;
         self.transport = transport;
         self.clock.set_tempo(transport.bpm);
@@ -478,38 +553,59 @@ impl PatternPlayer {
         let mut frame = 0;
         while frame < frames {
             if let Some(tick) = self.clock.take_tick() {
-                self.on_tick(tick, frame, &mut emit)?;
-            }
-            if self.automation_left == 0 {
-                if bass.contains(&true) {
-                    let (position, fraction) = self.clock.position(false);
-                    self.automation_phase = (position.step, fraction);
-                    for channel in Channel::ALL
-                        .into_iter()
-                        .filter(|channel| bass[channel.index()])
-                    {
-                        let [cutoff, resonance, drive] = pattern::automation_values(
-                            channel,
-                            usize::from(position.step),
-                            fraction,
-                        );
-                        for message in [
-                            BassMessage::CutoffHz(cutoff),
-                            BassMessage::Resonance(resonance / 100.0),
-                            BassMessage::OverdriveDb(drive),
-                        ] {
-                            emit(channel, event(frame, Message::Bass(message)))?;
-                        }
+                for channel in Channel::ALL {
+                    let i = channel.index();
+                    let lane = &mut self.lanes[i];
+                    let part = tracks[i].assignment.part;
+                    let mut route = Route {
+                        frame,
+                        channel,
+                        track: &tracks[i],
+                        graph: &mut emit,
+                        wire: &mut wire,
+                    };
+                    let downbeat = tick.is_multiple_of(usize::from(BAR));
+                    if lane.waiting && !downbeat {
+                        continue;
                     }
+                    let old = lane.position.slot.clip(part, channel);
+                    let wrap = lane.tick == old.length();
+                    let switch = downbeat && lane.position.slot != self.requested[i];
+                    if wrap || switch || lane.waiting {
+                        if wrap {
+                            lane.read(old, enabled[i], &mut route)?;
+                        }
+                        if enabled[i] && !lane.waiting {
+                            lane.release(&mut route, false)?;
+                            if switch {
+                                route.wire(MidiMessage::Control(123, 0));
+                                lane.restore(&mut route)?;
+                            }
+                        }
+                        let slot = if switch {
+                            self.requested[i]
+                        } else {
+                            lane.position.slot
+                        };
+                        // Controllers latch across repeats of the same MIDI clip.
+                        let controls = if wrap && !switch {
+                            lane.automation
+                        } else {
+                            Automation::EMPTY
+                        };
+                        *lane = Lane::start(slot);
+                        lane.automation = controls;
+                    }
+                    let clip = lane.position.slot.clip(part, channel);
+                    lane.position.bar =
+                        u8::try_from(lane.tick / BAR).map_err(|_| Error::Capacity)?;
+                    lane.read(clip, enabled[i], &mut route)?;
+                    lane.tick = lane.tick.saturating_add(1);
                 }
-                self.automation_left = AUTOMATION_FRAMES;
             }
-            let available = frames.saturating_sub(frame).min(self.automation_left);
-            let count = self.clock.advance(available);
-            frame = frame.saturating_add(count);
-            self.automation_left = self.automation_left.saturating_sub(count);
+            frame = frame.saturating_add(self.clock.advance(frames.saturating_sub(frame)));
         }
-        self.position = Some(self.clock.position(true).0);
+        self.position = Some(self.clock.position());
         Ok(())
     }
 }
@@ -703,6 +799,7 @@ impl Process<Message, I24> for DrumMachine {
 
 #[cfg(test)]
 mod tests {
+    use wavegraph_303::Message as BassMessage;
     extern crate alloc;
 
     use super::*;
@@ -725,12 +822,13 @@ mod tests {
             .render(
                 frames,
                 transport,
-                Navigation::SYNTH_RACK.assignments,
+                &Track::rack(Navigation::SYNTH_RACK.assignments),
                 enabled,
                 |track, event| {
                     events.push((track, event));
                     Ok(())
                 },
+                |_, _| (),
             )
             .expect("unbounded host event sink");
         events
@@ -744,7 +842,7 @@ mod tests {
         assert_eq!(seq.channel, Channel::Four);
         seq.toggle_track();
         assert!(!seq.enabled[3]);
-        seq.turn_bar(-1);
+        seq.turn_bar(Part::Bass, -1);
         assert_eq!(seq.bar, 3);
         seq.turn(1, 127);
         assert_eq!(seq.transport.bpm, 122);
@@ -754,7 +852,7 @@ mod tests {
         seq.turn(1, 2);
         assert_eq!(seq.transport.bpm, 124);
         seq.transport.toggle();
-        seq.turn_bar(1);
+        seq.turn_bar(Part::Bass, 1);
         assert_eq!(seq.bar, 3);
         seq.turn(0, -128);
         assert_eq!(seq.transport.bpm, 30);
@@ -819,9 +917,9 @@ mod tests {
             }
             let tick = clock.tick();
             let expected = u8::try_from(beat_units * 256 / 48_000).expect("one quarter note");
-            assert_eq!(clock.position(true).0.beat_phase, expected);
+            assert_eq!(clock.position().beat_phase, expected);
             if tick.is_some_and(|tick| tick % 32 == 0) {
-                assert_eq!(clock.position(true).0.beat_phase, 0);
+                assert_eq!(clock.position().beat_phase, 0);
             }
             beat_units = (beat_units + if frame < 9000 { 2 } else { 3 }) % 48_000;
         }
@@ -881,19 +979,32 @@ mod tests {
 
     #[test]
     fn factory_808_fills_the_909_rests_and_both_303s_play_their_own_slides() {
-        let mut counts = [0; 4];
-        for i in 0..pattern::STEPS {
-            for voice in pattern::drums(Part::Tr808, i) {
-                assert!(pattern::drums(Part::Tr909, i).is_empty());
-                let index = Part::Tr808
-                    .pads()
-                    .iter()
-                    .position(|v| v == voice)
-                    .expect("factory hit has an 808 pad");
-                counts[index] += 1;
+        let kit_steps = |part| {
+            let mut steps = [0_u8; 64];
+            for &e in Slot::FIRST.clip(part, Channel::Three).events {
+                if let MidiMessage::On(n) = e.message() {
+                    let drum = part.drum(n.number).expect("supported kit voice");
+                    steps[usize::from(e.tick() / 8)] |= 1 << drum as usize;
+                }
             }
+            steps
+        };
+        let fills = kit_steps(Part::Tr808);
+        let main = kit_steps(Part::Tr909);
+        for (a, b) in fills.iter().zip(main) {
+            assert!(*a == 0 || b == 0);
         }
-        assert_eq!(counts, [4, 4, 6, 3]);
+        assert_eq!(
+            Part::Tr808
+                .pads()
+                .iter()
+                .map(|v| fills
+                    .iter()
+                    .filter(|mask| **mask & (1 << *v as usize) != 0)
+                    .count())
+                .collect::<Vec<_>>(),
+            [4, 4, 6, 3]
+        );
 
         let mut player = PatternPlayer::new((48_000, 1));
         let mut slides = Vec::new();
@@ -904,7 +1015,7 @@ mod tests {
                     bpm: 120,
                     ..playing()
                 },
-                Navigation::INITIAL.assignments,
+                &Track::rack(Navigation::INITIAL.assignments),
                 [true; CHANNELS],
                 |channel, event| {
                     if let Message::Bass(BassMessage::NoteOn {
@@ -915,6 +1026,7 @@ mod tests {
                     }
                     Ok(())
                 },
+                |_, _| (),
             )
             .expect("unbounded host event sink");
         assert_eq!(
@@ -974,7 +1086,7 @@ mod tests {
                 .iter()
                 .any(|(_, event)| event.message == Message::Drum(DrumMessage::Stop))
         );
-        assert_eq!(player.automation(), None);
+        assert_eq!(player.automation(Channel::Three), None);
         let mut restart = play;
         restart.toggle();
         restart.toggle();
@@ -993,7 +1105,7 @@ mod tests {
         restart.toggle();
         let stopped = render(&mut player, 128, restart, [false, true, true, true]);
         assert_eq!(player.position(), None);
-        assert_eq!(player.automation(), None);
+        assert_eq!(player.automation(Channel::Three), None);
         assert!(
             stopped
                 .iter()
@@ -1003,27 +1115,113 @@ mod tests {
     }
 
     #[test]
-    fn automation_is_bounded_interpolated_and_continuous_at_the_loop() {
-        let mut previous = pattern::automation_values(Channel::Three, 0, 0);
-        let mut changes = [false; 3];
-        for step in 0..pattern::STEPS {
-            for fraction in 0..=255 {
-                let values = pattern::automation_values(Channel::Three, step, fraction);
-                assert!((150.0..=1800.0).contains(&values[0]));
-                assert!((72.0..=94.0).contains(&values[1]));
-                assert!((12.0..=28.0).contains(&values[2]));
-                for lane in 0..3 {
-                    changes[lane] |= previous[lane] != values[lane];
-                    assert!((previous[lane] - values[lane]).abs() < 1.0);
+    fn original_acid_filter_and_drive_follow_the_four_bar_sweep() {
+        let clip = Slot::FIRST.clip(Part::Bass, Channel::One);
+        let mut controls = Automation::EMPTY;
+        let mut cursor = 0;
+        for (segment, (hz, res, drive)) in [
+            (180., 0.76, 12.),
+            (380., 0.88, 18.),
+            (1200., 0.94, 27.),
+            (300., 0.80, 15.),
+            (220., 0.74, 14.),
+            (620., 0.89, 22.),
+            (1800., 0.93, 28.),
+            (540., 0.84, 20.),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            while let Some(e) = clip.events.get(cursor)
+                && usize::from(e.tick()) <= segment * 64
+            {
+                if let MidiMessage::Control(cc, value) = e.message() {
+                    controls.set(cc, value);
                 }
-                previous = values;
+                cursor += 1;
+            }
+            let parameter =
+                |cc| bass::midi_parameter(cc, controls.get(cc).expect("automated lane"));
+            assert!(
+                matches!(parameter(74), Some(BassMessage::CutoffHz(v)) if (v-hz).abs() <= hz * 0.021)
+            );
+            assert!(
+                matches!(parameter(71), Some(BassMessage::Resonance(v)) if (v-res).abs() < 0.004)
+            );
+            assert!(
+                matches!(parameter(17), Some(BassMessage::OverdriveDb(v)) if (v-drive).abs() < 0.15)
+            );
+        }
+    }
+
+    #[test]
+    fn every_bank_key_has_a_distinct_clip_and_reassignment_recalls_the_slot() {
+        let mut seq = Sequencer::INITIAL;
+        for (key, (&expected, number)) in Slot::KEYS.iter().zip([0, 2, 4, 6].iter().zip(1..=4)) {
+            assert_eq!((key.0, key.1.number()), (expected, number));
+        }
+        for (part, channel) in Part::ALL
+            .into_iter()
+            .map(|part| (part, Channel::One))
+            .chain([(Part::Bass, Channel::Two)])
+        {
+            let mut previous = Vec::new();
+            for (_, slot) in Slot::KEYS {
+                let clip = slot.clip(part, channel);
+                assert!(!clip.pitches.is_empty());
+                assert!(!previous.contains(&clip.events));
+                previous.push(clip.events);
             }
         }
-        assert_eq!(changes, [true; 3]);
-        let first = pattern::automation_values(Channel::Three, 0, 0);
-        for lane in 0..3 {
-            assert!((previous[lane] - first[lane]).abs() < 1.0);
-        }
+        seq.choose(Part::Bass, Slot::KEYS[2].1);
+        seq.choose(Part::Tr808, Slot::KEYS[1].1);
+        assert_eq!(seq.slot(Channel::One, Part::Bass).number(), 3);
+        assert_eq!(seq.slot(Channel::One, Part::Tr808).number(), 2);
+        assert_eq!(seq.slot(Channel::Two, Part::Bass), Slot::FIRST);
+    }
+
+    #[test]
+    fn queue_commits_at_the_same_audio_frame_across_tracks_and_other_phrases_continue() {
+        let mut player = PatternPlayer::new((1000, 1));
+        let tracks = Track::rack(Navigation::INITIAL.assignments);
+        let play = Transport {
+            bpm: 120,
+            ..playing()
+        };
+        let tick = |p: &mut PatternPlayer, frames| {
+            let mut wire = Vec::new();
+            p.render(
+                frames,
+                play,
+                &tracks,
+                [true; 4],
+                |_, _| Ok(()),
+                |c, e| wire.push((c, e)),
+            )
+            .expect("host sink");
+            wire
+        };
+        tick(&mut player, 1);
+        player.requested[0] = Slot::KEYS[1].1;
+        player.requested[2] = Slot::KEYS[2].1;
+        tick(&mut player, 999);
+        player.requested[0] = Slot::KEYS[3].1;
+        player.requested[2] = Slot::FIRST; // cancel the pending drum switch
+        tick(&mut player, 999);
+        assert!(player.banks().iter().all(|b| b.slot == Slot::FIRST));
+        let events = tick(&mut player, 2);
+        assert!(events.iter().any(|(c, e)| *c == Channel::One
+            && e.frame == 1
+            && e.message == MidiMessage::Control(123, 0)));
+        assert_eq!(player.banks().map(|b| b.slot.number()), [4, 1, 1, 1]);
+        assert_eq!(player.banks().map(|b| b.bar), [0, 1, 1, 1]);
+        player.requested[1] = Slot::KEYS[1].1;
+        player.requested[2] = Slot::KEYS[2].1;
+        tick(&mut player, 2000);
+        assert_eq!(player.banks().map(|b| b.slot.number()), [4, 2, 3, 1]);
+        assert_eq!(player.banks().map(|b| b.bar), [1, 0, 0, 2]);
+        tick(&mut player, 2000);
+        assert_eq!(player.banks().map(|b| b.bar), [0, 1, 0, 3]);
     }
 
     #[test]
@@ -1033,9 +1231,10 @@ mod tests {
             player.render(
                 128,
                 playing(),
-                Navigation::SYNTH_RACK.assignments,
+                &Track::rack(Navigation::SYNTH_RACK.assignments),
                 [true; 4],
-                |_, _| Err(Error::Capacity)
+                |_, _| Err(Error::Capacity),
+                |_, _| ()
             ),
             Err(Error::Capacity)
         );

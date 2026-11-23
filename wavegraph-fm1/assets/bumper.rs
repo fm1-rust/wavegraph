@@ -1,5 +1,7 @@
 //! Render the boot cue on the build host so it costs no synth voices during startup.
 
+mod patterns;
+
 use std::{env, fs, path::PathBuf};
 use wavegraph_303::{Voice, VoiceParams};
 use wavegraph_909::{Samples, SnareDrum};
@@ -118,5 +120,38 @@ fn main() {
         pcm.pop();
     }
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo output directory"));
+    patterns::compile_banks(&out);
+    // The cue shares flash with the banks. Independent 128-frame blocks allow
+    // each DMA half to decode directly into the mix without a PCM buffer.
+    let mut encoded = Vec::new();
+    let mut offsets = Vec::new();
+    for block in pcm.chunks(128) {
+        offsets.push(u16::try_from(encoded.len()).expect("cue fits 64 KiB"));
+        let mut previous = 0_i16;
+        for (i, &bytes) in block.iter().enumerate() {
+            let value = i16::from_le_bytes(bytes);
+            let delta = i32::from(value).wrapping_sub(i32::from(previous));
+            if i != 0
+                && let Ok(d) = i8::try_from(delta)
+                && d != i8::MIN
+            {
+                encoded.extend(d.to_le_bytes());
+            } else {
+                encoded.push(0x80);
+                encoded.extend(bytes);
+            }
+            previous = value;
+        }
+    }
+    fs::write(out.join("bumper.delta"), encoded).expect("write packed cue");
+    fs::write(
+        out.join("bumper_index.rs"),
+        format!(
+            "const FRAMES: usize = {}; const OFFSETS: &[u16] = &{offsets:?};",
+            pcm.len()
+        ),
+    )
+    .expect("write cue index");
+    // The host regression test compares every decoded sample to the original mix.
     fs::write(out.join("bumper.s16le"), pcm.as_flattened()).expect("write boot cue");
 }
