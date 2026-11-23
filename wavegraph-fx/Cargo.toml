@@ -10,6 +10,7 @@ edition = "2024"
 rust-version.workspace = true
 
 [dependencies]
+libm = "0.2"
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 

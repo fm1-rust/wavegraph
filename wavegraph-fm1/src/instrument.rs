@@ -6,7 +6,7 @@ use crate::wavetable::Controls as WaveControls;
 use crate::{
     bass::Controls,
     envelope::EnvelopeControls,
-    fx::{Fx, FxPage},
+    fx::{BassFx, Device, Fx},
     keys::HitLog,
     keys::PolyKey,
     mixer::Mixer,
@@ -24,7 +24,7 @@ use wavegraph::{
 };
 use wavegraph_303::{Message as BassMessage, Tb303};
 use wavegraph_909::Voice as Drum;
-use wavegraph_fx::{ChannelMixer, Message as FxMessage, MixerMessage};
+use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage, MixerMessage};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
@@ -255,6 +255,7 @@ pub(super) struct Track {
     pub(super) assignment: Assignment,
     pub(super) voice: Voice,
     pub(super) bass: Controls,
+    pub(super) bass_fx: BassFx,
     pub(super) organ: OrganControls,
     pub(super) saw: SawControls,
     pub(super) wave: WaveControls,
@@ -272,6 +273,7 @@ impl Track {
             assignment,
             voice: Voice::INITIAL,
             bass: Controls::INITIAL,
+            bass_fx: BassFx::INITIAL,
             organ: OrganControls::INITIAL,
             poly_keys: [PolyKey::EMPTY; POLYPHONY],
             voice_envelope: if matches!(assignment.part, Part::Wavetable) {
@@ -547,6 +549,10 @@ pub(super) enum Message {
     Drum(DrumMessage),
     DrumLamps([DrumLamp; 6]),
     Insert(Channel, Part),
+    BassInsert(Channel, BassFx),
+    Master(MasterControls),
+    GainReduction(u8),
+    Cue(&'static [[u8; 2]]),
 }
 
 impl From<MonoMessage> for Message {
@@ -738,6 +744,53 @@ impl Process<Message, I24> for FxMixer {
     }
 }
 
+/// Restore dry headroom and process both wet returns in the final mix.
+pub(super) struct Master(pub(super) MasterBus);
+
+impl Process<Message, I24> for Master {
+    fn inlets(&self) -> &[Port] {
+        &[Port::Signal; 3]
+    }
+    fn outlets(&self) -> &[Port] {
+        &[Port::Signal, Port::Message]
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Dry, two returns and the cue sum to at most eleven Q23 rails"
+    )]
+    fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
+        // The firmware publishes all rack edits and the splash cue at frame zero.
+        let mut cue: &[[u8; 2]] = &[];
+        for event in cx.events {
+            match event.message {
+                Message::Master(control) => self.0.edit(control),
+                Message::Cue(samples) => cue = samples,
+                _ => (),
+            }
+        }
+        for (i, out) in cx.outputs[0].iter_mut().enumerate() {
+            let dry = cx.inputs[0][i].inner() << DRY_HEADROOM;
+            let wet = cx.inputs[1][i].inner() + cx.inputs[2][i].inner();
+            let bumper = cue
+                .get(i)
+                .map_or(0, |&le| i32::from(i16::from_le_bytes(le)) << 8);
+            *out = self.0.process_sample(dry + wet + bumper);
+        }
+        // One Q7 meter reading per block; the LCD converts it to dB.
+        let reduction = ((1.0 - self.0.dynamics_gain()) * 128.0 + 0.5) as u8;
+        if let Some(frame) = cx.frames.checked_sub(1) {
+            let _ = (cx.emit)(Event {
+                frame,
+                port: 1,
+                message: Message::GainReduction(reduction),
+            });
+        }
+    }
+}
+
 /// Adapt an effect processor to the firmware's message type.
 pub(super) struct FxNode<T>(pub(super) T);
 
@@ -786,7 +839,8 @@ fn dispatch<M>(
 
 /// The contiguous, post-insert signals immediately upstream of the faders.
 pub(super) const STRIP_BUS: usize = 8;
-const MASTER_BUS: usize = 19;
+pub(super) const DRY_HEADROOM: u8 = 3;
+const MASTER_BUS: usize = 18;
 pub(super) const BUS_COUNT: usize = MASTER_BUS + 2;
 impl Channel {
     #[allow(
@@ -825,9 +879,8 @@ impl Programs {
             1, 4, 4, 3, 8, 9, 10, 11, // CALL mixer -> dry 13, reverb send 14, delay send 15
             1, 5, 1, 1, 14, // CALL reverb -> 16
             1, 6, 1, 1, 15, // CALL delay -> 17
-            3, 13, 16, // MIX dry + reverb -> 18
-            3, 18, 17, // MIX in delay -> master 19
-            2, 19, 64, // GAIN optional headroom -> 20
+            1, 8, 3, 1, 13, 16, 17, // CALL master EQ and dynamics on dry + returns -> 18
+            2, 18, 64, // GAIN optional output trim -> 19
         ];
         const FULL_LEN: usize = ROUTE.len() - 3;
         Ok(Self([
@@ -849,6 +902,7 @@ impl Programs {
             mixer: Mixer::DRY,
             previous_mixer: None,
             fx: Fx::INITIAL,
+            cue: &[],
             previous_fx: None,
             transport: Transport::INITIAL,
             sequences: Sequencer::INITIAL.enabled,
@@ -858,6 +912,7 @@ impl Programs {
             position: None,
             drums: [[DrumLamp::Off; 6]; CHANNELS],
             wave_frames: [0; CHANNELS],
+            reduction: 0,
             previous: None,
         })
     }
@@ -870,6 +925,7 @@ pub(super) struct Instrument<'a> {
     mixer: Mixer,
     previous_mixer: Option<Mixer>,
     fx: Fx,
+    pub(super) cue: &'static [[u8; 2]],
     previous_fx: Option<Fx>,
     pub(super) transport: Transport,
     pub(super) sequences: [bool; CHANNELS],
@@ -879,6 +935,7 @@ pub(super) struct Instrument<'a> {
     pub(super) position: Option<Position>,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
     pub(super) wave_frames: [u8; CHANNELS],
+    pub(super) reduction: u8,
     previous: Option<[Track; CHANNELS]>,
 }
 
@@ -923,6 +980,11 @@ impl Instrument<'_> {
             if old.is_none() {
                 inserts
                     .push(at(Message::Insert(Channel::ALL[i], part)))
+                    .map_err(|_| Error::Capacity)?;
+            }
+            if part == Part::Bass && old.is_none_or(|t| t.bass_fx != track.bass_fx) {
+                inserts
+                    .push(at(Message::BassInsert(Channel::ALL[i], track.bass_fx)))
                     .map_err(|_| Error::Capacity)?;
             }
             // Each synth's live gate takes over its own sequencer lane.
@@ -970,14 +1032,17 @@ impl Instrument<'_> {
             }
         }
         let mixer_events = self.mixer.events(self.previous_mixer);
-        let reverb = self.fx.events(self.previous_fx, FxPage::Reverb);
-        let delay = self.fx.events(self.previous_fx, FxPage::Delay);
-        let previous_fx = self.previous_fx.filter(|_| inserts.is_empty());
-        inserts
-            .extend_from_slice(&self.fx.events(previous_fx, FxPage::BassComp))
-            .map_err(|_| Error::Capacity)?;
+        let reverb = self.fx.return_events(self.previous_fx, Device::Reverb);
+        let delay = self.fx.return_events(self.previous_fx, Device::Delay);
+        let mut master = self.fx.master_events(self.previous_fx);
+        if !self.cue.is_empty() {
+            master
+                .push(at(Message::Cue(self.cue)))
+                .map_err(|_| Error::Capacity)?;
+        }
         let mut drums = [[DrumLamp::Off; 6]; CHANNELS];
         let mut wave_frames = [0; CHANNELS];
+        let mut reduction = 0;
         self.patch.render(
             &mut Software,
             buses,
@@ -990,8 +1055,13 @@ impl Instrument<'_> {
                 &reverb,
                 &delay,
                 &inserts,
+                &master,
             ],
             |object, event| match event.message {
+                Message::GainReduction(value) => {
+                    reduction = value;
+                    Ok(())
+                }
                 Message::WaveFrame(index) => {
                     wave_frames[usize::from(object)] = index;
                     Ok(())
@@ -1008,9 +1078,11 @@ impl Instrument<'_> {
         self.automated = automated;
         self.drums = drums;
         self.wave_frames = wave_frames;
+        self.reduction = reduction;
         self.previous = Some(tracks);
         self.previous_mixer = Some(self.mixer);
         self.previous_fx = Some(self.fx);
+        self.cue = &[];
         Ok(&buses[if self.half_gain {
             MASTER_BUS + 1
         } else {
@@ -1062,7 +1134,6 @@ mod tests {
     const DELAY_SEND: usize = 15;
     const REVERB_RETURN: usize = 16;
     const DELAY_RETURN: usize = 17;
-    const DRY_AND_REVERB: usize = 18;
     const BASS_INSERT: usize = STRIP_BUS + Channel::Three.index();
 
     fn note(number: u8, velocity: u8) -> Note {
@@ -1139,13 +1210,18 @@ mod tests {
         let drums = DrumKits::new(rate);
         let [one, two, three, four] =
             &mut core::array::from_fn(|_| Node::new(&tuning, &organ, &drums, rate_hz as f32));
-        let mut mixer = FxMixer(ChannelMixer::new().with_boost());
+        let mut mixer = FxMixer(
+            ChannelMixer::new()
+                .with_boost()
+                .with_dry_headroom(DRY_HEADROOM),
+        );
+        let mut master = Master(MasterBus::new(rate_hz).expect("sample clock"));
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxNode(Reverb::new(&mut storage));
         let mut line = [0; 44_118];
         let mut delay = FxNode(Delay::new(&mut line, rate_hz).expect("delay sample clock"));
         let mut inserts = crate::inserts::BassInserts::new(rate_hz);
-        let mut nodes: [&mut dyn Process<Message, I24>; 8] = [
+        let mut nodes: [&mut dyn Process<Message, I24>; 9] = [
             one,
             two,
             three,
@@ -1154,6 +1230,7 @@ mod tests {
             &mut reverb,
             &mut delay,
             &mut inserts,
+            &mut master,
         ];
         let mut events = [const { RoutedEvents::new() }; CHANNELS];
         test(&mut programs.bind(&mut nodes, &mut events, rate)?)
@@ -1381,9 +1458,14 @@ mod tests {
                 mono.gate.note = Some(note(69, velocity));
                 mono.transpose = 12;
                 assert_eq!(mono.note_name(), *b"A5  ");
-                let block = instrument.render(parts, &mut buses)?.map(I24::inner);
+                instrument.render(parts, &mut buses)?;
                 let level = (32767 * i32::from(velocity)) >> 3;
-                assert!(block[12..].iter().all(|sample| sample.abs() == level));
+                let voice = &buses[Channel::One.source_bus()];
+                assert!(
+                    voice[12..]
+                        .iter()
+                        .all(|sample| sample.inner().abs() == level)
+                );
             }
             parts[0].voice.gate.note = None;
             parts[0].voice.transpose = 0;
@@ -1460,6 +1542,10 @@ mod tests {
     #[test]
     fn transport_plays_the_drum_bus_alongside_a_held_synth_note() -> Result<(), Error> {
         with_instrument(44_100, |instrument| {
+            instrument.set_fx(Fx {
+                dynamics_enabled: false,
+                ..Fx::INITIAL
+            });
             let mut parts = Track::TEST_TRACKS;
             instrument.sequences = [false, false, false, true];
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
@@ -1475,7 +1561,11 @@ mod tests {
                 instrument.position.map(|position| position.beat_phase),
                 Some(1)
             );
-            assert_eq!(beat, buses[Channel::Four.source_bus()]);
+            assert_eq!(
+                beat.map(I24::inner),
+                buses[Channel::Four.source_bus()]
+                    .map(|s| (s.inner() >> DRY_HEADROOM) << DRY_HEADROOM)
+            );
             assert_eq!(instrument.drums[3][Drum::Kick as usize], DrumLamp::Strike);
             assert!(beat.iter().any(|s| s.inner() != 0));
             parts[0].voice.gate.note = Some(note(69, 96));
@@ -1489,7 +1579,10 @@ mod tests {
             );
             assert_eq!(buses[Channel::Four.source_bus()], [I24::default(); 128]);
             assert_eq!(instrument.drums[3], [DrumLamp::Off; 6]);
-            assert_eq!(tail, buses[DRY_BUS]);
+            assert_eq!(
+                tail.map(I24::inner),
+                buses[DRY_BUS].map(|s| s.inner() << DRY_HEADROOM)
+            );
             assert!(tail.iter().any(|s| s.inner() != 0));
             Ok(())
         })
@@ -1507,15 +1600,13 @@ mod tests {
             mixer.0[2].delay = 64;
             instrument.set_mixer(mixer);
             let check_sends = |buses: &[[I24; 128]; BUS_COUNT]| {
+                let post = buses[BASS_INSERT].map(|s| s.inner() >> 1);
                 assert_eq!(
                     buses[DRY_BUS].map(I24::inner),
-                    buses[BASS_INSERT].map(|sample| sample.inner() >> 1)
+                    post.map(|x| x >> DRY_HEADROOM)
                 );
-                assert_eq!(buses[REVERB_SEND], buses[DRY_BUS]);
-                assert_eq!(
-                    buses[DELAY_SEND].map(I24::inner),
-                    buses[DRY_BUS].map(|sample| sample.inner() >> 1)
-                );
+                assert_eq!(buses[REVERB_SEND].map(I24::inner), post);
+                assert_eq!(buses[DELAY_SEND].map(I24::inner), post.map(|x| x >> 1));
             };
             instrument.sequences = [false, false, true, false];
             instrument.transport.toggle();
@@ -1633,7 +1724,8 @@ mod tests {
             assert!(half[0] < 0);
             assert_eq!(
                 half,
-                buses[Channel::One.source_bus()].map(|sample| sample.inner() >> 1)
+                buses[Channel::One.source_bus()]
+                    .map(|s| (s.inner() >> DRY_HEADROOM) << (DRY_HEADROOM - 1))
             );
             Ok(())
         })
@@ -1663,7 +1755,10 @@ mod tests {
                 for i in 0..mix.len() {
                     let bass_fader = bass[i].inner();
                     let dry = (mono[i].inner() + bass_fader).clamp(-(1 << 23), (1 << 23) - 1);
-                    assert_eq!(mix[i], dry >> u8::from(half));
+                    assert_eq!(
+                        mix[i],
+                        ((dry >> DRY_HEADROOM) << DRY_HEADROOM) >> u8::from(half)
+                    );
                 }
             }
             keys.release(69);
@@ -1788,7 +1883,8 @@ mod tests {
                     .all(|sample| sample.inner() == 0)
             );
             assert_eq!(
-                buses[MASTER_BUS], buses[DRY_BUS],
+                buses[MASTER_BUS].map(I24::inner),
+                buses[DRY_BUS].map(|s| s.inner() << DRY_HEADROOM),
                 "muting FX preserves dry output"
             );
             Ok(())
@@ -1806,19 +1902,15 @@ mod tests {
             (3, Mono, Channel::One.source_bus()),
         ] {
             with_instrument(44_118, |instrument| {
-                let mut fx = Fx::INITIAL;
-                let mut page = FxPage::Reverb;
-                page.turn(-1);
-                assert_eq!(page, FxPage::BassComp);
-                fx.edit(page, [turn, 25, 4, 0], false);
+                let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
+                parts[2].bass_fx.edit([turn, 25, 4, 0], false);
+                let fx = parts[2].bass_fx;
                 assert_eq!(fx.key, key);
                 assert_eq!((fx.depth, fx.split_hz), (100, 200));
-                assert!(fx.enabled(page));
-                instrument.set_fx(fx);
+                assert!(fx.enabled);
                 let mut reference =
                     SidechainDucker::<2>::new(44_118, 32, 176).expect("valid insert");
                 let mut buses = [[I24::default(); 128]; BUS_COUNT];
-                let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
                 parts[0].voice.gate.note = Some(note(72, 120));
                 let mut mixer = Mixer::DRY;
                 for channel in [Channel::One, Channel::Two, Channel::Four] {
@@ -1844,12 +1936,14 @@ mod tests {
                         emit: &mut Err,
                     });
                     assert_eq!(buses[BASS_INSERT], expected);
-                    assert_eq!(buses[DRY_BUS], expected);
+                    assert_eq!(
+                        buses[DRY_BUS].map(I24::inner),
+                        expected.map(|s| s.inner() >> DRY_HEADROOM)
+                    );
                 }
                 assert!(detector_sounded);
-                fx.edit(page, [0; 4], true);
-                assert!(!fx.enabled(page));
-                instrument.set_fx(fx);
+                parts[2].bass_fx.edit([0; 4], true);
+                assert!(!parts[2].bass_fx.enabled);
                 instrument.render(parts, &mut buses)?;
                 assert_eq!(
                     &buses[BASS_INSERT][64..],
@@ -1899,12 +1993,12 @@ mod tests {
                     Event {
                         frame: 0,
                         port: 0,
-                        message: FxMessage::SidechainDepth(Fx::INITIAL.depth),
+                        message: FxMessage::SidechainDepth(BassFx::INITIAL.depth),
                     },
                     Event {
                         frame: 0,
                         port: 0,
-                        message: FxMessage::SidechainHz(Fx::INITIAL.split_hz),
+                        message: FxMessage::SidechainHz(BassFx::INITIAL.split_hz),
                     },
                 ];
                 for (channel, ducker) in [Channel::Two, Channel::Three]
@@ -1923,6 +2017,110 @@ mod tests {
                     assert_eq!(buses[STRIP_BUS + channel.index()], expected);
                 }
             }
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn each_303_keeps_its_own_key_depth_and_bypass() -> Result<(), Error> {
+        use crate::fx::KeySource;
+        with_instrument(44_118, |instrument| {
+            let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+            tracks[0].bass_fx.edit([0, 25, 0, 0], true);
+            tracks[1].bass_fx.key = KeySource::Kick808;
+            tracks[1].voice.gate.note = Some(note(48, 120));
+            tracks[0].voice.gate.note = Some(note(36, 120));
+            tracks[2].midi_hits.push(Drum::Kick, 127);
+            let mut reference =
+                SidechainDucker::<2>::new(44_118, 32, 176).expect("insert settings");
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let fx = tracks[1].bass_fx;
+            let controls = [
+                FxMessage::SidechainDepth(fx.depth),
+                FxMessage::SidechainHz(fx.split_hz),
+            ]
+            .map(|message| Event {
+                frame: 0,
+                port: 0,
+                message,
+            });
+            for block in 0..16 {
+                instrument.render(tracks, &mut buses)?;
+                let mut expected = [I24::default(); 128];
+                reference.process(&mut ProcessContext {
+                    frames: 128,
+                    inputs: &[&buses[2], &buses[5]],
+                    outputs: &mut [&mut expected],
+                    events: if block == 0 { &controls } else { &[] },
+                    emit: &mut Err,
+                });
+                assert_eq!(buses[STRIP_BUS + 1], expected);
+                assert_eq!(buses[STRIP_BUS][64..], buses[0][64..]);
+            }
+            assert_ne!(buses[STRIP_BUS + 1], buses[2]);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn boosted_dry_and_both_returns_cancel_before_the_master_quantizes() {
+        let full = 1 << 23;
+        let mut strips = FxMixer(
+            ChannelMixer::new()
+                .with_boost()
+                .with_dry_headroom(DRY_HEADROOM),
+        );
+        let mut mix = [[I24::default()]; 3];
+        let hot = [I24::new_unchecked(full / 2)];
+        let silent = [I24::default()];
+        let boosts = [0, 1].map(|track| at(MixerMessage::Level { track, level: 192 }));
+        strips.process(&mut ProcessContext {
+            frames: 1,
+            inputs: &[&hot, &hot, &silent, &silent],
+            outputs: &mut mix.each_mut().map(|bus| &mut bus[..]),
+            events: &boosts,
+            emit: &mut Err,
+        });
+        assert_eq!(mix[0][0].inner() << DRY_HEADROOM, full * 3 / 2);
+        let mut master = Master(MasterBus::new(44_118).expect("audio clock"));
+        let mut output = silent;
+        let returns = [
+            I24::new_unchecked(-full * 3 / 4),
+            I24::new_unchecked(-full / 2),
+        ];
+        master.process(&mut ProcessContext {
+            frames: 1,
+            inputs: &[&mix[0], &returns[..1], &returns[1..]],
+            outputs: &mut [&mut output],
+            events: &[],
+            emit: &mut Err,
+        });
+        assert_eq!(output[0].inner(), full / 4);
+    }
+
+    #[test]
+    fn the_logo_cue_feeds_the_master_limiter_and_expires_after_one_block() -> Result<(), Error> {
+        use wavegraph_fx::Dynamics;
+        with_instrument(44_118, |instrument| {
+            let tracks = Track::TEST_TRACKS;
+            let mut fx = Fx::INITIAL;
+            fx.dynamics = Dynamics {
+                threshold_db: 0,
+                ratio_x2: 2,
+                makeup_db: 12,
+                ceiling_db: -12,
+            };
+            instrument.set_fx(fx);
+            instrument.cue = &[[0xfe, 0x7f], [0, 0x80]];
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let y = instrument.render(tracks, &mut buses)?.map(I24::inner);
+            assert!((y[0] - 2_107_123).abs() <= 2 && (y[1] + 2_107_123).abs() <= 2);
+            assert_eq!(y[2..], [0; 126]);
+            assert!(instrument.reduction > 0);
+            assert_eq!(
+                instrument.render(tracks, &mut buses)?.map(I24::inner),
+                [0; 128]
+            );
             Ok(())
         })
     }
@@ -1973,8 +2171,8 @@ mod tests {
             mixer.0[0].reverb = 128;
             mixer.0[3].delay = 128;
             let mut fx = Fx::INITIAL;
-            let mut page = FxPage::Reverb;
-            page.turn(1);
+            fx.dynamics_enabled = false; // Inspect the linear dry/return sum at half gain.
+            let page = Device::Delay;
             fx.edit(page, [-74, 7, 64, 0], false);
             assert_eq!((fx.time_ms, fx.feedback, fx.delay.wet), (5, 50, 128));
             assert_eq!(fx.reverb, Fx::INITIAL.reverb);
@@ -2002,7 +2200,10 @@ mod tests {
             for (i, sample) in master.into_iter().enumerate() {
                 assert_eq!(
                     sample,
-                    (buses[DRY_AND_REVERB][i].inner() + echo[i]).clamp(-(1 << 23), (1 << 23) - 1)
+                    ((buses[DRY_BUS][i].inner() << DRY_HEADROOM)
+                        + buses[REVERB_RETURN][i].inner()
+                        + echo[i])
+                        .clamp(-(1 << 23), (1 << 23) - 1)
                         >> 1
                 );
             }
@@ -2220,7 +2421,7 @@ mod tests {
                 (KeySource::Kit808, 4),
                 (KeySource::Kit, 6),
             ] {
-                instrument.set_fx(Fx { key, ..Fx::INITIAL });
+                tracks[1].bass_fx.key = key;
                 instrument.render(tracks, &mut buses)?;
                 assert_eq!(buses[12], buses[source]);
                 assert_ne!(buses[4], buses[6]);

@@ -28,24 +28,24 @@ use fm1_rticx::{
 use micromath::F32Ext;
 
 pub(super) const BACKGROUND: Rgb565 = Rgb565::new(2, 4, 6);
-const STRIP: Rgb565 = Rgb565::new(4, 9, 12);
-const SELECTED: Rgb565 = Rgb565::new(5, 19, 22);
-const KNOB: Rgb565 = Rgb565::new(7, 15, 19);
-const OUTLINE: Rgb565 = Rgb565::new(13, 28, 22);
-const POINTER: Rgb565 = Rgb565::new(22, 47, 28);
+pub(super) const STRIP: Rgb565 = Rgb565::new(4, 9, 12);
+pub(super) const SELECTED: Rgb565 = Rgb565::new(5, 19, 22);
+pub(super) const KNOB: Rgb565 = Rgb565::new(7, 15, 19);
+pub(super) const OUTLINE: Rgb565 = Rgb565::new(13, 28, 22);
+pub(super) const POINTER: Rgb565 = Rgb565::new(22, 47, 28);
 const GREEN: Rgb565 = Rgb565::new(5, 55, 17);
 const AMBER: Rgb565 = Rgb565::new(31, 44, 1);
 const RED: Rgb565 = Rgb565::new(31, 11, 8);
 const MOTION_OFF: Rgb565 = Rgb565::new(2, 6, 8);
-const LABEL: Rgb565 = Rgb565::new(20, 41, 25);
+pub(super) const LABEL: Rgb565 = Rgb565::new(20, 41, 25);
 
 const TOP: u16 = 23;
 const STRIP_HEIGHT: u16 = 48;
 const METER_X: u16 = 10;
-const METER_Y: u16 = 29;
-const METER_WIDTH: u16 = 106;
-const METER_HEIGHT: u16 = 8;
-const CENTERS: [i32; 3] = [137, 176, 215];
+const METER_Y: u16 = 20;
+const METER_WIDTH: u16 = 142;
+const METER_HEIGHT: u16 = 6;
+const CENTERS: [i32; 2] = [178, 210];
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct ChannelStrip {
@@ -87,7 +87,7 @@ impl Surface {
                 let mut band =
                     Band::new(pixels, 0, y, SIZE, (TOP - y).min(BAND as u16), BACKGROUND);
                 band.title("GLO / MIXER", Point::new(8, 5), palette::WHITE);
-                for (x, label) in CENTERS.into_iter().zip(["1 LVL", "2 REV", "3 DLY"]) {
+                for (x, label) in CENTERS.into_iter().zip(["2 REV", "3 DLY"]) {
                     band.label(label, Point::new(x, 9), Alignment::Center, LABEL);
                 }
                 band.compose(selector);
@@ -140,7 +140,7 @@ impl Surface {
                 let hint = if editing {
                     "PRESETS ASSIGN       HOME BACK"
                 } else {
-                    "SELECT EDIT       PRESETS CHANNEL"
+                    "K1-4 FADERS   SELECT EDIT   FX RACK"
                 };
                 band.label(
                     hint,
@@ -206,33 +206,40 @@ impl<'a> Band<'a> {
             self.rect(Point::new(5, y), Size::new(2, 45), palette::CYAN);
         }
         let active = if strip.active { palette::CYAN } else { LABEL };
-        self.title(["1", "2", "3", "4"][index], Point::new(11, y + 7), active);
-        self.title(strip.part.name(), Point::new(25, y + 7), palette::WHITE);
+        self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), active);
+        self.title(strip.part.name(), Point::new(25, y + 3), palette::WHITE);
         self.meter(y as u16, peak);
         let Strip {
             level,
             reverb,
             delay,
         } = strip.controls;
-        for (x, value, max, readout) in [
-            (CENTERS[0], level, MAX_LEVEL, decibels(level)),
-            (CENTERS[1], reverb, UNITY, percent(reverb)),
-            (CENTERS[2], delay, UNITY, percent(delay)),
-        ] {
-            self.knob(
-                Point::new(x, y + 15),
-                value,
-                max,
-                [
-                    KNOB,
-                    OUTLINE,
-                    if strip.selected {
-                        palette::CYAN
-                    } else {
-                        POINTER
-                    },
-                ],
-            );
+        let ink = if strip.selected {
+            palette::CYAN
+        } else {
+            POINTER
+        };
+        let rail = i32::from(METER_X) + 3;
+        let travel = i32::from(METER_WIDTH) - 7;
+        let thumb = rail + travel * i32::from(level) / i32::from(MAX_LEVEL);
+        let unity = rail + travel * i32::from(UNITY) / i32::from(MAX_LEVEL);
+        self.rect(
+            Point::new(rail, y + 34),
+            Size::new(travel as u32 + 1, 3),
+            MOTION_OFF,
+        );
+        self.rect(Point::new(unity, y + 30), Size::new(1, 11), OUTLINE);
+        self.rect(Point::new(thumb - 3, y + 31), Size::new(7, 9), ink);
+        self.rect(Point::new(thumb, y + 32), Size::new(1, 7), STRIP);
+        self.label(
+            str::from_utf8(&decibels(level)).expect("ASCII fader"),
+            Point::new(151, y + 5),
+            Alignment::Right,
+            LABEL,
+        );
+        for (x, value) in CENTERS.into_iter().zip([reverb, delay]) {
+            let readout = percent(value);
+            self.small_knob(Point::new(x, y + 17), value, UNITY, ink);
             self.label(
                 str::from_utf8(&readout).expect("ASCII readout"),
                 Point::new(x, y + 30),
@@ -255,29 +262,41 @@ impl<'a> Band<'a> {
             };
             self.rect(
                 Point::new(
-                    i32::from(METER_X) + 9 * segment as i32,
+                    i32::from(METER_X) + 12 * segment as i32,
                     i32::from(y + METER_Y),
                 ),
-                Size::new(7, u32::from(METER_HEIGHT)),
+                Size::new(10, u32::from(METER_HEIGHT)),
                 fill,
             );
         }
     }
 
-    pub(super) fn knob(
+    pub(super) fn small_knob(&mut self, center: Point, value: u8, max: u8, ink: Rgb565) {
+        self.draw_knob(
+            center,
+            Self::knob_offset(value, max) * 5 / 7,
+            15,
+            [KNOB, OUTLINE, ink],
+        );
+    }
+
+    pub(super) fn knob(&mut self, center: Point, value: u8, max: u8, colors: [Rgb565; 3]) {
+        self.draw_knob(center, Self::knob_offset(value, max), 21, colors);
+    }
+
+    fn draw_knob(
         &mut self,
         center: Point,
-        value: u8,
-        max: u8,
+        tip: Point,
+        diameter: u32,
         [face, rim, ink]: [Rgb565; 3],
     ) {
-        let tip = Self::knob_offset(value, max);
         let body = PrimitiveStyleBuilder::new()
             .fill_color(face)
             .stroke_color(rim)
             .stroke_width(1)
             .build();
-        Circle::with_center(center, 21)
+        Circle::with_center(center, diameter)
             .into_styled(body)
             .draw(self)
             .expect("infallible strip");
@@ -319,7 +338,7 @@ impl<'a> Band<'a> {
             .expect("infallible strip");
     }
 
-    fn title(&mut self, name: &str, point: Point, color: Rgb565) {
+    pub(super) fn title(&mut self, name: &str, point: Point, color: Rgb565) {
         Text::with_baseline(
             name,
             point,

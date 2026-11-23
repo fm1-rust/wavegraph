@@ -45,6 +45,7 @@ pub enum MixerMessage {
 pub struct ChannelMixer<const TRACKS: usize, const OUTPUTS: usize = 2> {
     gains: [[u8; TRACKS]; OUTPUTS],
     level_limit: u8,
+    dry_shift: u8,
 }
 
 impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
@@ -61,6 +62,7 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
         Self {
             gains,
             level_limit: 128,
+            dry_shift: 0,
         }
     }
 
@@ -68,6 +70,15 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
     #[must_use]
     pub const fn with_boost(mut self) -> Self {
         self.level_limit = u8::MAX;
+        self
+    }
+
+    /// Reserve up to three bits of headroom on the dry outlet before Q23 conversion.
+    /// Three bits accommodate four fully boosted tracks. Restore this gain at
+    /// the master insert. Both sends retain their original levels.
+    #[must_use]
+    pub const fn with_dry_headroom(mut self, bits: u8) -> Self {
+        self.dry_shift = if bits > 3 { 3 } else { bits };
         self
     }
 
@@ -124,6 +135,7 @@ impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
                     *sum += (post_fader * i32::from(gains[track])) >> 7;
                 }
             }
+            sums[0] >>= self.dry_shift;
             for (out, sum) in cx.outputs.iter_mut().zip(sums) {
                 out[frame] = pcm(sum);
             }

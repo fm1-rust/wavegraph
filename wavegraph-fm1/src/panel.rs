@@ -1,6 +1,6 @@
 //! Channel selection and page navigation for the FM-1 panel.
 
-use crate::instrument::Part;
+use crate::{fx::Device, instrument::Part};
 
 pub(super) const CHANNELS: usize = 4;
 
@@ -57,6 +57,7 @@ pub(super) enum View {
     Fx,
     Mixer,
     Channel,
+    MasterFx(Option<Device>),
     Sequencer,
 }
 
@@ -71,6 +72,7 @@ pub(super) enum PageButton {
     Env,
     Fx,
     Glo,
+    GlobalFx,
     Seq,
 }
 
@@ -78,6 +80,8 @@ pub(super) enum PageButton {
 pub(super) struct Navigation {
     pub(super) view: View,
     pub(super) focus: Channel,
+    fx_parent: View,
+    show_sends: bool,
     pub(super) assignments: [Assignment; CHANNELS],
 }
 
@@ -85,6 +89,8 @@ impl Navigation {
     pub(super) const INITIAL: Self = Self {
         view: View::Scope,
         focus: Channel::One,
+        fx_parent: View::Mixer,
+        show_sends: false,
         assignments: [
             Assignment::new(Part::Bass),
             Assignment::new(Part::Bass),
@@ -105,7 +111,32 @@ impl Navigation {
     };
 
     pub(super) fn press(&mut self, button: PageButton) {
+        if self.view != View::Fx && !matches!(self.view, View::MasterFx(_)) {
+            self.show_sends = false;
+        }
         self.view = match button {
+            PageButton::Home if matches!(self.view, View::MasterFx(Some(_))) => {
+                View::MasterFx(None)
+            }
+            PageButton::Home if self.view == View::MasterFx(None) => self.fx_parent,
+            PageButton::GlobalFx => {
+                if !matches!(self.view, View::MasterFx(_)) {
+                    self.fx_parent = if self.view.is_mixer() {
+                        self.view
+                    } else {
+                        View::Fx
+                    };
+                }
+                View::MasterFx(None)
+            }
+            PageButton::Fx if self.view.is_mixer() => {
+                self.fx_parent = self.view;
+                View::MasterFx(None)
+            }
+            PageButton::Glo if self.view == View::Fx => {
+                self.fx_parent = View::Fx;
+                View::MasterFx(None)
+            }
             PageButton::Home if self.view == View::Channel => View::Mixer,
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
@@ -122,6 +153,10 @@ impl Navigation {
 
     pub(super) fn part(self) -> Part {
         self.assignments[self.focus.index()].part
+    }
+
+    pub(super) fn bass_insert(self) -> bool {
+        self.view == View::Fx && self.part() == Part::Bass && !self.show_sends
     }
 
     pub(super) fn piano_channel(self, last_melodic: &mut Channel) -> Channel {
@@ -143,6 +178,12 @@ impl Navigation {
     }
 
     pub(super) fn turn(&mut self, select: i8, presets: i8) {
+        if self.view == View::Fx && self.part() == Part::Bass && select.unsigned_abs() % 2 == 1 {
+            self.show_sends = !self.show_sends;
+        }
+        if let View::MasterFx(row) = self.view {
+            self.view = View::MasterFx(Device::select(row, select));
+        }
         if select != 0 && self.view.is_mixer() {
             let detents = if self.view == View::Mixer && select > 0 {
                 select.saturating_sub(1)
@@ -164,6 +205,7 @@ impl Navigation {
             }
         } else {
             self.focus.turn(presets);
+            self.show_sends = false;
             if self.view == View::Envelope {
                 self.view = View::Scope;
             }
@@ -174,6 +216,49 @@ impl Navigation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_button_orders_reach_the_same_rack_and_home_retraces_the_route() {
+        for (first, second, parent) in [
+            (PageButton::Glo, PageButton::Fx, View::Mixer),
+            (PageButton::Fx, PageButton::Glo, View::Fx),
+        ] {
+            let mut nav = Navigation::INITIAL;
+            nav.press(first);
+            assert_eq!(nav.view, parent);
+            nav.press(second);
+            assert_eq!(nav.view, View::MasterFx(None));
+            nav.turn(-1, 0);
+            assert_eq!(nav.view, View::MasterFx(Some(Device::Dynamics)));
+            for row in Device::ALL {
+                nav.turn(1, 0);
+                assert_eq!(nav.view, View::MasterFx(Some(row)));
+            }
+            nav.press(PageButton::Home);
+            assert_eq!(nav.view, View::MasterFx(None));
+            nav.press(PageButton::Home);
+            assert_eq!(nav.view, parent);
+            assert_eq!(nav.focus, Channel::One);
+        }
+        let mut nav = Navigation::INITIAL;
+        nav.press(PageButton::GlobalFx);
+        nav.turn(3, 0);
+        assert_eq!(nav.view, View::MasterFx(Some(Device::Eq)));
+    }
+
+    #[test]
+    fn instrument_fx_shows_only_the_selected_channels_insert_and_sends() {
+        let mut nav = Navigation::INITIAL;
+        nav.press(PageButton::Fx);
+        assert!(nav.bass_insert());
+        nav.turn(1, 0);
+        assert!(!nav.bass_insert());
+        nav.turn(-1, 0);
+        assert!(nav.bass_insert());
+        nav.turn(0, 2);
+        assert_eq!(nav.part(), Part::Tr808);
+        assert!(!nav.bass_insert());
+    }
 
     #[test]
     fn drum_pattern_keeps_the_last_melodic_keyboard_until_all_four_channels_are_kits() {

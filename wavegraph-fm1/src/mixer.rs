@@ -55,19 +55,15 @@ impl Mixer {
 
     pub(super) fn turn_knobs(&mut self, channel: Channel, [level, reverb, delay, _]: [i8; 4]) {
         let strip = &mut self.0[channel.index()];
-        let turn = |value: u8, detents: i8, max: u8| {
-            if detents == 0 {
-                return value;
-            }
-            // Round the saturated endpoint (255) back to detent 64 so unity
-            // is reachable again in either direction.
-            let position = u16::from(value).div_ceil(4);
-            let next = position.saturating_add_signed(i16::from(detents));
-            u8::try_from(next.saturating_mul(4).min(u16::from(max))).expect("bounded mixer control")
-        };
         strip.level = turn(strip.level, level, MAX_LEVEL);
         strip.reverb = turn(strip.reverb, reverb, UNITY);
         strip.delay = turn(strip.delay, delay, UNITY);
+    }
+
+    pub(super) fn turn_faders(&mut self, knobs: [i8; CHANNELS]) {
+        for (strip, delta) in self.0.iter_mut().zip(knobs) {
+            strip.level = turn(strip.level, delta, MAX_LEVEL);
+        }
     }
 
     pub(super) fn events(self, previous: Option<Self>) -> EventBatch {
@@ -109,6 +105,17 @@ impl Mixer {
         }
         events
     }
+}
+
+fn turn(value: u8, detents: i8, max: u8) -> u8 {
+    if detents == 0 {
+        return value;
+    }
+    // Round the saturated endpoint (255) back to detent 64 so unity
+    // is reachable again in either direction.
+    let position = u16::from(value).div_ceil(4);
+    let next = position.saturating_add_signed(i16::from(detents));
+    u8::try_from(next.saturating_mul(4).min(u16::from(max))).expect("bounded mixer control")
 }
 
 // Peak thresholds in Q23 at -54, -48, -42, -36, -30, -24, -18,
@@ -166,6 +173,18 @@ impl Meter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overview_knobs_move_the_four_faders_without_touching_the_sends() {
+        let mut mixer = Mixer::INITIAL;
+        mixer.turn_faders([1, -2, i8::MIN, i8::MAX]);
+        assert_eq!(mixer.0.map(|s| s.level), [112, 112, 0, 255]);
+        assert_eq!(
+            mixer.0.map(|s| (s.reverb, s.delay)),
+            Mixer::INITIAL.0.map(|s| (s.reverb, s.delay))
+        );
+        assert_eq!(mixer.events(Some(Mixer::INITIAL)).len(), 4);
+    }
 
     #[test]
     fn strip_edits_keep_the_other_strips_and_support_boost() {
