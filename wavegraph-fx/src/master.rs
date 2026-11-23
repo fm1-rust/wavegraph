@@ -18,11 +18,11 @@ pub struct Dynamics {
 }
 
 impl Dynamics {
-    /// Gentle 2:1 bus compression with unity makeup and 1 dB of peak margin.
+    /// Gentle 2:1 bus compression with +4 dB of makeup and 1 dB of peak margin.
     pub const GLUE: Self = Self {
         threshold_db: -12,
         ratio_x2: 4,
-        makeup_db: 0,
+        makeup_db: 4,
         ceiling_db: -1,
     };
 }
