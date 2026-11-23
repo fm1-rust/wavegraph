@@ -161,16 +161,7 @@ impl Row {
         reason = "All coordinates fit within one rack row"
     )]
     fn draw(self, band: &mut Band<'_>, y: i32, reduction: u8) {
-        let face = if self.selected { SELECTED } else { STRIP };
-        let ink = if self.selected {
-            palette::CYAN
-        } else {
-            POINTER
-        };
-        band.rect(Point::new(4, y), Size::new(232, 38), face);
-        if self.selected {
-            band.rect(Point::new(4, y), Size::new(2, 38), ink);
-        }
+        let ink = band.rack_row(y, self.selected);
         band.title(
             ["REVERB", "DELAY", "3-BAND EQ", "COMP/LIM"][self.device as usize],
             Point::new(10, y + 5),
@@ -179,14 +170,7 @@ impl Row {
         self.status(band, y, reduction);
         for (x, dial) in [91, 131, 171, 211].into_iter().zip(self.dials) {
             if let Some(d) = dial {
-                band.label(d.label, Point::new(x, y), Alignment::Center, LABEL);
-                band.small_knob(Point::new(x, y + 17), d.position(), 128, ink);
-                band.label(
-                    &d.readout(),
-                    Point::new(x, y + 27),
-                    Alignment::Center,
-                    palette::WHITE,
-                );
+                band.rack_dial(Point::new(x, y), d.label, d.position(), &d.readout(), ink);
             }
         }
     }
@@ -254,7 +238,7 @@ impl Rack {
                 let (top, bottom) = if editing {
                     ("KNOBS EDIT     SEL BYPASS", "SELECT DEVICE     HOME BACK")
                 } else {
-                    ("SELECT DEVICE", "FX CHANNEL     GLO MIXER")
+                    ("SELECT DEVICE", "FX MIXER     GLO CHANNEL FX")
                 };
                 band.label(top, Point::new(120, 211), Alignment::Center, POINTER);
                 band.label(bottom, Point::new(120, 225), Alignment::Center, LABEL);

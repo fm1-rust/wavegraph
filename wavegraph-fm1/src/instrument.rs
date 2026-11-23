@@ -909,14 +909,23 @@ impl Channel {
     pub(super) fn scope_samples<const N: usize>(
         self,
         part: Part,
+        view: View,
         buses: &[[I24; N]; BUS_COUNT],
     ) -> [i32; N] {
         // Give drum transients and the detuned saws headroom on the display.
         // Apply this gain only to the selected strip's scope tap.
-        let source = &buses[self.source_bus()];
+        let bus = if view == View::Fx {
+            STRIP_BUS + self.index()
+        } else {
+            self.source_bus()
+        };
+        let source = &buses[bus];
         match part {
             Part::Tr909 => source.map(|s| s.inner() >> 4),
             Part::Tr808 => source.map(|s| s.inner() >> 3),
+            // The instrument scope auto-ranges these voices. Leave room for loud
+            // accents and chords at the FX scope's fixed gain.
+            Part::Bass | Part::Wavetable if view == View::Fx => source.map(|s| s.inner() >> 3),
             Part::Supersaw => source.map(|s| (s.inner() * 3) >> 3),
             _ => source.map(I24::inner),
         }
@@ -1572,9 +1581,13 @@ mod tests {
             );
             assert!(
                 channel
-                    .scope_samples(Part::Tr909, &buses)
+                    .scope_samples(Part::Tr909, View::Scope, &buses)
                     .iter()
                     .any(|&s| s != 0)
+            );
+            assert_eq!(
+                channel.scope_samples(Part::Tr909, View::Fx, &buses),
+                channel.scope_samples(Part::Tr909, View::Scope, &buses)
             );
             assert_eq!(
                 instrument.drums[i],
@@ -1593,7 +1606,10 @@ mod tests {
                 instrument.render(parts, &mut buses)?;
             }
             assert_eq!(instrument.drums[i], [Off; 6]);
-            assert_eq!(channel.scope_samples(Part::Tr909, &buses), [0; 128]);
+            assert_eq!(
+                channel.scope_samples(Part::Tr909, View::Scope, &buses),
+                [0; 128]
+            );
             Ok(())
         })
     }
@@ -2114,6 +2130,10 @@ mod tests {
                     emit: &mut Err,
                 });
                 assert_eq!(buses[STRIP_BUS + 1], expected);
+                assert_eq!(
+                    Channel::Two.scope_samples(Part::Bass, View::Fx, &buses),
+                    expected.map(|s| s.inner() >> 3)
+                );
                 assert_eq!(buses[STRIP_BUS][64..], buses[0][64..]);
             }
             assert_ne!(buses[STRIP_BUS + 1], buses[2]);
@@ -2673,7 +2693,7 @@ mod tests {
                             .all(|s| s.inner() == 0)
                     );
                     assert_eq!(
-                        channel.scope_samples(Part::Supersaw, &buses),
+                        channel.scope_samples(Part::Supersaw, View::Scope, &buses),
                         expected.map(|s| (s.inner() * 3) >> 3)
                     );
                 }

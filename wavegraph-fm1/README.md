@@ -49,8 +49,9 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
 | PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
-| FX on an instrument | Open that channel’s effects. Each strip has reverb and delay sends on knobs 2 and 3. On a TB-303, SELECT switches between its sidechain insert and its sends. |
+| FX on an instrument | Open the channel’s two insert slots and live post-FX scope. On a TB-303, SELECT switches the knobs between the compressor and the sends. With the sends highlighted, knobs 2 and 3 set reverb and delay. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
+| FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
 | ALGORITHM in FX | Switch the full/half post-rack output gain. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
@@ -401,8 +402,12 @@ the ducking subside. **909 KIT** includes hats and claps in the detector.
 accents. Only the 303 is processed. The factory setting is 75% depth at
 180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
 
-The 303 FX scope shows the signal after its sidechain insert. The channel send
-page scopes the post-fader signal feeding both sends.
+The channel FX scope taps the selected instrument after its inserts and before
+its fader and shared sends. It keeps the same vertical gain while you adjust
+depth, bypass the compressor or switch to the send controls. The TB-303 has a
+compressor in slot 1. Empty slots show **NONE** and SELECT skips them.
+
+![Channel FX racks showing the TB-303 compressor and the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
 
 Each assigned 303 keeps its own key, depth, crossover and bypass. Named external sources sum all matching
 channels before their faders. With two 909s assigned, a kick from either kit

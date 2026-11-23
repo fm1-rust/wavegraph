@@ -413,8 +413,9 @@ mod app {
             .into_iter()
             .find(|(button, _)| scan.pressed(*button));
             let home = scan.pressed(Button::Home);
-            if (scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
-                || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo))
+            if !matches!(self.nav.view, View::MasterFx(_))
+                && ((scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
+                    || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo)))
             {
                 self.nav.press(PageButton::GlobalFx);
             } else if let Some((_, button)) = page
@@ -718,20 +719,12 @@ mod app {
             if result == Refill::Written && !self.tap.is_full() {
                 let labels = settings.labels(self.instrument.half_gain);
                 let block = ScopeBlock {
-                    samples: match labels.view {
-                        View::Mixer | View::Channel | View::MasterFx(_) => [0; OUTPUT_FRAMES],
-                        View::Fx => {
-                            let i = labels.channel.index();
-                            let strip = &self.buses[STRIP_BUS + i];
-                            if labels.bass_insert {
-                                strip.map(I24::inner)
-                            } else {
-                                let level = i32::from(labels.mixer.0[i].level);
-                                strip.map(|s| (s.inner() * level) >> 7)
-                            }
-                        }
-                        View::Scope if labels.voice_tap => {
-                            labels.channel.scope_samples(labels.focus, self.buses)
+                    samples: match (labels.view, labels.voice_tap) {
+                        (View::Mixer | View::Channel | View::MasterFx(_), _) => [0; OUTPUT_FRAMES],
+                        (View::Fx, _) | (View::Scope, true) => {
+                            labels
+                                .channel
+                                .scope_samples(labels.focus, labels.view, self.buses)
                         }
                         _ => core::array::from_fn(|i| self.output.block()[i][0]),
                     },
@@ -765,30 +758,31 @@ mod app {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
             while let Ok(block) = self.blocks.recv().await {
-                let changed = self.previous.replace(block.labels) != Some(block.labels);
-                let scale = if block.labels.bass_insert
-                    || (block.labels.view == View::Scope
-                        && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
-                        && block.labels.voice_tap)
+                let previous = self.previous.replace(block.labels);
+                let changed = previous != Some(block.labels);
+                let source_changed = previous.is_none_or(|old| {
+                    old.view != block.labels.view
+                        || old.channel != block.labels.channel
+                        || old.focus != block.labels.focus
+                        || old.voice_tap != block.labels.voice_tap
+                });
+                let scale = if block.labels.view == View::Scope
+                    && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
+                    && block.labels.voice_tap
                 {
                     Scale::Auto
                 } else {
                     Scale::Fixed
                 };
-                let trace = self
-                    .capture
-                    .push(&block.samples, changed || block.gap, scale);
+                // Knob edits on the FX rack keep the same post-insert signal and vertical gain.
+                let reset = source_changed || (changed && block.labels.view != View::Fx);
+                let trace = self.capture.push(&block.samples, reset || block.gap, scale);
                 if changed || trace.is_some() {
                     self.shared().frame.lock(|frame| {
                         // Publish the new page even while waiting for its first trigger.
                         if let Some(trace) = trace {
                             frame.trace = trace;
-                        } else if frame.labels.focus != block.labels.focus
-                            || frame.labels.channel != block.labels.channel
-                            || frame.labels.voice_tap != block.labels.voice_tap
-                            || frame.labels.bass_insert != block.labels.bass_insert
-                            || frame.labels.view != block.labels.view
-                        {
+                        } else if source_changed {
                             frame.trace = FLAT;
                         }
                         frame.labels = block.labels;
