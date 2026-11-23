@@ -4,7 +4,7 @@ use crate::overload::Severity;
 use crate::{
     bass::{Bank, Controls, Knob, envelope as bass_env},
     capture::{HEIGHT, WIDTH},
-    envelope::EnvelopeControls,
+    envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion},
     instrument::Part,
     panel::{CHANNELS, Channel, View},
@@ -94,7 +94,7 @@ enum Page {
     MasterFx,
     Mixer,
     Sequencer(SeqPage, Channel, Part),
-    Envelope(Part, EnvelopeControls),
+    Envelope(Part, EnvelopeTarget, EnvelopeControls),
     BassEnvelope(Controls),
 }
 
@@ -195,12 +195,13 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         focus: Part,
+        target: EnvelopeTarget,
         controls: EnvelopeControls,
     ) -> Result<(), Error> {
-        let page = Page::Envelope(focus, controls);
+        let page = Page::Envelope(focus, target, controls);
         let previous = self.page.replace(page);
         if previous != Some(page) {
-            let entering = !matches!(previous, Some(Page::Envelope(part, _)) if part == focus);
+            let entering = !matches!(previous, Some(Page::Envelope(part, ..)) if part == focus);
             let (style, title, ink) = if focus == Part::Organ {
                 (
                     WaveformStyle {
@@ -210,6 +211,8 @@ impl Screen {
                     b"ORGAN VCA ENV".as_slice(),
                     ORGAN_LIME,
                 )
+            } else if focus == Part::Supersaw {
+                (jp8080::STYLE, b"".as_slice(), jp8080::AMBER)
             } else if focus == Part::Wavetable {
                 (
                     microwave::STYLE,
@@ -219,25 +222,42 @@ impl Screen {
             } else {
                 (ENV_STYLE, b"VCA ENVELOPE".as_slice(), palette::GREEN)
             };
+            let (face, label, unit, header) = if focus == Part::Supersaw {
+                (jp8080::FACE, jp8080::PRINT, jp8080::EDGE, 32)
+            } else {
+                (style.background, palette::WHITE, palette::MUTED, 16)
+            };
             if entering {
                 self.change_view(style);
+                if focus == Part::Supersaw {
+                    self.dot_background = face;
+                    *self.text = TextGrid::with_background(face);
+                }
             }
             self.plot.paint_async(lcd, &controls.trace(), clock).await?;
             if entering {
                 // The curve's dirty tiles stay between the two label bands.
-                let background = style.background.into_storage();
-                lcd.fill_rect(0, 0, SIZE, 16, background)?;
+                let background = face.into_storage();
+                lcd.fill_rect(0, 0, SIZE, header, background)?;
                 lcd.fill_rect(0, 192, SIZE, SIZE - 192, background)?;
             }
-            self.text.text(0, 0, title, ink);
+            if focus == Part::Supersaw {
+                if entering || !matches!(previous, Some(Page::Envelope(_, old, _)) if old == target)
+                {
+                    jp8080::envelope_header(lcd, clock, self.strip, target, entering).await?;
+                }
+            } else {
+                self.text.text(0, 0, title, ink);
+            }
             let adsr = controls.adsr();
-            env_time(self.text, 0, 12, b"A", adsr.attack_us, ink);
-            env_time(self.text, 10, 12, b"D", adsr.decay_us, ink);
-            self.text.text(0, 14, b"S", palette::WHITE);
+            let colors = [label, ink, unit];
+            env_time(self.text, 0, 12, b"A", adsr.attack_us, colors);
+            env_time(self.text, 10, 12, b"D", adsr.decay_us, colors);
+            self.text.text(0, 14, b"S", label);
             self.text
                 .number(1, 14, 4, u32::from(adsr.sustain_percent), ink);
-            self.text.text(5, 14, b"/100", palette::MUTED);
-            env_time(self.text, 10, 14, b"R", adsr.release_us, ink);
+            self.text.text(5, 14, b"/100", unit);
+            env_time(self.text, 10, 14, b"R", adsr.release_us, colors);
         }
         self.text.paint_async(lcd, clock).await
     }
@@ -499,17 +519,19 @@ impl Screen {
         if labels.view == View::Envelope {
             match labels.focus {
                 Part::Bass => return self.paint_bass_envelope(lcd, clock, labels.bass).await,
-                Part::Mono | Part::Organ | Part::Wavetable => {
-                    let controls = if labels.focus == Part::Organ {
-                        labels.organ.envelope
-                    } else {
-                        labels.voice_envelope
+                Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable => {
+                    let (target, controls) = match labels.focus {
+                        Part::Organ => (EnvelopeTarget::Amp, labels.organ.envelope),
+                        Part::Supersaw if labels.saw.target == EnvelopeTarget::Filter => {
+                            (EnvelopeTarget::Filter, labels.saw.filter_envelope)
+                        }
+                        _ => (EnvelopeTarget::Amp, labels.voice_envelope),
                     };
                     return self
-                        .paint_envelope(lcd, clock, labels.focus, controls)
+                        .paint_envelope(lcd, clock, labels.focus, target, controls)
                         .await;
                 }
-                Part::Tr808 | Part::Tr909 | Part::Supersaw => (),
+                Part::Tr808 | Part::Tr909 => (),
             }
         }
         let fx = labels.view == View::Fx;
@@ -803,7 +825,14 @@ fn transport_status(labels: &Labels) -> &'static str {
     }
 }
 
-fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32, ink: Rgb565) {
+fn env_time(
+    text: &mut TextGrid,
+    x: usize,
+    y: usize,
+    label: &[u8],
+    us: u32,
+    [print, ink, muted]: [Rgb565; 3],
+) {
     let (value, unit) = if us != 0 && us.is_multiple_of(1_000_000) {
         (us / 1_000_000, b"S ")
     } else if us.is_multiple_of(1000) {
@@ -811,9 +840,9 @@ fn env_time(text: &mut TextGrid, x: usize, y: usize, label: &[u8], us: u32, ink:
     } else {
         (us, b"US")
     };
-    text.text(x, y, label, palette::WHITE);
+    text.text(x, y, label, print);
     text.number(x + 1, y, 5, value, ink);
-    text.text(x + 6, y, unit, palette::MUTED);
+    text.text(x + 6, y, unit, muted);
 }
 
 // The brightest point leads. Its one-pixel halo disappears before the tail.

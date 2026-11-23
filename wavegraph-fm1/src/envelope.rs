@@ -14,6 +14,12 @@ const TIME_US: [u32; 39] = [
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct EnvelopeControls(Adsr);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EnvelopeTarget {
+    Amp,
+    Filter,
+}
+
 fn turn_time(us: u32, delta: i8, steps: &[u32]) -> u32 {
     if delta == 0 {
         return us;
@@ -32,6 +38,8 @@ impl EnvelopeControls {
     });
 
     pub(super) const WAVETABLE: Self = Self(wavegraph_wavetable::DEFAULT_ENVELOPE);
+    pub(super) const SUPER_SAW_AMP: Self = Self(wavegraph_supersaw::DEFAULT_AMP_ENVELOPE);
+    pub(super) const SUPER_SAW_FILTER: Self = Self(wavegraph_supersaw::DEFAULT_FILTER_ENVELOPE);
 
     pub(super) const ORGAN: Self = Self(wavegraph_organ::DEFAULT_ENVELOPE);
 

@@ -7,7 +7,7 @@
 use crate::{
     bass::Controls,
     capture::Trace,
-    envelope::EnvelopeControls,
+    envelope::{EnvelopeControls, EnvelopeTarget},
     fx::{BassFx, Fx},
     instrument::{Part, SawControls, Track, Voice},
     keys::PolyKey,
@@ -73,6 +73,9 @@ impl Settings {
                 self.nav.bass_insert() && self.tracks[self.nav.focus.index()].bass_fx.enabled
             }
             View::MasterFx(Some(row)) => self.fx.enabled(row),
+            View::Envelope if self.nav.part() == Part::Supersaw => {
+                self.tracks[self.nav.focus.index()].saw.target == EnvelopeTarget::Filter
+            }
             View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
             View::Sequencer => self.seq.enabled[self.seq.channel.index()],
             _ => false,
@@ -614,19 +617,7 @@ mod app {
                         let track = &mut self.settings.tracks[channel.index()];
                         let part = track.assignment.part;
                         track.voice.turn_waveform(part, algorithm);
-                        match (view, part) {
-                            (View::Envelope, Part::Mono | Part::Wavetable) => {
-                                track.voice_envelope.turn(knobs)
-                            }
-                            (View::Envelope, Part::Organ) => track.organ.envelope.turn_organ(knobs),
-                            _ => {
-                                track.turn_select(select);
-                                track.turn_knobs(knobs);
-                            }
-                        }
-                        if sel {
-                            track.voice_tap = !track.voice_tap;
-                        }
+                        track.edit_panel(view, select, knobs, sel);
                     }
                     View::MasterFx(None) | View::Sequencer => (),
                 }

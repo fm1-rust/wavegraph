@@ -5,13 +5,13 @@ use crate::panel::Navigation;
 use crate::wavetable::Controls as WaveControls;
 use crate::{
     bass::Controls,
-    envelope::EnvelopeControls,
+    envelope::{EnvelopeControls, EnvelopeTarget},
     fx::{BassFx, Device, Fx},
     keys::HitLog,
     keys::PolyKey,
     mixer::Mixer,
     organ::Controls as OrganControls,
-    panel::{Assignment, CHANNELS, Channel},
+    panel::{Assignment, CHANNELS, Channel, View},
     sequencer::{
         DrumKits, DrumLamp, DrumMachine, DrumMessage, PatternPlayer, Position, Sequencer, Transport,
     },
@@ -40,7 +40,7 @@ const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
     (Waveform::Square, b"SQUARE  "),
 ];
 
-const MAX_CUTOFF_STEP: u8 = 66;
+pub(super) const MAX_CUTOFF_STEP: u8 = 66;
 // Two semitones per detent, rounded to the nearest Hz from 20 kHz down.
 const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
     10, 11, 12, 14, 16, 17, 20, 22, 25, 28, 31, 35, 39, 44, 49, 55, 62, 70, 78, 88, 98, 110, 124,
@@ -79,7 +79,7 @@ impl Part {
     pub(super) const fn has_envelope(self) -> bool {
         matches!(
             self,
-            Self::Mono | Self::Organ | Self::Bass | Self::Wavetable
+            Self::Mono | Self::Organ | Self::Bass | Self::Supersaw | Self::Wavetable
         )
     }
 
@@ -165,7 +165,7 @@ pub(super) struct Gate {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Voice {
     pub(super) waveform: u8,
-    cutoff_step: u8,
+    pub(super) cutoff_step: u8,
     pub(super) gate: Gate,
     pub(super) transpose: i8,
 }
@@ -246,8 +246,11 @@ impl Voice {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SawControls {
+    pub(super) resonance: u8,
     pub(super) detune: u8,
     pub(super) mix: u8,
+    pub(super) target: EnvelopeTarget,
+    pub(super) filter_envelope: EnvelopeControls,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,15 +279,18 @@ impl Track {
             bass_fx: BassFx::INITIAL,
             organ: OrganControls::INITIAL,
             poly_keys: [PolyKey::EMPTY; POLYPHONY],
-            voice_envelope: if matches!(assignment.part, Part::Wavetable) {
-                EnvelopeControls::WAVETABLE
-            } else {
-                EnvelopeControls::INITIAL
+            voice_envelope: match assignment.part {
+                Part::Supersaw => EnvelopeControls::SUPER_SAW_AMP,
+                Part::Wavetable => EnvelopeControls::WAVETABLE,
+                _ => EnvelopeControls::INITIAL,
             },
             wave: WaveControls::INITIAL,
             saw: SawControls {
+                resonance: 0,
                 detune: wavegraph_supersaw::DEFAULT_DETUNE,
                 mix: wavegraph_supersaw::DEFAULT_MIX,
+                target: EnvelopeTarget::Amp,
+                filter_envelope: EnvelopeControls::SUPER_SAW_FILTER,
             },
             voice_tap: matches!(
                 assignment.part,
@@ -347,8 +353,11 @@ impl Track {
         match self.assignment.part {
             Part::Mono => self.voice.turn_cutoff(detents[0]),
             Part::Supersaw => {
-                self.saw.detune = self.saw.detune.saturating_add_signed(detents[0]).min(127);
-                self.saw.mix = self.saw.mix.saturating_add_signed(detents[1]).min(127);
+                let [cutoff, resonance, detune, mix] = detents;
+                self.voice.turn_cutoff(cutoff);
+                self.saw.resonance = self.saw.resonance.saturating_add_signed(resonance).min(127);
+                self.saw.detune = self.saw.detune.saturating_add_signed(detune).min(127);
+                self.saw.mix = self.saw.mix.saturating_add_signed(mix).min(127);
             }
             Part::Organ => self.organ.turn_knobs(detents),
             Part::Wavetable => self.wave.turn(self.voice.waveform, detents),
@@ -368,6 +377,33 @@ impl Track {
                 }
             }
             Part::Tr909 => (),
+        }
+    }
+
+    pub(super) fn edit_panel(&mut self, view: View, select: i8, knobs: [i8; 4], sel: bool) {
+        match (view, self.assignment.part) {
+            (View::Envelope, Part::Supersaw) => {
+                if select % 2 != 0 || sel {
+                    self.saw.target = match self.saw.target {
+                        EnvelopeTarget::Amp => EnvelopeTarget::Filter,
+                        EnvelopeTarget::Filter => EnvelopeTarget::Amp,
+                    };
+                }
+                match self.saw.target {
+                    EnvelopeTarget::Amp => self.voice_envelope.turn(knobs),
+                    EnvelopeTarget::Filter => self.saw.filter_envelope.turn(knobs),
+                }
+                return;
+            }
+            (View::Envelope, Part::Mono | Part::Wavetable) => self.voice_envelope.turn(knobs),
+            (View::Envelope, Part::Organ) => self.organ.envelope.turn_organ(knobs),
+            _ => {
+                self.turn_select(select);
+                self.turn_knobs(knobs);
+            }
+        }
+        if sel {
+            self.voice_tap = !self.voice_tap;
         }
     }
 
@@ -424,23 +460,46 @@ impl Track {
         events
     }
 
+    fn saw_controls(self, previous: Option<Self>) -> EventBatch {
+        let mut events = EventBatch::new();
+        let mut changed = |differs: bool, message: SawMessage| {
+            if differs {
+                events.push(at(message)).expect("at most six saw controls");
+            }
+        };
+        changed(
+            previous.is_none_or(|p| p.voice.cutoff_step != self.voice.cutoff_step),
+            SawMessage::CutoffHz(self.voice.cutoff_hz()),
+        );
+        changed(
+            previous.is_none_or(|p| p.saw.resonance != self.saw.resonance),
+            SawMessage::Resonance(self.saw.resonance),
+        );
+        changed(
+            previous.is_none_or(|p| p.saw.detune != self.saw.detune),
+            SawMessage::Detune(self.saw.detune),
+        );
+        changed(
+            previous.is_none_or(|p| p.saw.mix != self.saw.mix),
+            SawMessage::Mix(self.saw.mix),
+        );
+        changed(
+            previous.is_none_or(|p| p.voice_envelope != self.voice_envelope),
+            SawMessage::AmpEnvelope(self.voice_envelope.adsr()),
+        );
+        changed(
+            previous.is_none_or(|p| p.saw.filter_envelope != self.saw.filter_envelope),
+            SawMessage::FilterEnvelope(self.saw.filter_envelope.adsr()),
+        );
+        events
+    }
+
     fn oscillator_events(self, previous: Option<Self>) -> EventBatch {
         let part = self.assignment.part;
         let mut events = if part == Part::Mono {
             self.mono_controls(previous)
         } else {
-            let mut events = EventBatch::new();
-            if previous.is_none_or(|p| p.saw.detune != self.saw.detune) {
-                events
-                    .push(at(SawMessage::Detune(self.saw.detune)))
-                    .expect("one detune change");
-            }
-            if previous.is_none_or(|p| p.saw.mix != self.saw.mix) {
-                events
-                    .push(at(SawMessage::Mix(self.saw.mix)))
-                    .expect("one mix change");
-            }
-            events
+            self.saw_controls(previous)
         };
         let before = previous.and_then(|p| p.voice.sounding());
         let next = self.voice.sounding();
@@ -2529,20 +2588,36 @@ mod tests {
                 assert_eq!(nav.part(), Part::Supersaw);
                 tracks[i] = Track::factory(channel, nav.assignments[i]);
                 assert!(tracks[i].voice_tap);
-                let [detune, mix] = [[8, -20], [127, 127], [-128, -128], [-32, 16]][i];
-                tracks[i].turn_knobs([detune, mix, 0, 0]);
+                let knobs = [[-12, 50, 8, -20], [127; 4], [-128; 4], [6, 20, -32, 16]][i];
+                tracks[i].turn_knobs(knobs);
                 assert_eq!(
-                    (tracks[i].saw.detune, tracks[i].saw.mix),
-                    [(88, 76), (127, 127), (0, 0), (48, 112)][i]
+                    (
+                        tracks[i].voice.cutoff_hz(),
+                        tracks[i].saw.resonance,
+                        tracks[i].saw.detune,
+                        tracks[i].saw.mix
+                    ),
+                    [
+                        (1250, 50, 88, 76),
+                        (20000, 127, 127, 127),
+                        (10, 0, 0, 0),
+                        (10000, 20, 48, 112)
+                    ][i]
                 );
+                tracks[i].edit_panel(View::Envelope, 0, [1, 2, -8, 4], false);
+                tracks[i].edit_panel(View::Envelope, 1, [2, -2, 8, 1], false);
                 let number = [55, 62, 69, 76][i];
                 let (dest, on) =
                     decode_midi([9, 0x90 | channel as u8, number, 109]).expect("MIDI note");
                 keys.midi(dest, on, &mut tracks[i]);
                 keys.snapshot(dest, &mut tracks[i]);
                 let spec = [
+                    SawMessage::CutoffHz(tracks[i].voice.cutoff_hz()),
+                    SawMessage::Resonance(tracks[i].saw.resonance),
                     SawMessage::Detune(tracks[i].saw.detune),
                     SawMessage::Mix(tracks[i].saw.mix),
+                    SawMessage::AmpEnvelope(tracks[i].voice_envelope.adsr()),
+                    SawMessage::FilterEnvelope(tracks[i].saw.filter_envelope.adsr()),
                     SawMessage::NoteOn {
                         note: number,
                         velocity: 109,
@@ -2563,7 +2638,7 @@ mod tests {
             }
             nav.press(PageButton::Glo);
             nav.press(PageButton::Env);
-            assert_eq!(nav.view, View::Scope);
+            assert_eq!(nav.view, View::Envelope);
             for block in 0..3 {
                 if block == 1 {
                     // Swapping away during a held note discards only this engine.
@@ -2605,6 +2680,46 @@ mod tests {
             }
             Ok(())
         })
+    }
+
+    #[test]
+    fn supersaw_select_edits_only_the_visible_envelope() -> Result<(), Error> {
+        let mut nav = Navigation::INITIAL;
+        nav.assignments[0] = Assignment::new(Part::Supersaw);
+        let mut track = Track::new(nav.assignments[0]);
+        let initial = track;
+        nav.press(crate::panel::PageButton::Env);
+        assert_eq!(nav.view, View::Envelope);
+        track.edit_panel(nav.view, -1, [1, 2, 3, 4], false);
+        assert_eq!(track.saw.target, EnvelopeTarget::Filter);
+        assert_eq!(track.voice_envelope, initial.voice_envelope);
+        assert_eq!(track.voice, initial.voice);
+        assert_eq!(
+            track.events(Some(initial))?.as_slice(),
+            &[at(SawMessage::FilterEnvelope(
+                track.saw.filter_envelope.adsr()
+            ))]
+        );
+        let filter = track;
+        track.edit_panel(nav.view, 0, [2, 3, -4, 5], true);
+        assert_eq!(track.saw.target, EnvelopeTarget::Amp);
+        assert_eq!(track.saw.filter_envelope, filter.saw.filter_envelope);
+        assert_eq!(track.voice_tap, initial.voice_tap);
+        assert_eq!(
+            track.events(Some(filter))?.as_slice(),
+            &[at(SawMessage::AmpEnvelope(track.voice_envelope.adsr()))]
+        );
+        let amp = track;
+        track.edit_panel(nav.view, 1, [0; 4], false);
+        assert!(track.events(Some(amp))?.is_empty());
+        assert_eq!(track.saw.filter_envelope, filter.saw.filter_envelope);
+        nav.press(crate::panel::PageButton::Env);
+        track.edit_panel(nav.view, -1, [0; 4], true);
+        assert_eq!(
+            (nav.view, track.voice.transpose, track.voice_tap),
+            (View::Scope, -1, false)
+        );
+        Ok(())
     }
 
     #[test]

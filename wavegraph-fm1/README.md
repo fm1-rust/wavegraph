@@ -34,13 +34,13 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Piano keys | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. |
-| SELECT encoder | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
+| SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. |
-| Knobs 1–2 on the Super Saw | Adjust DETUNE and MIX, each from 0 to 127. |
-| ENV | Open or close the monosynth, organ, 303 or wavetable envelope page. ENV stays lit while the page is open. |
-| Knobs 1–4 in monosynth, organ or wavetable ENV | Adjust attack, decay, sustain and release for the selected part. |
+| Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
+| ENV | Open or close the monosynth, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
+| Knobs 1–4 in monosynth, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. On Super Saw, turn SELECT or press SEL to switch between AMP and FILTER. |
 | Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
@@ -106,15 +106,25 @@ Press **GLO**, turn **SELECT** to highlight a strip, then turn **PRESETS** to
 The strip keeps its MIDI channel, level and sends. Each assigned instance has
 its own seven oscillators and panel settings.
 
-On the blue JP-8080-style panel, knob 1 (**DETUNE**) sets the spread of the
-six side saws and knob 2 (**MIX**) sets their level around the center saw.
-Both dials track edits while a note is sounding. The 240 × 168 scope opens
-on the selected oscillator output (**OSC**). Press **SEL** to see the
+On the blue JP-8080-style panel, knob 1 (**CUTOFF**) sweeps the low-pass in
+six detents per octave. Knob 2 (**RESO**) emphasizes frequencies around the
+cutoff. Knob 3 (**DETUNE**) spreads the six side saws, and knob 4 (**MIX**)
+sets their level around the center saw. The 240 × 168 scope opens
+on the filtered voice (**OSC**). Press **SEL** to see the
 post-MASTER mix (**DAC**). The small display shows the channel and the held
 key, or the pattern status during playback. The four-bar pattern leaves space
 between sustained upper notes so the beating is audible.
 
-![Super Saw on channel one with the live waveform and panel controls](assets/supersaw.png)
+Press **ENV** for the matching blue envelope editor. Turn **SELECT** or press
+**SEL** to switch the amber tab between **AMP** and **FILTER**. The four knobs
+edit attack, decay, sustain and release for the highlighted envelope. Each
+strip remembers both contours. To hear the filter envelope, hold a low note,
+lower the base cutoff to about 500 Hz, raise resonance, then lengthen FILTER
+attack. Lengthening AMP release also lets you hear the filter close after key-up.
+
+| Super Saw panel | Filter envelope |
+| --- | --- |
+| ![Super Saw on channel one with the four live controls](assets/supersaw.png) | ![Filter selected on the blue JP-8080 envelope editor](assets/supersaw-envelope.png) |
 
 ## Wavetable
 

@@ -2,7 +2,7 @@
 use core::f64::consts::TAU;
 use wavegraph_core::{Event, Process, ProcessContext};
 use wavegraph_sample::{FromSample, I24, Sample};
-use wavegraph_supersaw::{Message, Supersaw, Tuning};
+use wavegraph_supersaw::{Adsr, Message, Supersaw, Tuning};
 
 fn at(frame: usize, message: Message) -> Event<Message> {
     Event {
@@ -39,9 +39,12 @@ fn frame_offsets_ties_and_silent_blocks_preserve_phase_in_both_formats() {
         at(17, on(69, 127)),
         at(53, Message::Detune(126)),
         at(53, Message::Mix(127)),
+        at(58, Message::CutoffHz(440)),
+        at(62, Message::Resonance(100)),
         at(70, on(76, 80)),
         at(70, Message::NoteOff(69)),
         at(120, on(76, 0)),
+        at(320, Message::FilterEnvelope(Adsr::GATE)),
         at(400, on(64, 90)),
     ];
     let mut signal = [f32::NAN; 512];
@@ -75,6 +78,8 @@ fn invalid_notes_and_controls_are_bounded_at_the_public_inlet() {
         &[
             at(0, Message::Detune(255)),
             at(0, Message::Mix(255)),
+            at(0, Message::Resonance(255)),
+            at(0, Message::CutoffHz(u16::MAX)),
             at(0, on(69, 255)),
             at(100, on(255, 20)),
             at(100, on(70, 0)),
@@ -86,12 +91,117 @@ fn invalid_notes_and_controls_are_bounded_at_the_public_inlet() {
         &[
             at(0, Message::Detune(127)),
             at(0, Message::Mix(127)),
+            at(0, Message::Resonance(127)),
+            at(0, Message::CutoffHz(u16::MAX)),
             at(0, on(69, 127)),
         ],
     );
     assert_eq!(a, b);
     render(&mut voice, &mut a, &[at(0, on(127, 100))]); // above output Nyquist
     assert_eq!(a, [0.0; 512]);
+}
+
+#[test]
+fn live_cutoff_resonance_and_filter_sustain_shape_the_held_spectrum() {
+    // Exactly 100 frames per fundamental period, so the bins need no window.
+    let tuning = Tuning::new(44_000, 1).expect("audio clock");
+    let mut voice = Supersaw::new(&tuning);
+    let closed = Adsr {
+        sustain_percent: 0,
+        ..Adsr::GATE
+    };
+    render(
+        &mut voice,
+        &mut [0.0_f32; 2048],
+        &[
+            at(0, Message::CutoffHz(440)),
+            at(0, Message::Mix(0)),
+            at(0, Message::Detune(0)),
+            at(0, Message::FilterEnvelope(closed)),
+            at(0, on(69, 127)),
+        ],
+    );
+    let measure = |message| {
+        let mut held = voice.clone();
+        render(&mut held, &mut [0.0_f32; 2048], &[at(0, message)]);
+        let mut samples = [0.0_f32; 1000];
+        render(&mut held, &mut samples, &[]);
+        [1.0, 4.0].map(|harmonic| {
+            let mut re = 0.0;
+            let mut im = 0.0;
+            for (i, &s) in (0_u16..).zip(&samples) {
+                let (sin, cos) = (TAU * harmonic * f64::from(i) / 100.0).sin_cos();
+                re += f64::from(s) * cos;
+                im += f64::from(s) * sin;
+            }
+            re.hypot(im)
+        })
+    };
+    let [fundamental, fourth] = measure(Message::Resonance(0));
+    let [peak, _] = measure(Message::Resonance(127));
+    let [_, opened] = measure(Message::CutoffHz(1760));
+    let [_, swept] = measure(Message::FilterEnvelope(Adsr::GATE));
+    assert!(peak > fundamental * 5.0);
+    assert!(opened > fourth * 8.0);
+    assert!((swept / opened - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn amplitude_sustain_and_release_are_independent_of_the_filter() {
+    let tuning = Tuning::new(44_000, 1).expect("audio clock");
+    let mut full = Supersaw::new(&tuning);
+    render(&mut full, &mut [0.0_f32; 8192], &[at(0, on(57, 110))]);
+    let mut quiet = full.clone();
+    let envelope = Adsr {
+        sustain_percent: 25,
+        release_us: 10_000,
+        ..Adsr::GATE
+    };
+    let mut a = [0.0_f32; 1024];
+    let mut b = a;
+    render(&mut full, &mut a, &[]);
+    render(&mut quiet, &mut b, &[at(0, Message::AmpEnvelope(envelope))]);
+    for (full, reduced) in a[200..].iter().zip(&b[200..]) {
+        assert!((full * 0.25 - reduced).abs() < 0.000_001);
+    }
+    render(&mut quiet, &mut b, &[at(10, Message::NoteOff(57))]);
+    assert!(b[100..400].iter().any(|s| s.abs() > 0.0001));
+    assert!(b[450..].iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn a_long_filter_release_keeps_time_while_the_amp_is_silent() {
+    let tuning = Tuning::new(44_000, 1).expect("audio clock");
+    let mut whole = Supersaw::new(&tuning);
+    let filter = Adsr {
+        attack_us: 40_000,
+        release_us: 100_000,
+        ..Adsr::GATE
+    };
+    render(
+        &mut whole,
+        &mut [0.0_f32; 2048],
+        &[
+            at(0, Message::FilterEnvelope(filter)),
+            at(0, Message::CutoffHz(330)),
+            at(0, Message::Resonance(96)),
+            at(0, on(57, 127)),
+        ],
+    );
+    render::<f32>(&mut whole, &mut [], &[at(0, Message::NoteOff(57))]);
+    let mut split = whole.clone();
+    let mut tail = [0.0_f32; 1024];
+    render(&mut whole, &mut tail, &[]);
+    assert!(tail[88..].iter().all(|&s| s == 0.0));
+    for chunk in tail.chunks_mut(31) {
+        render(&mut split, chunk, &[]);
+    }
+    let mut expected = [0.0_f32; 256];
+    let mut actual = expected;
+    let strike = [at(0, on(60, 127))];
+    render(&mut whole, &mut expected, &strike);
+    render(&mut split, &mut actual, &strike);
+    assert_eq!(actual, expected);
 }
 
 #[test]
