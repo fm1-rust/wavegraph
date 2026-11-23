@@ -486,7 +486,7 @@ impl Screen {
             lcd,
             self.strip,
             self.text,
-            (labels.view != View::Channel && elapsed.is_some()).then_some(labels.channel),
+            (labels.view == View::Scope && elapsed.is_some()).then_some(labels.channel),
         )?;
         let menu = if elapsed.is_some_and(|age| age < MENU_TICKS) {
             match labels.view {
