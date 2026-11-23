@@ -163,7 +163,7 @@ impl Screen {
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
             selector: SELECTOR.init_with(Selector::new),
-            drums: drums::Panel::new(),
+            drums: drums::Panel::default(),
             bass: tb303::Panel::default(),
             jp: jp8080::Panel::default(),
             wave: microwave::Panel::default(),
@@ -787,6 +787,7 @@ impl Screen {
                 .paint(
                     lcd,
                     clock,
+                    self.strip,
                     self.selector,
                     changed_page,
                     labels.focus,
@@ -796,10 +797,16 @@ impl Screen {
             let status = transport_status(&labels);
             let source = if labels.voice_tap { b"KIT" } else { b"DAC" };
             if labels.focus == Part::Tr808 {
-                self.drums
-                    .controls(lcd, self.selector, labels.drums808, changed_page)?;
+                self.drums.controls(
+                    lcd,
+                    self.strip,
+                    self.selector,
+                    labels.drums808,
+                    changed_page,
+                )?;
                 self.drums.status808(
                     lcd,
+                    self.strip,
                     self.selector,
                     (labels.channel, labels.voice_tap, status),
                     changed_page,

@@ -28,10 +28,10 @@ wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 embedded-graphics = "0.8.2"
 futures-util = { version = "0.3", default-features = false }
-fm1-audio = "0.1"
-fm1-controls = "0.1.1"
-fm1-graphics = { version = "0.1", features = ["async-display"] }
-fm1-rticx = { version = "0.1.1", features = ["audio", "async-display", "async-usb", "usb-log"] }
+fm1-audio = "0.2.0-rc.0"
+fm1-controls = "0.2.0-rc.0"
+fm1-graphics = { version = "0.2.0-rc.0", features = ["async-display"] }
+fm1-rticx = { version = "0.2.0-rc.0", features = ["audio", "async-display", "async-usb", "usb-log"] }
 static_cell = "2.1.1"
 
 [build-dependencies]
