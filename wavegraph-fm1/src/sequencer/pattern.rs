@@ -1,7 +1,7 @@
 //! Original four-bar factory sketch. These notes and curves are shared by
 //! playback and the SEQ view, so the display describes the events being played.
 
-use super::Track;
+use crate::instrument::Part;
 use wavegraph_909::Voice;
 
 pub(crate) const STEPS: usize = 64;
@@ -97,13 +97,13 @@ const BASS: [Step; STEPS] = {
     pattern
 };
 
-pub(crate) fn step(track: Track, index: usize) -> Step {
+pub(crate) fn step(part: Part, index: usize) -> Step {
     let index = index % STEPS;
-    match track {
-        Track::Mono => MONO[index],
-        Track::Organ => ORGAN[index],
-        Track::Bass => BASS[index],
-        Track::Drums => REST,
+    match part {
+        Part::Mono => MONO[index],
+        Part::Organ => ORGAN[index],
+        Part::Bass => BASS[index],
+        Part::Drums => REST,
     }
 }
 

@@ -10,11 +10,12 @@ use wavegraph_sample::I24;
 /// Changes applied at the start of the specified audio frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixerMessage {
-    /// Track level, 0..=128 (128 is unity).
+    /// Track level in units of 1/128 (128 is unity).
     Level {
         /// Zero-based track index; out-of-range indices are ignored.
         track: u8,
-        /// Track gain in units of 1/128; values above 128 are clamped.
+        /// Defaults to a limit of 128. With [boost](ChannelMixer::with_boost),
+        /// the full `u8` range is available.
         level: u8,
     },
     /// Post-fader level for the first send, 0..=128.
@@ -43,6 +44,7 @@ pub enum MixerMessage {
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelMixer<const TRACKS: usize, const OUTPUTS: usize = 2> {
     gains: [[u8; TRACKS]; OUTPUTS],
+    level_limit: u8,
 }
 
 impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
@@ -56,7 +58,17 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
         const { assert!(OUTPUTS >= 2, "mixer needs a dry output and a send") };
         let mut gains = [[0; TRACKS]; OUTPUTS];
         gains[0] = [128; TRACKS];
-        Self { gains }
+        Self {
+            gains,
+            level_limit: 128,
+        }
+    }
+
+    /// Allow track faders up to 255 (about +6 dB). Effect sends remain capped at unity.
+    #[must_use]
+    pub const fn with_boost(mut self) -> Self {
+        self.level_limit = u8::MAX;
+        self
     }
 
     fn control(&mut self, message: MixerMessage) {
@@ -72,7 +84,7 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
             .get_mut(outlet)
             .and_then(|g| g.get_mut(usize::from(track)))
         {
-            *gain = level.min(128);
+            *gain = level.min(if outlet == 0 { self.level_limit } else { 128 });
         }
     }
 }
@@ -85,7 +97,7 @@ impl<const TRACKS: usize, const OUTPUTS: usize> Default for ChannelMixer<TRACKS,
 
 #[allow(
     clippy::arithmetic_side_effects,
-    reason = "Each Q23 sample times a gain <=128 fits i32; sum is bounded for four tracks"
+    reason = "Q23 times 255 fits i32; post-fader sends are at most unity and four tracks fit i32"
 )]
 impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
     for ChannelMixer<TRACKS, OUTPUTS>
@@ -214,6 +226,60 @@ mod tests {
         });
         assert_eq!(dry[0].inner(), 1 << 22);
         assert_eq!(send[0].inner(), 1 << 22);
+    }
+
+    #[test]
+    fn boosted_fader_keeps_headroom_before_post_fader_summing() {
+        let mut mixer = ChannelMixer::<2, 3>::new().with_boost();
+        let inputs = [
+            [I24::new_unchecked(-(1 << 23))],
+            [I24::new_unchecked(1 << 22)],
+        ];
+        let events = [
+            event(
+                0,
+                MixerMessage::Level {
+                    track: 0,
+                    level: 255,
+                },
+            ),
+            event(
+                0,
+                MixerMessage::Level {
+                    track: 1,
+                    level: 255,
+                },
+            ),
+            event(
+                0,
+                MixerMessage::Send {
+                    track: 0,
+                    level: 255,
+                },
+            ),
+            event(
+                0,
+                MixerMessage::SendTo {
+                    send: 1,
+                    track: 1,
+                    level: 64,
+                },
+            ),
+        ];
+        let mut dry = [I24::default()];
+        let mut reverb = dry;
+        let mut delay = dry;
+        mixer.process(&mut ProcessContext {
+            frames: 1,
+            inputs: &[&inputs[0], &inputs[1]],
+            outputs: &mut [&mut dry, &mut reverb, &mut delay],
+            events: &events,
+            emit: &mut Err,
+        });
+        // A track can exceed Q23 internally. Only the summed outputs saturate.
+        assert_eq!(dry[0].inner(), -(255 << 15));
+        assert_eq!(reverb[0].inner(), -(1 << 23));
+        assert_eq!(delay[0].inner(), 255 << 14);
     }
 
     #[test]

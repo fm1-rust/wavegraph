@@ -1,6 +1,9 @@
 //! FM-1 master transport and one audio-clocked player for all factory patterns.
 
-use crate::instrument::{Message, Part};
+use crate::{
+    instrument::{Message, Part},
+    panel::{Assignment, CHANNELS, Channel, Navigation},
+};
 use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error};
 use wavegraph_303::Message as BassMessage;
 use wavegraph_909::{Samples, Tr909, Voice};
@@ -37,37 +40,6 @@ impl Transport {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Track {
-    Mono,
-    Organ,
-    Bass,
-    Drums,
-}
-
-impl Track {
-    pub(super) const ALL: [Self; 4] = [Self::Mono, Self::Organ, Self::Bass, Self::Drums];
-
-    pub(super) const fn part(self) -> Option<Part> {
-        match self {
-            Self::Mono => Some(Part::Mono),
-            Self::Organ => Some(Part::Organ),
-            Self::Bass => Some(Part::Bass),
-            Self::Drums => None,
-        }
-    }
-}
-
-impl From<Part> for Track {
-    fn from(part: Part) -> Self {
-        match part {
-            Part::Mono => Self::Mono,
-            Part::Organ => Self::Organ,
-            Part::Bass => Self::Bass,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SeqPage {
     Pattern,
     Tempo,
@@ -78,16 +50,16 @@ pub(super) enum SeqPage {
 pub(super) struct Sequencer {
     pub(super) page: Option<SeqPage>,
     pub(super) transport: Transport,
-    pub(super) track: Track,
+    pub(super) channel: Channel,
     pub(super) bar: u8,
-    pub(super) enabled: [bool; 4],
+    pub(super) enabled: [bool; CHANNELS],
 }
 
 impl Sequencer {
     pub(super) const INITIAL: Self = Self {
         page: None,
         transport: Transport::INITIAL,
-        track: Track::Mono,
+        channel: Channel::One,
         bar: 0,
         // The optional counterline starts muted, leaving room for chords and acid.
         enabled: [false, true, true, true],
@@ -101,13 +73,13 @@ impl Sequencer {
         };
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "A track/bar index plus an i8 delta fits i16."
-    )]
-    pub(super) fn turn_track(&mut self, detents: i8) {
-        let index = (i16::from(self.track as u8) + i16::from(detents)).rem_euclid(4);
-        self.track = Track::ALL[usize::try_from(index).expect("four track indices")];
+    pub(super) fn back(&mut self) -> bool {
+        if self.page == Some(SeqPage::Tempo) {
+            self.page = Some(SeqPage::Pattern);
+            true
+        } else {
+            false
+        }
     }
 
     #[allow(
@@ -122,7 +94,7 @@ impl Sequencer {
     }
 
     pub(super) fn toggle_track(&mut self) {
-        let enabled = &mut self.enabled[self.track as usize];
+        let enabled = &mut self.enabled[self.channel.index()];
         *enabled = !*enabled;
     }
 
@@ -154,6 +126,7 @@ pub struct Position {
 
 // One tick is an eighth of a sixteenth, providing short gates without another
 // clock. The rational remainder survives tempo edits and DMA block boundaries.
+#[derive(Clone, Copy)]
 struct StepClock {
     threshold: u32,
     rate_denominator: u32,
@@ -309,16 +282,30 @@ fn fraction_32(mut phase: u32, threshold: u32) -> u8 {
     fraction
 }
 
+#[derive(Clone, Copy)]
+struct PatternGate {
+    held: &'static [u8],
+    off_at: Option<usize>,
+    slide: bool,
+}
+
+impl PatternGate {
+    const CLOSED: Self = Self {
+        held: &[],
+        off_at: None,
+        slide: false,
+    };
+}
+
 /// One audio clock for notes, gates, drum strikes, automation and the playhead.
-/// The host supplies per-track enable/ownership and stores emitted events in its
-/// bounded graph queues. A full queue is an explicit error, never a dropped off.
+/// Each mixer channel owns its sequence gates and can be taken over independently.
+#[derive(Clone, Copy)]
 pub(super) struct PatternPlayer {
     clock: StepClock,
     transport: Transport,
-    enabled: [bool; 4],
-    held: [&'static [u8]; 3],
-    off_at: [Option<usize>; 3],
-    bass_slide: bool,
+    assignments: [Assignment; CHANNELS],
+    enabled: [bool; CHANNELS],
+    gates: [PatternGate; CHANNELS],
     automation_left: usize,
     position: Option<Position>,
 }
@@ -328,10 +315,9 @@ impl PatternPlayer {
         Self {
             clock: StepClock::new(rate.0, rate.1),
             transport: Transport::INITIAL,
-            enabled: [false; 4],
-            held: [&[]; 3],
-            off_at: [None; 3],
-            bass_slide: false,
+            assignments: Navigation::INITIAL.assignments,
+            enabled: [false; CHANNELS],
+            gates: [PatternGate::CLOSED; CHANNELS],
             automation_left: 0,
             position: None,
         }
@@ -344,7 +330,7 @@ impl PatternPlayer {
     #[cfg(test)]
     fn automation(&self) -> Option<pattern::Automation> {
         self.position
-            .filter(|_| self.enabled[Track::Bass as usize])
+            .filter(|_| self.enabled[Channel::Three.index()])
             .map(|_| {
                 let (position, fraction) = self.clock.position(true);
                 pattern::automation(usize::from(position.step), fraction)
@@ -353,25 +339,21 @@ impl PatternPlayer {
 
     fn release(
         &mut self,
-        track: Track,
+        channel: Channel,
         frame: usize,
-        emit: &mut impl FnMut(Track, Event<Message>) -> Result<(), Error>,
+        emit: &mut impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        let i = track as usize;
-        for &note in self.held[i] {
-            let message = match track {
-                Track::Mono => Message::Mono(MonoMessage::NoteOff(note)),
-                Track::Organ => Message::Organ(OrganMessage::NoteOff(note)),
-                Track::Bass => Message::Bass(BassMessage::NoteOff(note)),
-                Track::Drums => unreachable!("only synth tracks have gates"),
+        let i = channel.index();
+        for &note in self.gates[i].held {
+            let message = match self.assignments[i].part {
+                Part::Mono => Message::Mono(MonoMessage::NoteOff(note)),
+                Part::Organ => Message::Organ(OrganMessage::NoteOff(note)),
+                Part::Bass => Message::Bass(BassMessage::NoteOff(note)),
+                Part::Drums => unreachable!("only synth instruments hold gates"),
             };
-            emit(track, event(frame, message))?;
+            emit(channel, event(frame, message))?;
         }
-        self.held[i] = &[];
-        self.off_at[i] = None;
-        if track == Track::Bass {
-            self.bass_slide = false;
-        }
+        self.gates[i] = PatternGate::CLOSED;
         Ok(())
     }
 
@@ -383,108 +365,110 @@ impl PatternPlayer {
         &mut self,
         tick: usize,
         frame: usize,
-        emit: &mut impl FnMut(Track, Event<Message>) -> Result<(), Error>,
+        emit: &mut impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
     ) -> Result<(), Error> {
-        for track in [Track::Mono, Track::Organ, Track::Bass] {
-            if self.off_at[track as usize] == Some(tick) {
-                self.release(track, frame, emit)?;
+        for channel in Channel::ALL {
+            if self.gates[channel.index()].off_at == Some(tick) {
+                self.release(channel, frame, emit)?;
             }
         }
         if !tick.is_multiple_of(8) {
             return Ok(());
         }
         let step = tick / 8;
-        for track in [Track::Mono, Track::Organ, Track::Bass] {
-            let i = track as usize;
+        for channel in Channel::ALL {
+            let i = channel.index();
             if !self.enabled[i] {
                 continue;
             }
-            let data = pattern::step(track, step);
-            if data.notes.is_empty() {
-                // Invalid/unpaired outgoing slides cannot leave a gate hanging.
-                if track == Track::Bass && self.bass_slide {
-                    self.release(track, frame, emit)?;
+            let part = self.assignments[i].part;
+            if part == Part::Drums {
+                for &voice in pattern::drums(step) {
+                    emit(
+                        channel,
+                        event(frame, Message::Drum(DrumMessage::Trigger(voice))),
+                    )?;
                 }
                 continue;
             }
-            let slide = track == Track::Bass && self.bass_slide && !self.held[i].is_empty();
+            let data = pattern::step(part, step);
+            if data.notes.is_empty() {
+                if self.gates[i].slide {
+                    self.release(channel, frame, emit)?;
+                }
+                continue;
+            }
+            let slide = self.gates[i].slide;
             if !slide {
-                self.release(track, frame, emit)?;
+                self.release(channel, frame, emit)?;
             }
             for &note in data.notes {
-                let message = match track {
-                    Track::Mono => Message::Mono(MonoMessage::NoteOn {
+                let message = match part {
+                    Part::Mono => Message::Mono(MonoMessage::NoteOn {
                         note,
                         velocity: data.velocity,
                     }),
-                    Track::Organ => Message::Organ(OrganMessage::NoteOn {
+                    Part::Organ => Message::Organ(OrganMessage::NoteOn {
                         note,
                         velocity: data.velocity,
                     }),
-                    Track::Bass => Message::Bass(BassMessage::NoteOn {
+                    Part::Bass => Message::Bass(BassMessage::NoteOn {
                         note,
                         accent: data.velocity >= 96,
                         slide,
                     }),
-                    Track::Drums => unreachable!("drums have their own pattern"),
+                    Part::Drums => unreachable!("drum hits were emitted above"),
                 };
-                emit(track, event(frame, message))?;
+                emit(channel, event(frame, message))?;
             }
-            self.held[i] = data.notes;
-            if track == Track::Bass && data.slide {
-                self.bass_slide = true;
-                self.off_at[i] = None;
-            } else {
-                if track == Track::Bass {
-                    self.bass_slide = false;
-                }
-                self.off_at[i] = Some((tick + usize::from(data.gate.max(1))) % SUBSTEPS);
-            }
-        }
-        if self.enabled[Track::Drums as usize] {
-            for &voice in pattern::drums(step) {
-                emit(
-                    Track::Drums,
-                    event(frame, Message::Drum(DrumMessage::Trigger(voice))),
-                )?;
-            }
+            let slide = part == Part::Bass && data.slide;
+            self.gates[i] = PatternGate {
+                held: data.notes,
+                slide,
+                off_at: (!slide).then(|| (tick + usize::from(data.gate.max(1))) % SUBSTEPS),
+            };
         }
         Ok(())
     }
 
-    /// Emit frame offsets relative to this block. `enabled` includes both the
-    /// pattern mute state and whether live keys currently own that instrument.
+    /// Emit offsets relative to this block. `enabled` includes each channel's
+    /// pattern mute and whether a live note presently owns its synth.
     pub(super) fn render(
         &mut self,
         frames: usize,
         transport: Transport,
-        enabled: [bool; 4],
-        mut emit: impl FnMut(Track, Event<Message>) -> Result<(), Error>,
+        assignments: [Assignment; CHANNELS],
+        enabled: [bool; CHANNELS],
+        mut emit: impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         if frames == 0 {
             return Ok(());
         }
         let restart = self.transport.generation != transport.generation;
-        if restart {
-            for track in [Track::Mono, Track::Organ, Track::Bass] {
-                self.release(track, 0, &mut emit)?;
-            }
-            emit(Track::Drums, event(0, Message::Drum(DrumMessage::Stop)))?;
-            self.clock.restart();
-            self.automation_left = 0;
-        } else {
-            for track in [Track::Mono, Track::Organ, Track::Bass] {
-                if self.enabled[track as usize] && !enabled[track as usize] {
-                    self.release(track, 0, &mut emit)?;
+        let mut bass = [false; CHANNELS];
+        for channel in Channel::ALL {
+            let i = channel.index();
+            let changed = self.assignments[i] != assignments[i];
+            if changed {
+                // The old processor is being replaced in this block.
+                self.gates[i] = PatternGate::CLOSED;
+            } else if restart || (self.enabled[i] && !enabled[i]) {
+                if assignments[i].part == Part::Drums {
+                    emit(channel, event(0, Message::Drum(DrumMessage::Stop)))?;
+                } else {
+                    self.release(channel, 0, &mut emit)?;
                 }
             }
-            if self.enabled[Track::Drums as usize] && !enabled[Track::Drums as usize] {
-                emit(Track::Drums, event(0, Message::Drum(DrumMessage::Stop)))?;
+            bass[i] = enabled[i] && assignments[i].part == Part::Bass;
+            if bass[i] && (changed || !self.enabled[i]) {
+                self.automation_left = 0;
             }
         }
-        if !self.enabled[Track::Bass as usize] && enabled[Track::Bass as usize] {
+        if restart {
+            self.clock.restart();
             self.automation_left = 0;
         }
+        self.assignments = assignments;
         self.enabled = enabled;
         self.transport = transport;
         self.clock.set_tempo(transport.bpm);
@@ -498,16 +482,21 @@ impl PatternPlayer {
                 self.on_tick(tick, frame, &mut emit)?;
             }
             if self.automation_left == 0 {
-                if enabled[Track::Bass as usize] {
+                if bass.contains(&true) {
                     let (position, fraction) = self.clock.position(false);
                     let [cutoff, resonance, drive] =
                         pattern::automation_values(usize::from(position.step), fraction);
-                    for message in [
-                        BassMessage::CutoffHz(cutoff),
-                        BassMessage::Resonance(resonance / 100.0),
-                        BassMessage::OverdriveDb(drive),
-                    ] {
-                        emit(Track::Bass, event(frame, Message::Bass(message)))?;
+                    for channel in Channel::ALL
+                        .into_iter()
+                        .filter(|channel| bass[channel.index()])
+                    {
+                        for message in [
+                            BassMessage::CutoffHz(cutoff),
+                            BassMessage::Resonance(resonance / 100.0),
+                            BassMessage::OverdriveDb(drive),
+                        ] {
+                            emit(channel, event(frame, Message::Bass(message)))?;
+                        }
                     }
                 }
                 self.automation_left = AUTOMATION_FRAMES;
@@ -546,6 +535,7 @@ pub(super) enum DrumLamp {
 
 /// The drum renderer has no private transport; it consumes the shared player's
 /// frame-stamped strikes just like every pitched instrument.
+#[derive(Clone, Copy)]
 pub(super) struct DrumMachine {
     kit: Tr909<'static>,
     frame: u32,
@@ -569,6 +559,11 @@ impl DrumMachine {
         reason = "The weighted sum of six i16 voices fits i32 before clamping to Q23."
     )]
     fn render(&mut self, out: &mut [I24], key: &mut [I24]) {
+        if !Voice::ALL.into_iter().any(|v| self.kit.voice_active(v)) {
+            out.fill(I24::default());
+            key.fill(I24::default());
+            return;
+        }
         for (sample, key) in out.iter_mut().zip(key) {
             let [kick, snare, clap, closed, open, ride] = self.kit.next_voices().map(i32::from);
             *key = I24::new_unchecked(kick << 8);
@@ -654,13 +649,19 @@ mod tests {
         frames: usize,
         transport: Transport,
         enabled: [bool; 4],
-    ) -> Vec<(Track, Event<Message>)> {
+    ) -> Vec<(Channel, Event<Message>)> {
         let mut events = Vec::new();
         player
-            .render(frames, transport, enabled, |track, event| {
-                events.push((track, event));
-                Ok(())
-            })
+            .render(
+                frames,
+                transport,
+                Navigation::INITIAL.assignments,
+                enabled,
+                |track, event| {
+                    events.push((track, event));
+                    Ok(())
+                },
+            )
             .expect("unbounded host event sink");
         events
     }
@@ -669,8 +670,8 @@ mod tests {
     fn panel_browses_four_tracks_and_edits_one_global_bpm() {
         let mut seq = Sequencer::INITIAL;
         assert_eq!(seq.enabled, [false, true, true, true]);
-        seq.turn_track(-1);
-        assert_eq!(seq.track, Track::Drums);
+        seq.channel.turn(-1);
+        assert_eq!(seq.channel, Channel::Four);
         seq.toggle_track();
         assert!(!seq.enabled[3]);
         seq.turn_bar(-1);
@@ -691,15 +692,12 @@ mod tests {
             seq.turn(0, 127);
         }
         assert_eq!(seq.transport.bpm, 300);
-        seq.turn(-1, 0);
+        assert!(seq.back());
+        assert!(!seq.back());
         assert_eq!(seq.page, Some(SeqPage::Pattern));
         seq.toggle_page();
         assert_eq!(seq.page, None);
         assert!(seq.transport.playing());
-        for part in [Part::Mono, Part::Organ, Part::Bass] {
-            assert_eq!(Track::from(part).part(), Some(part));
-        }
-        assert_eq!(Track::Drums.part(), None);
     }
 
     #[test]
@@ -761,7 +759,7 @@ mod tests {
 
     #[test]
     fn dma_partition_does_not_move_notes_gates_or_automation() {
-        fn collect(blocks: &[usize]) -> Vec<(Track, Event<Message>)> {
+        fn collect(blocks: &[usize]) -> Vec<(Channel, Event<Message>)> {
             let mut player = PatternPlayer::new((24_000_000, 544));
             let mut result = Vec::new();
             let mut offset = 0;
@@ -918,7 +916,13 @@ mod tests {
     fn a_full_event_sink_is_an_explicit_failure() {
         let mut player = PatternPlayer::new((44_100, 1));
         assert_eq!(
-            player.render(128, playing(), [true; 4], |_, _| Err(Error::Capacity)),
+            player.render(
+                128,
+                playing(),
+                Navigation::INITIAL.assignments,
+                [true; 4],
+                |_, _| Err(Error::Capacity)
+            ),
             Err(Error::Capacity)
         );
     }
@@ -927,34 +931,23 @@ mod tests {
     fn drum_trigger_and_stop_obey_the_shared_frame_offsets() {
         let mut drums = DrumMachine::new((44_100, 1));
         let mut out = [I24::default(); 256];
-        let mut key = out;
-        let mut observation = None;
+        let mut kick = out;
         drums.process(&mut ProcessContext {
             frames: 256,
             inputs: &[],
-            outputs: &mut [&mut out, &mut key],
+            outputs: &mut [&mut out, &mut kick],
             events: &[
                 event(11, Message::Drum(DrumMessage::Trigger(Voice::Kick))),
                 event(100, Message::Drum(DrumMessage::Stop)),
-                event(128, Message::Drum(DrumMessage::Trigger(Voice::Clap))),
             ],
-            emit: &mut |event| {
-                observation = Some((event.frame, event.port, event.message));
-                Ok(())
-            },
+            emit: &mut Err,
         });
-        let mut lamps = [DrumLamp::Off; 6];
-        lamps[Voice::Clap as usize] = DrumLamp::Strike;
-        assert_eq!(observation, Some((255, 2, Message::DrumLamps(lamps))));
         assert!(
             out[..11]
                 .iter()
-                .chain(&out[100..128])
+                .chain(&out[100..])
                 .all(|sample| sample.inner() == 0)
         );
         assert!(out[11..100].iter().any(|sample| sample.inner() != 0));
-        assert!(out[128..].iter().any(|sample| sample.inner() != 0));
-        assert!(key[11..100].iter().any(|sample| sample.inner() != 0));
-        assert!(key[..11].iter().chain(&key[100..]).all(|s| s.inner() == 0));
     }
 }
