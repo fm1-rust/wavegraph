@@ -28,12 +28,13 @@ monosynth, with sine selected and the cutoff at 5 kHz. The drum transport starts
 | Knobs 1–4 on the 303 | Edit the four assignments shown above the scope. The active knob is highlighted and its value appears below the trace. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-strip mixer; its lamp stays on while the mixer is visible. HOME closes the page. |
-| SELECT encoder in mixer | Choose the LEVEL or REVERB SEND bank for all four knobs. |
+| SELECT encoder in mixer | Cycle through LEVEL, REVERB and DELAY for all four knobs. |
 | Knobs 1–4 in mixer | Set tracks 1–4 independently, 0–128: monosynth, organ, 303, and TR-909. |
-| FX | Open or close the global reverb return view. The FX button stays illuminated while that page is visible. |
-| Knobs 1–2 in FX | Reverb decay (0–127) and wet return (0–128); per-track sends are now in GLO. |
+| FX | Open or close the global return view. Turn SELECT to choose reverb or delay. |
+| Knobs 1–2 on FX / REVERB | Reverb decay (0–127) and wet return (0–128). |
+| Knobs 1–3 on FX / DELAY | Delay time (5–1,000 ms), feedback (0–95%) and wet return (0–128). |
 | ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
-| SEL button in FX | Mute or unmute the wet return without clearing the reverb tail. |
+| SEL button in FX | Mute or unmute the selected return. Its tail keeps decaying. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
@@ -152,41 +153,45 @@ USB log packet, including misses while disconnected. Repeated reads preserve
 the snapshot until another miss occurs.
 
 The graph skips the oscillator and filter work of silent keyboard parts.
-Held notes, VCA release tails and the shared reverb keep running when you
+Held notes, VCA release tails and both shared effects keep running when you
 change presets. The 303 still discharges its accent capacitor while silent.
 
 [cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
 
-## Four-track mixer and global reverb
+## Four-track mixer, reverb and delay
 
-Press GLO to enter the mixer. Its four horizontal strips show the currently
-selected LEVEL or REVERB SEND bank as numerical values and proportional bars.
-Knobs 1–4 edit the corresponding tracks directly and SELECT switches banks;
-press GLO again or HOME to leave. GLO, FX, and ENV are mutually exclusive.
+Press GLO to enter the mixer. Its four horizontal strips show the selected
+bank as values and bars. Turn SELECT to cycle through LEVEL, REVERB and
+DELAY. Knobs 1–4 edit the monosynth, M1 organ, 303 and 909 respectively.
+Press GLO again or HOME to leave. GLO, FX, and ENV are mutually exclusive.
 PRESETS continues to change the keyboard's selected instrument without
 changing the mixer page or its bank. All four strips are live, including
 the sequenced TR-909.
 
 The volume defaults are 128/128/32/128 (mono, organ, 303, 909). The 303's
 quarter gain preserves its previous relative balance. Reverb sends start at
-32/0/24/0; unlike the earlier graph, the organ can now send to the same reverb
-tank. **Sends are post-fader**, so lowering an instrument also lowers its wet
-contribution. All gains are 0–128, with 128 representing unity.
+32/0/24/0. All four delay sends start at zero. **Both sends are post-fader.**
+Lowering a track fader reduces the new signal it feeds to either effect.
+Existing tails continue to play. All gains are 0–128, with 128 representing unity.
 
-FX retains the global reverb return settings: knob 1 edits decay, knob 2 edits
-wet level, and SEL mutes the wet return without clearing the tail. The FX page
-always scopes the final DAC mix, regardless of voice-tap selection. The
-shared reverb tank survives full/half graph edits and uses approximately 17
-KiB of static delay storage; it is not an emulation of the Roland DEP-5.
-Future global effects can add send banks without changing the four-strip
-control layout.
+For echoes on just the 303, open GLO, turn SELECT to DELAY and raise knob 3.
+For the 909, raise knob 4. Open FX and turn SELECT to DELAY to adjust the
+shared echo. Knob 1 changes the time in 5 ms steps (initially 375 ms), knob 2
+sets feedback (initially 35%), and knob 3 sets the wet return (initially
+64/128). Zero feedback gives one repeat.
+
+On FX / REVERB, knobs 1 and 2 set decay and wet level. SEL mutes the displayed
+return, and its LED shows whether that return is enabled. Both effects keep
+their state across full/half gain edits. FX scopes the final DAC mix.
 
 ## Audio and display
 
 Every 128-frame ALNK0 block calls three persistent synths, the sequenced
-909, a four-input/two-output Q23 channel mixer, and a shared reverb processor.
-The mixer applies per-track dry levels and post-fader sends; its dry sum is
-combined with the wet reverb return before output to both stereo channels.
+909, and a four-input Q23 mixer with dry, reverb-send and delay-send outputs.
+One reverb and one mono digital delay run in parallel. The master mix adds
+both wet returns to the dry sum before output gain and stereo duplication.
+The delay borrows one second of PCM16 storage (88,236 bytes) and skips empty
+blocks once its line is silent.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.

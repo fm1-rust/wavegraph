@@ -6,6 +6,7 @@ use crate::{
     capture::{HEIGHT, Trace, WIDTH},
     envelope::EnvelopeControls,
     firmware::Frame,
+    fx::FxPage,
     instrument::{Mixer, MixerBank, Part},
     sequencer::{SeqPage, Transport},
 };
@@ -82,7 +83,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Part),
-    Fx,
+    Fx(FxPage),
     Mixer,
     Sequencer(SeqPage),
     Envelope(Part, EnvelopeControls),
@@ -171,6 +172,7 @@ impl Screen {
             match bank {
                 MixerBank::Volume => b"LEVEL ".as_slice(),
                 MixerBank::Reverb => b"REVERB".as_slice(),
+                MixerBank::Delay => b"DELAY ".as_slice(),
             },
             palette::CYAN,
         );
@@ -179,6 +181,7 @@ impl Screen {
         let values = match bank {
             MixerBank::Volume => mixer.volume,
             MixerBank::Reverb => mixer.reverb,
+            MixerBank::Delay => mixer.delay,
         };
         for (track, (&name, &ink)) in names.iter().zip(&colors).enumerate() {
             let y = 2 + 3 * track;
@@ -470,7 +473,7 @@ impl Screen {
         let style = self.selector.style(style);
         let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
         let page = if labels.fx_view {
-            Page::Fx
+            Page::Fx(labels.fx_page)
         } else {
             Page::Scope(labels.focus)
         };
@@ -508,24 +511,44 @@ impl Screen {
         self.paint_beam(lcd, clock, &trace, style, pulse_part, beat_phase)
             .await?;
         if labels.fx_view {
-            self.text.text(0, 0, b"FX / REVERB", ink);
+            let output = labels.fx.output(labels.fx_page);
             self.text.text(
-                12,
                 0,
-                if labels.fx.enabled { b"ON " } else { b"OFF" },
-                bright,
+                0,
+                match labels.fx_page {
+                    FxPage::Reverb => b"FX / REVERB".as_slice(),
+                    FxPage::Delay => b"FX / DELAY".as_slice(),
+                },
+                ink,
             );
+            self.text
+                .text(12, 0, if output.enabled { b"ON " } else { b"OFF" }, bright);
             self.text.text(
                 15,
                 0,
                 if labels.half_gain { b"HALF" } else { b"FULL" },
                 muted,
             );
-            self.text.text(0, 13, b"1 DECAY", muted);
-            self.text.number(8, 13, 3, u32::from(labels.fx.decay), ink);
-            self.text.text(12, 13, b"2 WET", muted);
-            self.text.number(17, 13, 3, u32::from(labels.fx.wet), ink);
-            self.text.text(0, 14, b"SENDS IN GLO MIXER", muted);
+            match labels.fx_page {
+                FxPage::Reverb => {
+                    self.text.text(0, 13, b"1 DECAY", muted);
+                    self.text.number(8, 13, 3, u32::from(labels.fx.decay), ink);
+                    self.text.text(12, 13, b"2 WET", muted);
+                    self.text.number(17, 13, 3, u32::from(output.wet), ink);
+                    self.text.text(0, 14, b"SENDS IN GLO MIXER", muted);
+                }
+                FxPage::Delay => {
+                    self.text.text(0, 13, b"1 TIME", muted);
+                    self.text
+                        .number(7, 13, 4, u32::from(labels.fx.time_ms), ink);
+                    self.text.text(12, 13, b"MS", muted);
+                    self.text.text(0, 14, b"2 FDBK", muted);
+                    self.text
+                        .number(7, 14, 2, u32::from(labels.fx.feedback), ink);
+                    self.text.text(11, 14, b"3 WET", muted);
+                    self.text.number(17, 14, 3, u32::from(output.wet), ink);
+                }
+            }
             return self.text.paint_async(lcd, clock).await;
         }
         if bass {

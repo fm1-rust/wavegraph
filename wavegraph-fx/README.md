@@ -1,20 +1,21 @@
 # wavegraph-fx
 
-Small, fixed-storage, `no_std` global send effects for WaveGraph. The first
-processor is a mono, fixed-point Schroeder-style reverb (4 combs, 2 allpasses).
-It requires 17,048 bytes of caller-owned delay storage, runs without allocation,
-and produces an entirely wet return to be mixed with the dry instrument output.
+Fixed-storage, `no_std` send effects for signed Q23 audio. The FM-1 uses a
+`ChannelMixer<4, 3>` to apply each track fader once and produce the dry sum,
+reverb send and delay send on successive outlets. Each effect has a
+wet-only return that can be added to the dry bus. With the default two outputs,
+`ChannelMixer<4>` supplies a single send. `SendMixer` remains available as a
+two-input send-only node.
 
-The `SendMixer` has two independent signal inputs for the current FM-1
-monosynth and TB-303. Each send gain, decay, bypass and return level accepts
-sample-offset `Message` events through `Process<Message, I24>`; no parameter
-changes require reallocating the reverb or stopping audio. The WaveGraph
-bytecode schedules the send mixer, reverb and final dry/wet mix explicitly.
+- `Reverb` uses four comb filters and two allpasses with 17,048 bytes of
+  caller-owned storage tuned for approximately 44.1 kHz.
+- `Delay::new(line, rate_hz)` borrows one `i16` per frame of maximum delay.
+  `Message::TimeMs` sets echo spacing and `Message::Feedback` sets the fraction
+  fed back (0–95%). Zero feedback gives a single echo. Changes to the time
+  crossfade the live taps over 64 frames.
 
-The lengths target the FM-1's approximately 44.1 kHz output. The return is
-currently mono and should be evaluated for CPU cost, SRAM headroom and audible
-artifacts on the real FM-1 before expanding to stereo or more sophisticated
-algorithms. It does not reproduce the Roland DEP-5 or the CHOMPI 303 reverb.
+Mixer and effect controls accept sample-offset events. `Message::Wet` scales a
+return, and `Message::Enabled(false)` mutes it while its tail continues to decay.
 
 ## License
 
