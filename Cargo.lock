@@ -869,6 +869,14 @@ name = "wavegraph-adsr"
 version = "0.1.0"
 
 [[package]]
+name = "wavegraph-arp"
+version = "0.1.0"
+dependencies = [
+ "heapless",
+ "wavegraph-core",
+]
+
+[[package]]
 name = "wavegraph-core"
 version = "0.1.0"
 
@@ -891,6 +899,7 @@ dependencies = [
  "wavegraph-808",
  "wavegraph-909",
  "wavegraph-adsr",
+ "wavegraph-arp",
  "wavegraph-fx",
  "wavegraph-monosynth",
  "wavegraph-organ",

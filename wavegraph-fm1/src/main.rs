@@ -8,6 +8,8 @@ fn main() {
 }
 
 #[cfg(any(target_os = "none", test))]
+mod arp;
+#[cfg(any(target_os = "none", test))]
 mod assets;
 #[cfg(any(target_os = "none", test))]
 mod bass;

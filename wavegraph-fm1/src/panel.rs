@@ -60,6 +60,7 @@ impl Assignment {
 pub(super) enum View {
     Scope,
     Envelope,
+    Arp,
     Fx,
     Mixer,
     Channel,
@@ -75,6 +76,7 @@ impl View {
 
 pub(super) enum PageButton {
     Home,
+    Arp,
     Env,
     Fx,
     Glo,
@@ -157,6 +159,8 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
+            PageButton::Arp if self.view == View::Scope => View::Arp,
+            PageButton::Arp if self.view != View::Arp => self.view,
             PageButton::Fx if self.view != View::Fx => View::Fx,
             PageButton::Seq if self.view != View::Sequencer => View::Sequencer,
             PageButton::Env if self.view != View::Envelope && self.part().has_envelope() => {

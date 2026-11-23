@@ -4,6 +4,7 @@ members = [
     "instruments/wavegraph-*",
     "wavegraph",
     "wavegraph-adsr",
+    "wavegraph-arp",
     "wavegraph-core",
     "wavegraph-fx",
     "wavegraph-fm1",
@@ -17,6 +18,7 @@ license = "Apache-2.0 OR MIT"
 [workspace.dependencies]
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-adsr = { version = "0.1", path = "wavegraph-adsr" }
+wavegraph-arp = { version = "0.1", path = "wavegraph-arp" }
 wavegraph-core = { version = "0.1", path = "wavegraph-core" }
 wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }

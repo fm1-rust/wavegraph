@@ -27,6 +27,7 @@ use fm1_rticx::{
 };
 use static_cell::{ConstStaticCell, StaticCell};
 
+mod arp;
 mod badge;
 mod channel_fx;
 mod drums;
@@ -104,6 +105,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Channel, Part),
+    Arp(Channel, Part),
     Fx(Channel, Part),
     MasterFx,
     Mixer,
@@ -125,6 +127,7 @@ pub(super) struct Screen {
     mixer: mixer::Surface,
     rack: master_fx::Rack,
     channel_fx: channel_fx::Rack,
+    arp: arp::Panel,
     sequence: sequencer::Grid,
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
@@ -167,6 +170,7 @@ impl Screen {
             mixer: mixer::Surface::default(),
             rack: master_fx::Rack::default(),
             channel_fx: channel_fx::Rack::default(),
+            arp: arp::Panel::default(),
             sequence: sequencer::Grid::new(),
             page: None,
             dot: None,
@@ -526,6 +530,27 @@ impl Screen {
                     labels.seq,
                     labels.focus,
                     (motion.position, motion.banks[labels.seq.channel.index()]),
+                )
+                .await;
+        }
+        if labels.view == View::Arp {
+            let page = Page::Arp(labels.channel, labels.focus);
+            let entering = self.page.replace(page) != Some(page);
+            if entering {
+                self.change_view(WaveformStyle {
+                    background: arp::Colors::for_part(labels.focus).face,
+                    ..STYLE
+                });
+            }
+            return self
+                .arp
+                .paint(
+                    lcd,
+                    clock,
+                    self.strip,
+                    &labels,
+                    motion.arp_notes[labels.channel.index()],
+                    entering,
                 )
                 .await;
         }

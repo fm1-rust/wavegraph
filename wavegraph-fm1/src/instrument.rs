@@ -4,6 +4,7 @@
 use crate::panel::Navigation;
 use crate::wavetable::Program as WaveProgram;
 use crate::{
+    arp::{self, ChannelArp},
     bass::Controls,
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
@@ -264,6 +265,8 @@ pub(super) struct SawControls {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Track {
+    pub(super) arp: arp::Controls,
+    pub(super) arp_revision: u32,
     pub(super) assignment: Assignment,
     pub(super) voice: Voice,
     pub(super) bass: Controls,
@@ -283,6 +286,8 @@ pub(super) struct Track {
 impl Track {
     pub(super) const fn new(assignment: Assignment) -> Self {
         Self {
+            arp: arp::Controls::INITIAL,
+            arp_revision: 0,
             assignment,
             voice: Voice::INITIAL,
             bass: Controls::INITIAL,
@@ -424,6 +429,24 @@ impl Track {
         if sel {
             self.voice_tap = !self.voice_tap;
         }
+    }
+
+    pub(super) fn arp_chord_changed(&self, previous: Option<&Self>) -> bool {
+        self.arp.enabled
+            && previous.is_none_or(|old| {
+                !old.arp.enabled
+                    || old.assignment != self.assignment
+                    || old.arp_revision != self.arp_revision
+            })
+    }
+
+    // The direct path releases its gates when the arpeggiator takes ownership.
+    fn direct(mut self) -> Self {
+        if self.arp.enabled {
+            self.voice.gate = Gate::default();
+            self.poly_keys = [PolyKey::EMPTY; POLYPHONY];
+        }
+        self
     }
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
@@ -1025,6 +1048,7 @@ impl Programs {
             transport: Transport::INITIAL,
             sequences: Sequencer::INITIAL.enabled,
             player: PatternPlayer::new(rate),
+            arps: core::array::from_fn(|_| ChannelArp::new(rate)),
             events,
             position: None,
             drums: [[DrumLamp::Off; 6]; CHANNELS],
@@ -1048,6 +1072,7 @@ pub(super) struct Instrument<'a> {
     pub(super) transport: Transport,
     pub(super) sequences: [bool; CHANNELS],
     player: PatternPlayer,
+    arps: [ChannelArp; CHANNELS],
     events: &'a mut [RoutedEvents; CHANNELS],
     pub(super) position: Option<Position>,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
@@ -1058,6 +1083,26 @@ pub(super) struct Instrument<'a> {
 }
 
 impl Instrument<'_> {
+    pub(super) fn sync_chord(
+        &mut self,
+        channel: Channel,
+        track: &Track,
+        chord: &wavegraph_arp::Chord,
+    ) {
+        let i = channel.index();
+        if track.arp_chord_changed(self.previous.as_ref().map(|last| &last[i])) {
+            self.arps[i].chord.clone_from(chord);
+        }
+    }
+
+    pub(super) fn arp_note(&self, channel: Channel) -> Option<u8> {
+        let track = &self.previous.as_ref()?[channel.index()];
+        self.arps[channel.index()]
+            .clock
+            .sounding()
+            .map(|n| n.saturating_add_signed(track.voice.transpose).min(127))
+    }
+
     pub(super) fn set_mixer(&mut self, mixer: Mixer) {
         self.mixer = mixer;
     }
@@ -1100,7 +1145,7 @@ impl Instrument<'_> {
         &mut self,
         tracks: [Track; CHANNELS],
         buses: &'b mut [[I24; N]; BUS_COUNT],
-        wire: impl FnMut(Channel, Event<MidiMessage>),
+        mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
         let mut inserts = Vec::<_, 8>::new();
         let mut enabled = self.sequences;
@@ -1108,11 +1153,8 @@ impl Instrument<'_> {
         for (i, events) in self.events.iter_mut().enumerate() {
             let track = tracks[i];
             let part = track.assignment.part;
-            let old = self
-                .previous
-                .as_ref()
-                .map(|previous| previous[i])
-                .filter(|old| old.assignment == track.assignment);
+            let previous = self.previous.as_ref().map(|tracks| tracks[i]);
+            let old = previous.filter(|old| old.assignment == track.assignment);
             if old.is_none() {
                 inserts
                     .push(at(Message::Insert(Channel::ALL[i], part)))
@@ -1124,8 +1166,12 @@ impl Instrument<'_> {
                     .map_err(|_| Error::Capacity)?;
             }
             // Each synth's live gate takes over its own sequencer lane.
-            enabled[i] &= part.is_kit() || track.voice.gate.note.is_none();
-            let mut panel = track.events(old)?;
+            enabled[i] &= if track.arp.enabled {
+                self.arps[i].chord.is_empty()
+            } else {
+                part.is_kit() || track.voice.gate.note.is_none()
+            };
+            let mut panel = track.direct().events(old.map(Track::direct))?;
             if enabled[i]
                 && old.is_some()
                 && let Some(owned) = self.player.automation(Channel::ALL[i])
@@ -1140,7 +1186,26 @@ impl Instrument<'_> {
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
-            if part.is_kit() {
+            if let Some(last) = previous.filter(|t| t.arp.enabled)
+                && (!track.arp.enabled
+                    || old.is_none()
+                    || self.arps[i].chord.is_empty()
+                    || last.voice.transpose != track.voice.transpose)
+            {
+                self.arps[i].clock.stop(|n| {
+                    arp::route(
+                        &last,
+                        Event {
+                            frame: 0,
+                            port: 0,
+                            message: MidiMessage::Off(n),
+                        },
+                        events,
+                        |e| wire(Channel::ALL[i], e),
+                    )
+                })?;
+            }
+            if part.is_kit() && !track.arp.enabled {
                 track
                     .panel_hits
                     .append_since(old.map_or(0, |t| t.panel_hits.total()), events)?;
@@ -1161,10 +1226,20 @@ impl Instrument<'_> {
                     .push(event)
                     .map_err(|_| Error::Capacity)
             },
-            wire,
+            &mut wire,
         )?;
-        for (events, live) in self.events.iter_mut().zip(live_counts) {
+        for (i, (events, live)) in self.events.iter_mut().zip(live_counts).enumerate() {
             merge_live_events(events, live);
+            let track = &tracks[i];
+            let arp = &mut self.arps[i];
+            // A held or latched chord owns this lane, so the only clip events
+            // in this buffer are its frame-zero release and controller restore.
+            if track.arp.enabled && !arp.chord.is_empty() {
+                arp.clock
+                    .render(&arp.chord, track.arp.config, self.transport.bpm, N, |e| {
+                        arp::route(track, e, events, |e| wire(Channel::ALL[i], e))
+                    })?;
+            }
         }
         let mixer_events = self.mixer.events(self.previous_mixer);
         let reverb = self.fx.return_events(self.previous_fx, Device::Reverb);
@@ -1277,6 +1352,7 @@ fn event_order(event: &Event<Message>) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    mod arpeggiator;
     use super::*;
     use crate::{
         keys::{Keys, MidiAction, Piano, decode_midi},
