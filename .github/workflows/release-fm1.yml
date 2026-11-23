@@ -63,6 +63,8 @@ jobs:
           mv dist/wavegraph-fm1.bin "dist/wavegraph-fm1-$VERSION.bin"
           cat > release-notes.md <<'EOF'
           Flash the `.fwsc` package with M-Flasher, or open it in the [FM-1 browser emulator](https://joakimeriksson.github.io/fm1-emu/). The `.bin` is the raw application image for emulators that accept it, such as [fm1-emulator](https://github.com/simonjohansson/fm1-emulator).
+
+          Play the latest stable firmware on [wavegraph.org](https://wavegraph.org/).
           EOF
       - name: Publish the GitHub Release
         env:
@@ -75,3 +77,52 @@ jobs:
             "dist/wavegraph-fm1-$VERSION.bin" \
             --verify-tag --title "wavegraph-fm1 v$VERSION" \
             --notes-file release-notes.md
+
+  pages:
+    needs: release
+    runs-on: ubuntu-24.04
+    concurrency: wavegraph-fm1-gh-pages
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # same runtime as v7.0.1
+        with:
+          ref: gh-pages
+      - name: Update the emulator from the latest stable firmware release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Resolve under the lock so overlapping releases and retries converge.
+          tag=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name
+              | select(test("^wavegraph-fm1/v[0-9]+\\.[0-9]+\\.[0-9]+(\\+[A-Za-z0-9.-]+)?$"))' |
+            LC_ALL=C sort -V | tail -n 1)
+          if [[ -z "$tag" ]]; then
+            echo "No stable wavegraph-fm1 release to publish."
+            exit 0
+          fi
+
+          version=${tag#wavegraph-fm1/v}
+          image="wavegraph-fm1-$version.bin"
+          dir=emulator/firmware
+          git rm -- "$dir/*.bin"
+          gh release download "$tag" --pattern "$image" --dir "$dir"
+          test -s "$dir/$image"
+          jq -n --arg label "Firmware v$version" --arg image "$image" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag" \
+            '{label: $label, image: $image, url: $url}' > "$dir/current.json"
+
+          git add -- "$dir"
+          if ! git diff --cached --quiet; then
+            git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "emulator: load wavegraph-fm1 v$version"
+            git push origin HEAD:gh-pages
+          fi
+          # A GITHUB_TOKEN push skips the branch's automatic Pages build.
+          # Request it even on a retry after the commit was already pushed.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/pages/builds"
