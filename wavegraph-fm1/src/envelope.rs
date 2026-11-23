@@ -33,6 +33,13 @@ impl EnvelopeControls {
 
     pub(super) const ORGAN: Self = Self(wavegraph_organ::DEFAULT_ENVELOPE);
 
+    pub(super) const HOUSE_CHORDS: Self = Self(Adsr {
+        attack_us: 4_000,
+        decay_us: 180_000,
+        sustain_percent: 68,
+        release_us: 180_000,
+    });
+
     fn turn_shape(&mut self, [a, d, s]: [i8; 3], attack: &[u32], decay: &[u32]) {
         self.0.attack_us = turn_time(self.0.attack_us, a, attack);
         self.0.decay_us = turn_time(self.0.decay_us, d, decay);

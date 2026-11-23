@@ -75,6 +75,23 @@ impl Controls {
         last: [Knob::Cutoff, Knob::Tuning],
     };
 
+    /// The factory sequence's resonant, driven voice, also available to live keys.
+    pub(super) const DEEP_HOUSE: Self = Self {
+        // 315 Hz, 82% resonance, 36 semitones, 330 ms, 1.5 ms, 85% accent, 18 dB.
+        values: [14, 82, 36, 33, 120, 5, 85, 18],
+        ..Self::INITIAL
+    };
+
+    /// Hand the three automated controls back to their retained panel settings.
+    pub(super) fn automation_reset(self) -> [Message; 3] {
+        let params = self.voice_params();
+        [
+            Message::CutoffHz(params.cutoff_hz),
+            Message::Resonance(params.resonance),
+            Message::OverdriveDb(params.overdrive_db),
+        ]
+    }
+
     pub(super) fn turn_select(&mut self, detents: i8) {
         if detents % 2 != 0 {
             self.bank = match self.bank {

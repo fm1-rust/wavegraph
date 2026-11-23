@@ -5,7 +5,7 @@ use crate::{
     envelope::EnvelopeControls,
     fx::{Fx, FxPage},
     organ::{Controls as OrganControls, OrganKey},
-    sequencer::Transport,
+    sequencer::{DrumMessage, PatternPlayer, Position, Track, Transport},
 };
 use heapless::Vec;
 use wavegraph::{
@@ -258,6 +258,12 @@ impl Parts {
         mono_envelope: EnvelopeControls::INITIAL,
     };
 
+    pub(super) const DEEP_HOUSE: Self = Self {
+        bass: Controls::DEEP_HOUSE,
+        organ: OrganControls::DEEP_HOUSE,
+        ..Self::INITIAL
+    };
+
     pub(super) fn turn_select(&mut self, focus: Part, detents: i8) {
         match focus {
             Part::Mono | Part::Organ => {
@@ -405,10 +411,10 @@ pub(super) struct Mixer {
 }
 
 impl Mixer {
-    // Preserve the existing 303 quarter-gain mix and original 303/mono sends.
-    // The organ joins the reverb bus at zero send by default.
+    // The 303 reserves its headroom before PCM conversion; keep its fader at
+    // unity instead of adding the previous quarter-gain after conversion.
     pub(super) const DRY: Self = Self {
-        volume: [128, 128, 32, 128],
+        volume: [128; 4],
         reverb: [0; 4],
         delay: [0; 4],
     };
@@ -475,8 +481,7 @@ pub(super) enum Message {
     Bass(BassMessage),
     Mixer(MixerMessage),
     Fx(FxMessage),
-    Transport(Transport),
-    BeatPhase(Option<u8>),
+    Drum(DrumMessage),
 }
 
 impl From<MonoMessage> for Message {
@@ -516,11 +521,27 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
 // Four organ note-offs, four note-ons, four panel values and a voicing event.
 const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
+// At most one note/gate transition and two automation updates in a 128-frame
+// DMA block, plus sixteen panel messages. Keep this storage off the IRQ stack.
+const MAX_ROUTED_EVENTS: usize = 32;
+type RoutedEvents = Vec<Event<Message>, MAX_ROUTED_EVENTS>;
 
 pub(super) enum Node<'a> {
     Mono(Monosynth<'a>),
     Organ(&'a mut Organ),
     Bass(Tb303),
+}
+
+impl Node<'_> {
+    pub(super) fn bass(rate: f32) -> Self {
+        // Leave room for resonant filter peaks before Q23 conversion. Applying
+        // the graph's former quarter-gain after conversion was already too late.
+        Self::Bass(
+            Tb303::new(rate)
+                .with_output_gain(0.0625)
+                .with_idle_suspension(),
+        )
+    }
 }
 
 impl Process<Message, I24> for Node<'_> {
@@ -593,7 +614,7 @@ fn dispatch<M>(
     cx: &mut ProcessContext<'_, '_, Message, I24>,
     unpack: impl Fn(Message) -> Option<M>,
 ) {
-    let events: Vec<_, MAX_EVENTS> = cx
+    let events: Vec<_, MAX_ROUTED_EVENTS> = cx
         .events
         .iter()
         .filter_map(|e| {
@@ -643,6 +664,7 @@ impl Programs {
     pub(super) fn bind<'a>(
         &'a self,
         nodes: &'a mut [&'a mut dyn Process<Message, I24>],
+        rate: (u32, u32),
     ) -> Result<Instrument<'a>, Error> {
         Ok(Instrument {
             programs: self,
@@ -653,8 +675,11 @@ impl Programs {
             fx: Fx::INITIAL,
             previous_fx: None,
             transport: Transport::INITIAL,
-            previous_transport: None,
-            beat_phase: None,
+            tracks: crate::sequencer::Sequencer::INITIAL.enabled,
+            player: PatternPlayer::new(rate),
+            events: core::array::from_fn(|_| RoutedEvents::new()),
+            automated: false,
+            position: None,
             previous: None,
         })
     }
@@ -669,8 +694,11 @@ pub(super) struct Instrument<'a> {
     fx: Fx,
     previous_fx: Option<Fx>,
     pub(super) transport: Transport,
-    previous_transport: Option<Transport>,
-    pub(super) beat_phase: Option<u8>,
+    pub(super) tracks: [bool; 4],
+    player: PatternPlayer,
+    events: [RoutedEvents; 4],
+    automated: bool,
+    pub(super) position: Option<Position>,
     previous: Option<Parts>,
 }
 
@@ -699,44 +727,117 @@ impl Instrument<'_> {
         let mono_events = parts.mono_events(self.previous);
         let organ_events = parts.organ_events(self.previous);
         let old = self.previous.unwrap_or(Parts::INITIAL);
-        let bass_events = parts
+        let mut bass_events = parts
             .bass
             .events(old.bass, bass, old.voices[Part::Bass as usize]);
+        let mut enabled = self.tracks;
+        // Physical keys temporarily own their instrument. Release sequence gates
+        // before live strikes; the next sequence strike resumes after key-up.
+        for (track, held) in [
+            (
+                Track::Mono,
+                parts.voices[Part::Mono as usize].gate.note.is_some(),
+            ),
+            (
+                Track::Organ,
+                parts.organ_keys.iter().any(|key| key.note.is_some()),
+            ),
+            (Track::Bass, bass.gate.note.is_some()),
+        ] {
+            enabled[track as usize] &= !held;
+        }
+        let automated = self.transport.playing() && enabled[Track::Bass as usize];
+        if automated {
+            bass_events.retain(|event| !is_automation(event.message));
+        } else if self.automated {
+            for message in parts.bass.automation_reset() {
+                bass_events.push(at(message)).map_err(|_| Error::Capacity)?;
+            }
+        }
+        for events in &mut self.events {
+            events.clear();
+        }
+        for (track, panel) in [
+            (Track::Mono, &mono_events),
+            (Track::Organ, &organ_events),
+            (Track::Bass, &bass_events),
+        ] {
+            self.events[track as usize]
+                .extend_from_slice(panel)
+                .map_err(|_| Error::Capacity)?;
+        }
+        self.player
+            .render(N, self.transport, enabled, |track, event| {
+                self.events[track as usize]
+                    .push(event)
+                    .map_err(|_| Error::Capacity)
+            })?;
+        for events in &mut self.events {
+            // Stable, bounded insertion sort. Same-frame key releases precede
+            // sequence strikes, and sequence releases precede live key strikes.
+            for i in 1..events.len() {
+                let mut j = i;
+                while let Some(previous) = j.checked_sub(1) {
+                    if event_order(&events[j]) >= event_order(&events[previous]) {
+                        break;
+                    }
+                    events.swap(j, previous);
+                    j = previous;
+                }
+            }
+        }
         let mixer_events = self.mixer.events(self.previous_mixer);
         let reverb = self.fx.events(self.previous_fx, FxPage::Reverb);
         let delay = self.fx.events(self.previous_fx, FxPage::Delay);
-        let transport_event = (self.previous_transport != Some(self.transport))
-            .then(|| at(Message::Transport(self.transport)));
         self.patch.render(
             &mut Software,
             buses,
             &[
-                &mono_events,
-                &organ_events,
-                &bass_events,
+                &self.events[Track::Mono as usize],
+                &self.events[Track::Organ as usize],
+                &self.events[Track::Bass as usize],
                 &mixer_events,
                 &reverb,
-                transport_event.as_slice(),
+                &self.events[Track::Drums as usize],
                 &delay,
             ],
-            |_, event| match event.message {
-                Message::BeatPhase(phase) => {
-                    self.beat_phase = phase;
-                    Ok(())
-                }
-                _ => Err(event),
-            },
+            |_, event| Err(event),
         )?;
         self.previous = Some(parts);
         self.previous_mixer = Some(self.mixer);
         self.previous_fx = Some(self.fx);
-        self.previous_transport = Some(self.transport);
+        self.automated = automated;
+        self.position = self.player.position();
         Ok(&buses[if self.half_gain {
             MASTER_BUS + 1
         } else {
             MASTER_BUS
         }])
     }
+}
+
+fn is_automation(message: Message) -> bool {
+    matches!(
+        message,
+        Message::Bass(
+            BassMessage::CutoffHz(_) | BassMessage::Resonance(_) | BassMessage::OverdriveDb(_)
+        )
+    )
+}
+
+fn event_order(event: &Event<Message>) -> (usize, u8) {
+    let order = match event.message {
+        Message::Mono(MonoMessage::NoteOff(_))
+        | Message::Organ(OrganMessage::NoteOff(_))
+        | Message::Bass(BassMessage::NoteOff(_) | BassMessage::Reset)
+        | Message::Drum(DrumMessage::Stop) => 0,
+        Message::Mono(MonoMessage::NoteOn { .. })
+        | Message::Organ(OrganMessage::NoteOn { .. })
+        | Message::Bass(BassMessage::NoteOn { .. })
+        | Message::Drum(DrumMessage::Trigger(_)) => 2,
+        _ => 1,
+    };
+    (event.frame, order)
 }
 
 #[cfg(test)]
@@ -758,7 +859,7 @@ mod tests {
         let mut mono = Node::Mono(Monosynth::new(&tuning).with_idle_suspension());
         let mut organ_state = Organ::new(mono_rate, 1).expect("organ sample clock");
         let mut organ = Node::Organ(&mut organ_state);
-        let mut bass = Node::Bass(Tb303::new(24_000_000.0 / 544.0).with_idle_suspension());
+        let mut bass = Node::bass(24_000_000.0 / 544.0);
         let mut mixer = FxMixer(ChannelMixer::new());
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxReturn(Reverb::new(&mut storage));
@@ -774,7 +875,7 @@ mod tests {
             &mut drums,
             &mut delay,
         ];
-        test(&mut programs.bind(&mut nodes)?)
+        test(&mut programs.bind(&mut nodes, (mono_rate, 1))?)
     }
 
     #[test]
@@ -1010,12 +1111,16 @@ mod tests {
         with_instrument(44_100, |instrument| {
             let mut parts = Parts::INITIAL;
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            instrument.tracks = [false, false, false, true];
             let silence = instrument.render(parts, &mut buses)?.map(I24::inner);
             assert_eq!(silence, [0; 128]);
-            assert_eq!(instrument.beat_phase, None);
+            assert_eq!(instrument.position, None);
             instrument.transport.toggle();
             let beat = *instrument.render(parts, &mut buses)?;
-            assert_eq!(instrument.beat_phase, Some(1));
+            assert_eq!(
+                instrument.position.map(|position| position.beat_phase),
+                Some(1)
+            );
             assert_eq!(beat, buses[3]);
             assert!(beat.iter().any(|s| s.inner() != 0));
             parts.voices[0].gate.note = Some(note(69, 96));
@@ -1023,10 +1128,123 @@ mod tests {
             assert_ne!(buses[MASTER_BUS], buses[3]);
             instrument.transport.toggle();
             let tail = *instrument.render(parts, &mut buses)?;
-            assert_eq!(instrument.beat_phase, None);
+            assert_eq!(instrument.position, None);
             assert_eq!(buses[3], [I24::default(); 128]);
             assert_eq!(tail, buses[4]);
             assert!(tail.iter().any(|s| s.inner() != 0));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn live_bass_takeover_preserves_both_sends_and_stop_preserves_the_live_key() -> Result<(), Error>
+    {
+        with_instrument(44_100, |instrument| {
+            let mut parts = Parts::DEEP_HOUSE;
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let mut mixer = Mixer::DRY;
+            mixer.volume[Track::Bass as usize] = 64;
+            mixer.reverb[Track::Bass as usize] = 128;
+            mixer.delay[Track::Bass as usize] = 64;
+            instrument.set_mixer(mixer);
+            let check_sends = |buses: &[[I24; 128]; BUS_COUNT]| {
+                assert_eq!(
+                    buses[4].map(I24::inner),
+                    buses[2].map(|sample| sample.inner() >> 1)
+                );
+                assert_eq!(buses[5], buses[4]);
+                assert_eq!(
+                    buses[6].map(I24::inner),
+                    buses[4].map(|sample| sample.inner() >> 1)
+                );
+            };
+            instrument.tracks = [false, false, true, false];
+            instrument.transport.toggle();
+            instrument.render(parts, &mut buses)?;
+            assert!(instrument.automated);
+            check_sends(&buses);
+            let pitch = instrument.events[Track::Bass as usize]
+                .iter()
+                .find_map(|event| match event.message {
+                    Message::Bass(BassMessage::NoteOn { note, .. }) => Some(note),
+                    _ => None,
+                })
+                .expect("the factory bass starts on the downbeat");
+
+            parts.bass.turn_knobs([2, -3, 0, 0]);
+            parts.voices[Part::Bass as usize].gate = Gate {
+                note: Some(note(pitch, 110)),
+                phrase: 1,
+            };
+            instrument.render(parts, &mut buses)?;
+            assert!(!instrument.automated);
+            check_sends(&buses);
+            let events = &instrument.events[Track::Bass as usize];
+            assert_eq!(
+                events[0].message,
+                Message::Bass(BassMessage::NoteOff(pitch))
+            );
+            assert!(matches!(events.last().expect("live strike").message,
+                Message::Bass(BassMessage::NoteOn { note, slide: false, .. }) if note == pitch));
+            for message in parts.bass.automation_reset() {
+                assert!(
+                    events
+                        .iter()
+                        .any(|event| event.message == Message::Bass(message))
+                );
+            }
+
+            instrument.transport.toggle();
+            // The fader silences dry and both sends without stopping a held
+            // live voice. Its earlier effect returns retain their own tails.
+            mixer.volume[Track::Bass as usize] = 0;
+            instrument.set_mixer(mixer);
+            instrument.render(parts, &mut buses)?;
+            assert!(instrument.events[Track::Bass as usize].is_empty());
+            assert!(
+                buses[4..=6]
+                    .iter()
+                    .flatten()
+                    .all(|sample| sample.inner() == 0)
+            );
+            assert!(
+                buses[Part::Bass.tap()]
+                    .iter()
+                    .any(|sample| sample.inner() != 0)
+            );
+            parts.voices[Part::Bass as usize].gate.note = None;
+            instrument.render(parts, &mut buses)?;
+            assert_eq!(
+                instrument.events[Track::Bass as usize].as_slice(),
+                &[at(BassMessage::NoteOff(pitch))]
+            );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn muting_the_bass_restores_edited_panel_values_without_stopping_other_tracks()
+    -> Result<(), Error> {
+        with_instrument(44_100, |instrument| {
+            let mut parts = Parts::DEEP_HOUSE;
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            instrument.transport.toggle();
+            instrument.render(parts, &mut buses)?;
+            parts.bass.turn_knobs([4, -6, 0, 0]);
+            instrument.render(parts, &mut buses)?;
+            assert!(instrument.automated);
+            instrument.tracks[Track::Bass as usize] = false;
+            instrument.render(parts, &mut buses)?;
+            assert!(!instrument.automated);
+            assert!(instrument.position.is_some());
+            for message in parts.bass.automation_reset() {
+                assert!(
+                    instrument.events[Track::Bass as usize]
+                        .iter()
+                        .any(|event| event.message == Message::Bass(message))
+                );
+            }
+            assert!(buses[3].iter().any(|sample| sample.inner() != 0));
             Ok(())
         })
     }
@@ -1075,7 +1293,7 @@ mod tests {
                 assert!(mono.iter().any(|s| s.inner() != 0));
                 assert!(bass.iter().any(|s| s.inner() != 0));
                 for i in 0..mix.len() {
-                    let bass_fader = bass[i].inner() >> 2;
+                    let bass_fader = bass[i].inner();
                     let dry = (mono[i].inner() + bass_fader).clamp(-(1 << 23), (1 << 23) - 1);
                     assert_eq!(mix[i], dry >> u8::from(half));
                 }
@@ -1186,7 +1404,7 @@ mod tests {
         let mut mixer = Mixer::INITIAL;
         let mut bank = MixerBank::Volume;
         mixer.turn_knobs(bank, [i8::MIN, 1, 8, -1]);
-        assert_eq!(mixer.volume, [0, 128, 40, 127]);
+        assert_eq!(mixer.volume, [0, 128, 128, 127]);
         bank.turn(1);
         assert_eq!(bank, MixerBank::Reverb);
         mixer.turn_knobs(bank, [0, 12, 0, 127]);
@@ -1226,6 +1444,7 @@ mod tests {
             let mut mixer = Mixer::DRY;
             mixer.reverb[0] = 128;
             mixer.delay[3] = 128;
+            instrument.tracks = [false, false, false, true];
             let mut fx = Fx::INITIAL;
             let mut page = FxPage::Reverb;
             page.turn(-1);
