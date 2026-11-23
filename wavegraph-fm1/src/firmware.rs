@@ -103,6 +103,7 @@ pub struct Frame {
 mod app {
     use super::{Frame, Labels, Settings};
     use crate::{
+        bumper::Bumper,
         capture::{Capture, FLAT},
         instrument::{
             BUS_COUNT, FxMixer, FxReturn, Gate, Instrument, Keyboard, Message, Node, Note, Part,
@@ -157,6 +158,7 @@ mod app {
     #[shared]
     struct Shared {
         settings: Settings,
+        bumper: Bumper,
         leds: Leds,
         frame: Frame,
         overloads: Overloads,
@@ -222,6 +224,7 @@ mod app {
         (
             Shared {
                 settings: Settings::INITIAL,
+                bumper: Bumper::default(),
                 leds,
                 frame: Frame {
                     trace: FLAT,
@@ -533,7 +536,7 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, position])]
+    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, position, bumper])]
     struct Audio {
         output: Output,
         instrument: Instrument<'static>,
@@ -550,6 +553,7 @@ mod app {
         fn exec(&mut self) {
             let started = cycles();
             let settings = self.shared().settings.lock(|s| *s);
+            let mut bumper = self.shared().bumper;
             let mut revision = None;
             let result = self.output.render(settings.master, |out| {
                 revision = Some(
@@ -565,6 +569,13 @@ mod app {
                     .render(settings.parts, self.buses)
                     .expect("fixed patch");
                 fm1_audio::mix_stereo(out, mono, mono);
+                let cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
+                for (frame, &bytes) in out.iter_mut().zip(cue) {
+                    let sample = i32::from(i16::from_le_bytes(bytes)) << 8;
+                    for channel in frame {
+                        *channel = channel.saturating_add(sample);
+                    }
+                }
             });
             let Some(revision) = revision else { return }; // No DMA half was ready.
             if result == Refill::Written {
@@ -680,7 +691,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, position])]
+    #[async_task(priority = 1, shared = [frame, overloads, position, bumper])]
     struct Draw {
         port: Option<DisplayPort>,
         clock: Clock,
@@ -693,7 +704,12 @@ mod app {
                 return;
             };
             let mut screen = Screen::new();
-            if screen.splash(&mut lcd, &mut self.clock).await.is_err() {
+            let mut bumper = self.shared().bumper;
+            let splash = screen
+                .splash(&mut lcd, &mut self.clock, || bumper.lock(Bumper::start))
+                .await;
+            bumper.lock(Bumper::stop);
+            if splash.is_err() {
                 return;
             }
             // A failed display transfer ends only this task. Audio and panel IRQs keep running.

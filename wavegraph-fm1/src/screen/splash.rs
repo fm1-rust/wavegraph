@@ -79,6 +79,7 @@ impl Screen {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
+        title_landed: impl FnOnce(),
     ) -> Result<(), Error> {
         // A phase-modulated sine with a second harmonic. One sample per LCD column.
         let trace: Trace = core::array::from_fn(|x| {
@@ -91,6 +92,7 @@ impl Screen {
         TITLE
             .animate(lcd, clock, self.strip, &trace, DROP_TICKS, title_y)
             .await?;
+        title_landed();
         MODEL
             .animate(lcd, clock, self.strip, &trace, RISE_TICKS, |t| {
                 ease(SIZE as i16, MODEL_Y, t, RISE_TICKS)

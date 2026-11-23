@@ -10,6 +10,8 @@ fn main() {
 #[cfg(any(target_os = "none", test))]
 mod bass;
 #[cfg(any(target_os = "none", test))]
+mod bumper;
+#[cfg(any(target_os = "none", test))]
 mod capture;
 #[cfg(any(target_os = "none", test))]
 mod envelope;

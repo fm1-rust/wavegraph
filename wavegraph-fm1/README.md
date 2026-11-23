@@ -250,8 +250,11 @@ readout follows the knob even while the scope waits for a trigger.
 The splash and instrument pages use [fm1-graphics] to draw a waveform on a
 24-pixel grid. The boot illustration combines two harmonics with phase
 modulation. When the green WaveGraph title finishes bouncing, the pink FM-1
-lettering rises from the bottom. The firmware version appears beneath it,
-taken from the `wavegraph-fm1` Cargo package at build time.
+lettering rises from the bottom. A 750 ms cue starts on that landing. An
+accented 303 slides up an octave and back down, followed by two pitched 909
+snare strokes and a touch of closed hat. MASTER controls the cue throughout.
+Turning it fully down skips the rest of the cue for that boot. The firmware
+version beneath the logo comes from the `wavegraph-fm1` Cargo package.
 
 The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
 artwork. Both draw in buffered RGB565 strips. The scope stays live while the transport is stopped. During playback, a
