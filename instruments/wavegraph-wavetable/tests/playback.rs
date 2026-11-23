@@ -33,14 +33,19 @@ fn command(voice: &mut Wavetable<'_>, message: Message) {
     render::<f32>(voice, &mut [], &[event(0, message)]);
 }
 
+// Constant frames make the crossfade audible as a level, independently of pitch.
+fn two_levels() -> [u8; 816 * 2] {
+    let mut pcm = [0; 816 * 2];
+    pcm[816..].as_chunks_mut::<3>().0.fill([0, 4, 64]); // two Q15 values of 16384
+    pcm
+}
+
 #[test]
 fn prepared_banks_validate_geometry_and_cover_both_ends() {
     assert!(Bank::from_packed12(&[]).is_none());
     assert!(Bank::from_packed12(&[0; 815]).is_none());
     assert!(Bank::from_packed12(&vec![0; 816 * 257]).is_none());
-    // Constant frames make the expected crossfade observable independently of pitch.
-    let mut pcm = [0; 816 * 2];
-    pcm[816..].as_chunks_mut::<3>().0.fill([0, 4, 64]); // two Q15 values of 16384
+    let pcm = two_levels();
     let banks = [Bank::from_packed12(&pcm).expect("two frames")];
     let tuning = Tuning::new(48_000, 1).expect("clock");
     assert!(Wavetable::new(&tuning, &[]).is_none());
@@ -67,6 +72,96 @@ fn prepared_banks_validate_geometry_and_cover_both_ends() {
         ],
     );
     assert_eq!(out, [0.0, 0.125 * 129.0 / 256.0, 0.125, 0.125, 0.0]);
+}
+
+#[test]
+fn position_adsr_scans_both_directions_and_releases_under_the_amp_tail() {
+    let pcm = two_levels();
+    let banks = [Bank::from_packed12(&pcm).expect("two frames")];
+    let tuning = Tuning::new(1_000, 1).expect("clock");
+    for (start, end) in [(0, 127), (127, 0), (127, 127)] {
+        let mut voice = Wavetable::new(&tuning, &banks).expect("catalog");
+        command(
+            &mut voice,
+            Message::Scan(Scan {
+                start,
+                end,
+                mode: Mode::Envelope,
+                ..Scan::RESONANT
+            }),
+        );
+        command(
+            &mut voice,
+            Message::Envelope(Adsr {
+                release_us: 8_000,
+                ..Adsr::GATE
+            }),
+        );
+        command(
+            &mut voice,
+            Message::PositionEnvelope(Adsr {
+                attack_us: 4_000,
+                decay_us: 2_000,
+                sustain_percent: 50,
+                release_us: 2_000,
+            }),
+        );
+        let mut out = [0.0; 11];
+        render(
+            &mut voice,
+            &mut out,
+            &[event(1, on(60)), event(8, Message::NoteOff(60))],
+        );
+        assert_eq!(out[0], 0.0);
+        let levels = [0.25, 0.5, 0.75, 1.0, 0.625, 0.5, 0.5, 0.125, 0.0, 0.0];
+        let gains = [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            49.0 / 64.0,
+            36.0 / 64.0,
+            25.0 / 64.0,
+        ];
+        for ((&sample, level), gain) in out[1..].iter().zip(levels).zip(gains) {
+            let position =
+                f32::from(start) / 127.0 * (1.0 - level) + f32::from(end) / 127.0 * level;
+            assert_eq!(sample, 0.125 * position * gain);
+        }
+    }
+}
+
+#[test]
+fn held_note_enters_position_mode_and_retimes_without_retriggering() {
+    let tuning = Tuning::new(1_000, 1).expect("clock");
+    let mut voice = Wavetable::new(&tuning, &BANKS).expect("catalog");
+    let mut shape = Adsr {
+        attack_us: 8_000,
+        ..Adsr::GATE
+    };
+    command(&mut voice, Message::PositionEnvelope(shape));
+    command(&mut voice, on(57));
+    render(&mut voice, &mut [0.0; 10], &[]);
+    command(
+        &mut voice,
+        Message::Scan(Scan {
+            mode: Mode::Envelope,
+            ..Scan::VOCAL
+        }),
+    );
+    assert_eq!(voice.frame(), 0);
+    render(&mut voice, &mut [0.0; 4], &[]);
+    assert_eq!(voice.frame(), 31);
+    shape.attack_us = 16_000;
+    command(&mut voice, Message::PositionEnvelope(shape));
+    assert_eq!(voice.frame(), 31);
+    render(&mut voice, &mut [0.0; 4], &[]);
+    assert_eq!(voice.frame(), 47);
+    command(&mut voice, on(57));
+    assert_eq!(voice.frame(), 0);
 }
 
 #[test]
@@ -117,6 +212,12 @@ fn scan_duration_follows_elapsed_time_across_pitches_and_sample_rates() {
 
 #[test]
 fn staggered_notes_keep_independent_scans_across_dma_boundaries() {
+    for mode in [Mode::PingPong, Mode::Envelope] {
+        check_staggered_notes(mode);
+    }
+}
+
+fn check_staggered_notes(mode: Mode) {
     let tuning = Tuning::new(24_000_000, 544).expect("clock");
     let mut chord = Wavetable::new(&tuning, &BANKS).expect("catalog");
     let mut early = Wavetable::new(&tuning, &BANKS).expect("catalog");
@@ -126,6 +227,7 @@ fn staggered_notes_keep_independent_scans_across_dma_boundaries() {
         command(
             voice,
             Message::Scan(Scan {
+                mode,
                 travel_ms: 10,
                 ..Scan::VOCAL
             }),

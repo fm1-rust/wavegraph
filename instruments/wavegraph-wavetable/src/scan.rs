@@ -10,6 +10,8 @@ pub enum Mode {
     OneShot,
     /// Travel from start to end and back for as long as the voice sounds.
     PingPong,
+    /// Map the note's position ADSR from start (zero) to end (peak).
+    Envelope,
 }
 
 /// Frame positions are on the MIDI 0–127 scale, spanning the entire bank.
@@ -22,7 +24,7 @@ pub struct Scan {
     pub start: u8,
     /// End of a sweep, clamped to 127.
     pub end: u8,
-    /// Milliseconds for a single traversal. Zero takes one audio frame.
+    /// Milliseconds for a single OneShot or PingPong traversal. Zero takes one audio frame.
     pub travel_ms: u16,
 }
 
@@ -87,10 +89,14 @@ impl Travel {
         clippy::cast_sign_loss,
         reason = "The elapsed clock stays within the endpoints; both positions fit u16."
     )]
-    pub(super) fn position(self, cursor: Cursor) -> u16 {
+    pub(super) fn position(self, cursor: Cursor, envelope: f32) -> u16 {
         match self.mode {
             Mode::Stepped => self.start.saturating_add(128) & 0xff00,
             Mode::Smooth => self.start,
+            Mode::Envelope => {
+                let start = f32::from(self.start);
+                (start + (f32::from(self.end) - start) * envelope) as u16
+            }
             _ if cursor.elapsed >= self.frames => self.end,
             _ => (f32::from(self.start) + self.slope * cursor.elapsed as f32) as u16,
         }
@@ -98,7 +104,7 @@ impl Travel {
 
     pub(super) fn advance(self, cursor: &mut Cursor) {
         match self.mode {
-            Mode::Stepped | Mode::Smooth => (),
+            Mode::Stepped | Mode::Smooth | Mode::Envelope => (),
             Mode::OneShot => cursor.elapsed = cursor.elapsed.saturating_add(1).min(self.frames),
             Mode::PingPong => {
                 if cursor.elapsed == self.frames {
@@ -126,7 +132,7 @@ impl Travel {
                 u64::from(cursor.elapsed) * u64::from(self.frames) / u64::from(old.frames);
             cursor.elapsed = u32::try_from(elapsed).unwrap_or(self.frames);
         }
-        if matches!(self.mode, Mode::Stepped | Mode::Smooth) {
+        if matches!(self.mode, Mode::Stepped | Mode::Smooth | Mode::Envelope) {
             *cursor = Cursor::default();
         }
     }

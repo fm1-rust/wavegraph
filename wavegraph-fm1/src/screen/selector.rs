@@ -1,5 +1,6 @@
 //! Two-bit foreground mask over the live scope. Zero leaves the instrument visible.
 
+use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
     instrument::Part,
     panel::{CHANNELS, Channel},
@@ -8,7 +9,7 @@ use crate::{
 use embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
-    mono_font::{MonoTextStyle, ascii::FONT_9X15_BOLD},
+    mono_font::MonoTextStyle,
     pixelcolor::{
         Gray2, RgbColor,
         raw::{BigEndian, RawU2, ToBytes},

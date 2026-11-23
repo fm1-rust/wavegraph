@@ -1,10 +1,11 @@
 //! Temporary channel number in the upper-left corner of the LCD.
 
 use super::mixer::Band;
+use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::panel::Channel;
 use embedded_graphics::{
     Drawable,
-    mono_font::{MonoTextStyle, ascii::FONT_9X15_BOLD},
+    mono_font::MonoTextStyle,
     pixelcolor::{IntoStorage, RgbColor, raw::ToBytes},
     prelude::Point,
     text::{Baseline, Text},

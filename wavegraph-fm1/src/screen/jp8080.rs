@@ -1,6 +1,7 @@
 //! JP-8080 rack panel above and below the channel's full-width oscilloscope.
 
 use super::{BAND, GRID, mixer::Band, selector::Selector};
+use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
     envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
 };
@@ -8,7 +9,7 @@ use core::fmt::Write;
 use embedded_graphics::{
     Drawable,
     framebuffer::Framebuffer,
-    mono_font::{MonoTextStyle, ascii::FONT_9X15_BOLD},
+    mono_font::MonoTextStyle,
     pixelcolor::{
         BinaryColor,
         raw::{BigEndian, RawU1, ToBytes},
@@ -198,7 +199,7 @@ pub(super) async fn envelope_header(
         band.label("SELECT", Point::new(113, 0), Alignment::Left, PRINT);
         for (x, width, name, page) in [
             (112, 40, "AMP", EnvelopeTarget::Amp),
-            (155, 66, "FILTER", EnvelopeTarget::Filter),
+            (155, 66, "FILTER", EnvelopeTarget::Modulation),
         ] {
             let active = target == page;
             band.rect(

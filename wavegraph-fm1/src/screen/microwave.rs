@@ -1,25 +1,26 @@
 //! Blue rack face, red position dial and a green readout around the live scope.
 
 use super::{BAND, GRID, mixer::Band, selector::Selector};
-use crate::{firmware::Labels, panel::Channel};
+use crate::assets::fonts::FONT_9X15_BOLD;
+use crate::{envelope::EnvelopeTarget, firmware::Labels, panel::Channel, wavetable::Program};
 use embedded_graphics::{
     Drawable,
-    mono_font::{MonoTextStyle, ascii::FONT_9X15_BOLD},
+    mono_font::MonoTextStyle,
     prelude::{Point, Size},
     text::{Alignment, Baseline, Text},
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error},
+    bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
 };
-use wavegraph_wavetable::{Mode, Scan};
+use wavegraph_wavetable::Mode;
 
 pub(super) const FACE: Rgb565 = Rgb565::new(8, 17, 16);
 pub(super) const RED: Rgb565 = Rgb565::new(29, 9, 6);
 pub(super) const PRINT: Rgb565 = Rgb565::new(28, 57, 30);
 const SHADOW: Rgb565 = Rgb565::new(3, 7, 7);
-const LIME: Rgb565 = Rgb565::new(20, 48, 11);
+pub(super) const LIME: Rgb565 = Rgb565::new(20, 48, 11);
 const INK: Rgb565 = Rgb565::new(2, 8, 3);
 pub(super) const STYLE: WaveformStyle = WaveformStyle {
     background: Rgb565::new(2, 8, 4),
@@ -35,7 +36,7 @@ pub(super) struct Panel {
     bank: Option<u8>,
     frame: Option<u8>,
     status: Option<(Channel, bool)>,
-    controls: Option<Scan>,
+    controls: Option<Program>,
 }
 
 impl Panel {
@@ -53,14 +54,7 @@ impl Panel {
         let bank = labels.voice.waveform;
         if entering || self.bank != Some(bank) {
             let mut top = Band::new(pixels, 4, 0, 112, 16, ink(FACE));
-            Text::with_baseline(
-                "waveTable",
-                Point::new(8, 1),
-                MonoTextStyle::new(&FONT_9X15_BOLD, ink(PRINT)),
-                Baseline::Top,
-            )
-            .draw(&mut top)
-            .expect("infallible strip");
+            wordmark(&mut top, ink(PRINT));
             top.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(4, 0, 112, 16, top.pixels.as_flattened())
                 .await?;
@@ -118,26 +112,43 @@ impl Panel {
             self.status = Some(status);
         }
 
-        let scan = labels.wave_scan;
-        if entering || self.controls != Some(scan) {
+        let scan = labels.wave.scan;
+        if entering || self.controls != Some(labels.wave) {
             let mut time = heapless::String::<8>::new();
             let mut start = heapless::String::<3>::new();
             let mut end = heapless::String::<3>::new();
             use core::fmt::Write;
             write!(start, "{}", scan.start).expect("three digits");
             write!(end, "{}", scan.end).expect("three digits");
-            write!(time, "{}ms", scan.travel_ms).expect("five digits and units");
+            let env = scan.mode == Mode::Envelope;
+            let us = if env {
+                labels.wave.position_envelope.adsr().attack_us
+            } else {
+                u32::from(scan.travel_ms) * 1_000
+            };
+            if us.is_multiple_of(1_000) {
+                write!(time, "{}ms", us / 1_000)
+            } else {
+                write!(time, "{}.{}ms", us / 1_000, us / 100 % 10)
+            }
+            .expect("panel time fits eight characters");
             let mode = match scan.mode {
                 Mode::Stepped => "STEP",
                 Mode::Smooth => "SMOOTH",
                 Mode::OneShot => "ONCE",
                 Mode::PingPong => "PINGPONG",
+                Mode::Envelope => "ENV",
             };
             let moving = matches!(scan.mode, Mode::OneShot | Mode::PingPong);
             for (x, name, value, enabled) in [
                 (0, "1 START", start.as_str(), true),
-                (60, "2 END", end.as_str(), moving),
-                (120, "3 TIME", time.as_str(), moving),
+                (60, "2 END", end.as_str(), moving || env),
+                (
+                    120,
+                    if env { "3 ATTACK" } else { "3 TIME" },
+                    time.as_str(),
+                    moving || env,
+                ),
                 (180, "4 MODE", mode, true),
             ] {
                 let left = i32::from(x);
@@ -161,8 +172,63 @@ impl Panel {
                         .await?;
                 }
             }
-            self.controls = Some(scan);
+            self.controls = Some(labels.wave);
         }
         lcd.flush().await
     }
+}
+
+fn wordmark(band: &mut Band<'_>, ink: Rgb565) {
+    Text::with_baseline(
+        "waveTable",
+        Point::new(8, 1),
+        MonoTextStyle::new(&FONT_9X15_BOLD, ink),
+        Baseline::Top,
+    )
+    .draw(band)
+    .expect("infallible strip");
+}
+
+pub(super) async fn envelope_header(
+    lcd: &mut Display,
+    clock: &mut Clock,
+    pixels: &mut [[u8; 2]],
+    target: EnvelopeTarget,
+    show_mode_hint: bool,
+) -> Result<(), Error> {
+    use Alignment::{Center, Left};
+    let position = target == EnvelopeTarget::Modulation;
+    let mut lcd = lcd.as_async(clock)?;
+    for y in [0, 8, 16, 24] {
+        let mut band = Band::new(pixels, 0, y, 224, 8, FACE);
+        wordmark(&mut band, PRINT);
+        band.label(
+            if show_mode_hint {
+                "SCOPE K4 TO ENV"
+            } else {
+                "ENVELOPES"
+            },
+            Point::new(8, 18),
+            Left,
+            PRINT,
+        );
+        band.knob(
+            Point::new(131, 15),
+            u8::from(position),
+            1,
+            [RED, SHADOW, PRINT],
+        );
+        band.rect(Point::new(148, 2), Size::new(73, 28), SHADOW);
+        band.rect(Point::new(149, 3), Size::new(71, 26), LIME);
+        band.label("SELECT", Point::new(184, 4), Center, INK);
+        band.label(
+            if position { "POSITION" } else { "AMP" },
+            Point::new(184, 17),
+            Center,
+            INK,
+        );
+        lcd.write_rect_buffered(0, y, 224, 8, band.pixels.as_flattened())
+            .await?;
+    }
+    lcd.flush().await
 }

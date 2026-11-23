@@ -1,6 +1,7 @@
 //! Four horizontal strips. Only changed strips and meter rectangles go to the LCD.
 
 use super::{BAND, Selector, WIDTH, selector};
+use crate::assets::fonts::{FONT_6X10, FONT_7X13_BOLD};
 use crate::{
     firmware::Labels,
     mixer::{MAX_LEVEL, SEGMENTS, Strip, UNITY},
@@ -11,10 +12,7 @@ use embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTarget,
     geometry::OriginDimensions,
-    mono_font::{
-        MonoTextStyle,
-        ascii::{FONT_6X10, FONT_7X13_BOLD},
-    },
+    mono_font::MonoTextStyle,
     pixelcolor::raw::ToBytes,
     prelude::{Point, Primitive, Size},
     primitives::{Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
