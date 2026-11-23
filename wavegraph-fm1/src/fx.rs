@@ -1,28 +1,33 @@
-//! FX return and 303 sidechain controls. The post-fader sends live in GLO.
+//! Global rack controls and the TB-303 channel insert.
 
 use crate::instrument::{Message, at};
 use heapless::Vec;
 use wavegraph::Event;
-use wavegraph_fx::{Delay, Message as FxMessage};
+use wavegraph_fx::{Delay, Dynamics, MasterControls, Message as FxMessage};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FxPage {
+pub(super) enum Device {
     Reverb,
     Delay,
-    BassComp,
+    Eq,
+    Dynamics,
 }
 
-impl FxPage {
+impl Device {
+    pub(super) const ALL: [Self; 4] = [Self::Reverb, Self::Delay, Self::Eq, Self::Dynamics];
+
+    // The first clockwise detent selects the top row; anticlockwise starts at the bottom.
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "An i8 delta and page index fit i16."
+        reason = "Four rows plus an i8 fit i16"
     )]
-    pub(super) fn turn(&mut self, detents: i8) {
-        *self = match (i16::from(*self as u8) + i16::from(detents)).rem_euclid(3) {
-            0 => Self::Reverb,
-            1 => Self::Delay,
-            _ => Self::BassComp,
-        };
+    pub(super) fn select(current: Option<Self>, delta: i8) -> Option<Self> {
+        if delta == 0 {
+            return current;
+        }
+        let start = current.map_or(if delta > 0 { -1 } else { 0 }, |row| i16::from(row as u8));
+        let i = (start + i16::from(delta)).rem_euclid(4);
+        Some(Self::ALL[usize::try_from(i).expect("four devices")])
     }
 }
 
@@ -80,16 +85,43 @@ pub(super) struct Return {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct BassFx {
+    pub(super) key: KeySource,
+    pub(super) depth: u8,
+    pub(super) split_hz: u16,
+    pub(super) enabled: bool,
+}
+
+impl BassFx {
+    pub(super) const INITIAL: Self = Self {
+        key: KeySource::Kick,
+        depth: 75,
+        split_hz: 180,
+        enabled: true,
+    };
+
+    pub(super) fn edit(&mut self, knobs: [i8; 4], toggle: bool) {
+        self.key.turn(knobs[0]);
+        self.depth = self.depth.saturating_add_signed(knobs[1]).min(100);
+        self.split_hz = self
+            .split_hz
+            .saturating_add_signed(i16::from(knobs[2]).saturating_mul(5))
+            .clamp(40, 1000);
+        self.enabled ^= toggle;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Fx {
     pub(super) reverb: Return,
     pub(super) delay: Return,
     pub(super) decay: u8,
     pub(super) time_ms: u16,
     pub(super) feedback: u8,
-    pub(super) key: KeySource,
-    pub(super) depth: u8,
-    pub(super) split_hz: u16,
-    pub(super) comp_enabled: bool,
+    pub(super) eq: [i8; 3],
+    pub(super) eq_enabled: bool,
+    pub(super) dynamics: Dynamics,
+    pub(super) dynamics_enabled: bool,
 }
 
 impl Fx {
@@ -105,39 +137,29 @@ impl Fx {
         decay: 90,
         time_ms: 369, // Dotted eighth at the factory 122 BPM.
         feedback: 43,
-        key: KeySource::Kick,
-        depth: 75,
-        split_hz: 180,
-        comp_enabled: true,
+        eq: [0; 3],
+        eq_enabled: true,
+        dynamics: Dynamics::GLUE,
+        dynamics_enabled: true,
     };
 
-    pub(super) fn enabled(self, page: FxPage) -> bool {
-        match page {
-            FxPage::Reverb => self.reverb.enabled,
-            FxPage::Delay => self.delay.enabled,
-            FxPage::BassComp => self.comp_enabled,
+    pub(super) fn enabled(self, device: Device) -> bool {
+        match device {
+            Device::Reverb => self.reverb.enabled,
+            Device::Delay => self.delay.enabled,
+            Device::Eq => self.eq_enabled,
+            Device::Dynamics => self.dynamics_enabled,
         }
     }
 
-    pub(super) fn edit(&mut self, page: FxPage, knobs: [i8; 4], toggle: bool) {
-        let (output, wet_delta) = match page {
-            FxPage::BassComp => {
-                self.key.turn(knobs[0]);
-                self.depth = self.depth.saturating_add_signed(knobs[1]).min(100);
-                self.split_hz = self
-                    .split_hz
-                    .saturating_add_signed(i16::from(knobs[2]).saturating_mul(5))
-                    .clamp(40, 1000);
-                if toggle {
-                    self.comp_enabled = !self.comp_enabled;
-                }
-                return;
-            }
-            FxPage::Reverb => {
+    pub(super) fn edit(&mut self, device: Device, knobs: [i8; 4], toggle: bool) {
+        match device {
+            Device::Reverb => {
                 self.decay = self.decay.saturating_add_signed(knobs[0]).min(127);
-                (&mut self.reverb, knobs[1])
+                self.reverb.wet = self.reverb.wet.saturating_add_signed(knobs[1]).min(128);
+                self.reverb.enabled ^= toggle;
             }
-            FxPage::Delay => {
+            Device::Delay => {
                 self.time_ms = self
                     .time_ms
                     .saturating_add_signed(i16::from(knobs[0]).saturating_mul(5))
@@ -146,33 +168,48 @@ impl Fx {
                     .feedback
                     .saturating_add_signed(knobs[1])
                     .min(Delay::MAX_FEEDBACK);
-                (&mut self.delay, knobs[2])
+                self.delay.wet = self.delay.wet.saturating_add_signed(knobs[2]).min(128);
+                self.delay.enabled ^= toggle;
             }
-        };
-        output.wet = output.wet.saturating_add_signed(wet_delta).min(128);
-        if toggle {
-            output.enabled = !output.enabled;
+            Device::Eq => {
+                for (gain, delta) in self.eq.iter_mut().zip(knobs) {
+                    *gain = gain.saturating_add(delta).clamp(-12, 12);
+                }
+                self.eq_enabled ^= toggle;
+            }
+            Device::Dynamics => {
+                let d = &mut self.dynamics;
+                d.threshold_db = d.threshold_db.saturating_add(knobs[0]).clamp(-36, 0);
+                d.ratio_x2 = d.ratio_x2.saturating_add_signed(knobs[1]).clamp(2, 16);
+                d.makeup_db = d.makeup_db.saturating_add_signed(knobs[2]).min(12);
+                d.ceiling_db = d.ceiling_db.saturating_add(knobs[3]).clamp(-12, 0);
+                self.dynamics_enabled ^= toggle;
+            }
         }
     }
 
-    pub(super) fn events(self, previous: Option<Self>, page: FxPage) -> Vec<Event<Message>, 4> {
+    pub(super) fn return_events(
+        self,
+        previous: Option<Self>,
+        device: Device,
+    ) -> Vec<Event<Message>, 4> {
         let mut events = Vec::new();
         let mut push = |changed, message: FxMessage| {
             if changed {
                 events
                     .push(at(message))
-                    .expect("at most four effect controls");
+                    .expect("at most four return controls");
             }
         };
-        let (out, old) = match page {
-            FxPage::Reverb => {
+        let (out, old) = match device {
+            Device::Reverb => {
                 push(
                     previous.is_none_or(|p| p.decay != self.decay),
                     FxMessage::Decay(self.decay),
                 );
                 (self.reverb, previous.map(|p| p.reverb))
             }
-            FxPage::Delay => {
+            Device::Delay => {
                 push(
                     previous.is_none_or(|p| p.time_ms != self.time_ms),
                     FxMessage::TimeMs(self.time_ms),
@@ -183,25 +220,7 @@ impl Fx {
                 );
                 (self.delay, previous.map(|p| p.delay))
             }
-            FxPage::BassComp => {
-                push(
-                    previous.is_none_or(|p| p.key != self.key),
-                    FxMessage::SidechainKey(self.key as u8),
-                );
-                push(
-                    previous.is_none_or(|p| p.depth != self.depth),
-                    FxMessage::SidechainDepth(self.depth),
-                );
-                push(
-                    previous.is_none_or(|p| p.split_hz != self.split_hz),
-                    FxMessage::SidechainHz(self.split_hz),
-                );
-                push(
-                    previous.is_none_or(|p| p.comp_enabled != self.comp_enabled),
-                    FxMessage::Enabled(self.comp_enabled),
-                );
-                return events;
-            }
+            Device::Eq | Device::Dynamics => return events,
         };
         push(
             old.is_none_or(|o| o.wet != out.wet),
@@ -212,5 +231,65 @@ impl Fx {
             FxMessage::Enabled(out.enabled),
         );
         events
+    }
+
+    pub(super) fn master_events(self, previous: Option<Self>) -> Vec<Event<Message>, 3> {
+        let mut events = Vec::new();
+        let controls = |fx: Self| {
+            [
+                MasterControls::Eq(fx.eq_enabled.then_some(fx.eq)),
+                MasterControls::Dynamics(fx.dynamics_enabled.then_some(fx.dynamics)),
+            ]
+        };
+        let old = previous.map(controls);
+        for (i, control) in controls(self).into_iter().enumerate() {
+            if old.is_none_or(|o| o[i] != control) {
+                events
+                    .push(at(Message::Master(control)))
+                    .expect("two master inserts");
+            }
+        }
+        events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rack_edits_are_isolated_and_bypass_recalls_the_settings() {
+        let mut fx = Fx::INITIAL;
+        fx.edit(Device::Eq, [-127, 6, 127, 100], false);
+        assert_eq!(fx.eq, [-12, 6, 12]);
+        assert_eq!(fx.master_events(Some(Fx::INITIAL)).len(), 1);
+        fx.edit(Device::Dynamics, [-100, 2, 6, -3], false);
+        assert_eq!(
+            fx.dynamics,
+            Dynamics {
+                threshold_db: -36,
+                ratio_x2: 6,
+                makeup_db: 6,
+                ceiling_db: -4
+            }
+        );
+        let before = fx;
+        fx.edit(Device::Dynamics, [0; 4], true);
+        assert!(!fx.enabled(Device::Dynamics));
+        assert!(fx.enabled(Device::Eq));
+        assert_eq!(
+            fx.master_events(Some(before))[0].message,
+            Message::Master(MasterControls::Dynamics(None))
+        );
+        fx.edit(Device::Dynamics, [0; 4], true);
+        assert_eq!(fx, before);
+        assert!(
+            fx.return_events(Some(Fx::INITIAL), Device::Reverb)
+                .is_empty()
+        );
+        assert!(
+            fx.return_events(Some(Fx::INITIAL), Device::Delay)
+                .is_empty()
+        );
     }
 }

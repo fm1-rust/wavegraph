@@ -8,9 +8,11 @@
 
 mod delay;
 mod ducker;
+mod master;
 mod mixer;
 pub use delay::Delay;
 pub use ducker::SidechainDucker;
+pub use master::{Dynamics, MasterBus, MasterControls};
 pub use mixer::{ChannelMixer, MixerMessage};
 
 use wavegraph_core::{Port, Process, ProcessContext};

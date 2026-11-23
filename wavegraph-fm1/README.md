@@ -44,16 +44,15 @@ The transport starts stopped. Keys and USB MIDI also work with it stopped.
 | Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
+| Knobs 1–4 in the GLO overview | Set channel faders 1–4 independently. |
 | SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
 | Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
 | PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
-| FX | Turn SELECT to choose REVERB, DELAY or 303 / COMP. |
-| Knobs 1–2 on FX / REVERB | Reverb decay (0–127) and wet return (0–128). |
-| Knobs 1–3 on FX / DELAY | Delay time (5–1,000 ms), feedback (0–95%) and wet return (0–128). |
-| Knobs 1–3 on 303 / COMP | Choose the sidechain source, set depth (0–100%) and set the low-shelf corner (40–1000 Hz). |
-| ALGORITHM encoder in FX | Switch the existing full/half output-gain graph using an async edit. |
-| SEL button in FX | Toggle the selected effect. Reverb and delay tails keep decaying. On 303 / COMP, SEL bypasses the insert. |
+| FX on an instrument | Open that channel’s effects. Each strip has reverb and delay sends on knobs 2 and 3. On a TB-303, SELECT switches between its sidechain insert and its sends. |
+| GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
+| SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
+| ALGORITHM in FX | Switch the full/half post-rack output gain. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
@@ -319,11 +318,13 @@ change presets. The 303 still discharges its accent capacitor while silent.
 
 [cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
 
-## Four-track mixer, reverb and delay
+## Four-track mixer and effects
 
 Press GLO to see four horizontal strips with live post-fader peak meters.
 The segments rise from green through amber at −12 dBFS to red at full scale.
-The mixer overview uses PRESETS to move the keyboard between channels. Turn
+Each strip has a volume fader under its meter. The center tick marks unity.
+Knobs 1–4 move the four faders directly in the overview. PRESETS moves the
+keyboard between channels. Turn
 SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
@@ -343,20 +344,38 @@ Lowering a track fader reduces the new signal it feeds to either effect.
 Existing tails continue to play. Faders run from mute to about +6 dB. Sends
 run from zero to unity. MASTER sets the listening volume independently.
 
-To change one channel’s echo level, highlight its strip in GLO and turn knob 3.
-Open FX and turn SELECT to DELAY to adjust the shared echo. Knob 1 changes the time in 5 ms steps (initially 369 ms, a dotted
-eighth at 122 BPM). The delay time stays fixed when tempo changes. Knob 2
-sets feedback (initially 43%), and knob 3 sets the wet return (initially
-76/128). Zero feedback gives one repeat.
+### Global effects
 
-On FX / REVERB, knobs 1 and 2 set decay (initially 90/127) and wet level
-(initially 104/128). SEL mutes the displayed
-return, and its LED shows whether that return is enabled. Both effects keep
-their state across full/half gain edits. FX scopes the final DAC mix.
+Press **FX** from GLO, or **GLO** from an instrument’s FX page. Both open the
+same four-row rack. Turn SELECT to highlight a device and use the numbered
+knobs from left to right. SEL bypasses the selected device and HOME leaves
+the selection. The line across the rack separates the parallel send returns
+from the two inserts applied to the whole mix.
+
+| Device | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
+| --- | --- | --- | --- | --- |
+| Reverb return | Decay, 0–127 | Return level | — | — |
+| Delay return | Time, 5–1000 ms | Feedback, 0–95% | Return level | — |
+| Master EQ | Low, ±12 dB | Mid, ±12 dB | High, ±12 dB | — |
+| Master comp/limiter | Threshold, −36 to 0 dBFS | Ratio, 1:1–8:1 | Makeup, 0–12 dB | Ceiling, −12 to 0 dBFS |
+
+Reverb starts at 90/127 decay and 104/128 return. Delay starts at 369 ms
+(a dotted eighth at 122 BPM), 43% feedback and 76/128 return. The time moves
+in 5 ms steps and stays fixed across tempo changes. Turn a strip’s knob 3 to
+send more of that instrument into the shared delay.
+
+EQ starts flat with band splits at 250 Hz and 3.2 kHz. The compressor starts
+at −12 dBFS, 2:1, with 0 dB makeup. Its 15 ms attack lets the front of a kick
+through and its 150 ms release brings the gain back between beats. Makeup
+feeds a separate sample-peak limiter with an initial −1 dBFS ceiling and
+80 ms release. The GR readout shows their combined gain reduction in dB.
+A 1:1 ratio leaves the limiter available on its own.
+
+![Four channel faders during playback and the global rack with the compressor selected](assets/glo-master-fx.png)
 
 ### Hear the kick duck the bass
 
-Press PLAY, open FX, and turn SELECT to **303 / COMP**. Knob 1 starts on
+Select a TB-303 channel, press PLAY, then press FX to open **303 COMP**. Knob 1 starts on
 **909 KICK**, the isolated kick before its fader. Keep that source selected and
 turn knob 2 from 0% to 100%. At 0% the insert keeps its makeup gain, so you
 can compare depths at the same level between kicks. Listen to the bottom of
@@ -372,7 +391,10 @@ the ducking subside. **909 KIT** includes hats and claps in the detector.
 accents. Only the 303 is processed. The factory setting is 75% depth at
 180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
 
-Each assigned 303 has its own insert. Named external sources sum all matching
+The 303 FX scope shows the signal after its sidechain insert. The channel send
+page scopes the post-fader signal feeding both sends.
+
+Each assigned 303 keeps its own key, depth, crossover and bypass. Named external sources sum all matching
 channels before their faders. With two 909s assigned, a kick from either kit
 can duck every 303. With 303 SELF selected, each 303 keys from its own signal.
 
@@ -397,8 +419,10 @@ channel's processor at the start of a block, before its first control or note
 message. The other processors and the shared returns continue with their current DSP
 state. Each channel feeds the Q23 mixer, which produces dry, reverb and delay
 buses.
-One reverb and one mono digital delay run in parallel. The master mix adds
-both wet returns to the dry sum before output gain and stereo duplication.
+One reverb and one mono digital delay run in parallel. The dry bus reserves
+three bits of headroom for four boosted tracks. The master node restores that
+gain and sums both returns and the startup cue in a widened accumulator. EQ,
+compression, makeup and limiting precede output trim and the physical MASTER.
 The delay borrows one second of PCM16 storage (88,236 bytes) and skips empty
 blocks once its line is silent.
 

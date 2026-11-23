@@ -6,7 +6,6 @@ use crate::{
     capture::{HEIGHT, WIDTH},
     envelope::EnvelopeControls,
     firmware::{Frame, Labels, Motion},
-    fx::FxPage,
     instrument::Part,
     panel::{CHANNELS, Channel, View},
     scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
@@ -25,6 +24,7 @@ use static_cell::{ConstStaticCell, StaticCell};
 
 mod drums;
 mod jp8080;
+mod master_fx;
 mod microwave;
 mod mixer;
 mod selector;
@@ -90,7 +90,8 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Scope(Channel, Part),
-    Fx(FxPage),
+    Fx(Channel, Part, bool),
+    MasterFx,
     Mixer,
     Sequencer(SeqPage, Channel, Part),
     Envelope(Part, EnvelopeControls),
@@ -108,6 +109,7 @@ pub(super) struct Screen {
     jp: jp8080::Panel,
     wave: microwave::Panel,
     mixer: mixer::Surface,
+    rack: master_fx::Rack,
     sequence: sequencer::Grid,
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
@@ -147,6 +149,7 @@ impl Screen {
             jp: jp8080::Panel::default(),
             wave: microwave::Panel::default(),
             mixer: mixer::Surface::default(),
+            rack: master_fx::Rack::default(),
             sequence: sequencer::Grid::new(),
             page: None,
             dot: None,
@@ -470,6 +473,26 @@ impl Screen {
                 .paint_sequencer(lcd, clock, page, labels.seq, labels.focus, motion.position)
                 .await;
         }
+        if let View::MasterFx(selected) = labels.view {
+            if self.page.replace(Page::MasterFx) != Some(Page::MasterFx) {
+                self.change_view(WaveformStyle {
+                    background: mixer::BACKGROUND,
+                    ..STYLE
+                });
+                self.rack = master_fx::Rack::default();
+            }
+            return self
+                .rack
+                .paint(
+                    lcd,
+                    clock,
+                    self.strip,
+                    labels.fx,
+                    selected,
+                    motion.reduction,
+                )
+                .await;
+        }
         if labels.view.is_mixer() {
             return self.paint_mixer(lcd, clock, labels, motion.peaks).await;
         }
@@ -533,7 +556,7 @@ impl Screen {
         let style = self.selector.style(style);
         let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
         let page = if fx {
-            Page::Fx(labels.fx_page)
+            Page::Fx(labels.channel, labels.focus, labels.bass_insert)
         } else {
             Page::Scope(labels.channel, labels.focus)
         };
@@ -611,58 +634,65 @@ impl Screen {
                 .await;
         }
         if fx {
-            let enabled = labels.fx.enabled(labels.fx_page);
+            self.text.text(0, 0, b"CH", muted);
+            self.text
+                .number(2, 0, 1, u32::from(labels.channel as u8) + 1, ink);
             self.text.text(
+                4,
                 0,
-                0,
-                match labels.fx_page {
-                    FxPage::Reverb => b"FX / REVERB".as_slice(),
-                    FxPage::Delay => b"FX / DELAY".as_slice(),
-                    FxPage::BassComp => b"303 / COMP".as_slice(),
+                if labels.bass_insert {
+                    b"303 COMP"
+                } else {
+                    b"FX SENDS"
                 },
                 ink,
             );
-            self.text
-                .text(12, 0, if enabled { b"ON " } else { b"OFF" }, bright);
+            if labels.bass_insert {
+                self.text.text(
+                    13,
+                    0,
+                    if labels.bass_fx.enabled {
+                        b"ON "
+                    } else {
+                        b"OFF"
+                    },
+                    bright,
+                );
+                self.text.text(0, 13, b"1 KEY", muted);
+                self.text.text(6, 13, labels.bass_fx.key.name(), ink);
+                self.text.text(0, 14, b"2 DEP", muted);
+                self.text
+                    .number(5, 14, 3, u32::from(labels.bass_fx.depth), ink);
+                self.text.text(8, 14, b"%", muted);
+                self.text.text(10, 14, b"3 EQ", muted);
+                self.text
+                    .number(14, 14, 4, u32::from(labels.bass_fx.split_hz), ink);
+                self.text.text(18, 14, b"HZ", muted);
+            } else {
+                let strip = labels.mixer.0[labels.channel.index()];
+                self.text.text(0, 13, b"2 REVERB", muted);
+                self.text.number(9, 13, 3, u32::from(strip.reverb), ink);
+                self.text.text(12, 13, b"/128", muted);
+                self.text.text(0, 14, b"3 DELAY", muted);
+                self.text.number(9, 14, 3, u32::from(strip.delay), ink);
+                self.text.text(12, 14, b"/128", muted);
+            }
             self.text.text(
-                15,
+                16,
                 0,
                 if labels.half_gain { b"HALF" } else { b"FULL" },
                 muted,
             );
-            match labels.fx_page {
-                FxPage::Reverb => {
-                    self.text.text(0, 13, b"1 DECAY", muted);
-                    self.text.number(8, 13, 3, u32::from(labels.fx.decay), ink);
-                    self.text.text(12, 13, b"2 WET", muted);
-                    self.text
-                        .number(17, 13, 3, u32::from(labels.fx.reverb.wet), ink);
-                    self.text.text(0, 14, b"SENDS IN GLO MIXER", muted);
-                }
-                FxPage::Delay => {
-                    self.text.text(0, 13, b"1 TIME", muted);
-                    self.text
-                        .number(7, 13, 4, u32::from(labels.fx.time_ms), ink);
-                    self.text.text(12, 13, b"MS", muted);
-                    self.text.text(0, 14, b"2 FDBK", muted);
-                    self.text
-                        .number(7, 14, 2, u32::from(labels.fx.feedback), ink);
-                    self.text.text(11, 14, b"3 WET", muted);
-                    self.text
-                        .number(17, 14, 3, u32::from(labels.fx.delay.wet), ink);
-                }
-                FxPage::BassComp => {
-                    self.text.text(0, 13, b"1 KEY", muted);
-                    self.text.text(6, 13, labels.fx.key.name(), ink);
-                    self.text.text(0, 14, b"2 DEP", muted);
-                    self.text.number(5, 14, 3, u32::from(labels.fx.depth), ink);
-                    self.text.text(8, 14, b"%", muted);
-                    self.text.text(10, 14, b"3 EQ", muted);
-                    self.text
-                        .number(14, 14, 4, u32::from(labels.fx.split_hz), ink);
-                    self.text.text(18, 14, b"HZ", muted);
-                }
-            }
+            self.text.text(
+                0,
+                1,
+                if labels.focus == Part::Bass {
+                    b"SELECT PAGE   GLO FX".as_slice()
+                } else {
+                    b"GLO: MASTER FX"
+                },
+                muted,
+            );
             return self.text.paint_async(lcd, clock).await;
         }
         if wave {

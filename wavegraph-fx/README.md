@@ -18,6 +18,11 @@ two-input send-only node.
   choose the detector. `SidechainDepth` controls the gain reduction and
   `SidechainHz` sets the low-shelf corner. The low band ducks more deeply
   than the highs. Disabling the insert crossfades to unity dry audio.
+- `MasterBus` runs three-band EQ, a feed-forward compressor and a separate
+  sample-peak limiter. Its mono graph port accepts Q23. For a wide mixer,
+  pass a signed sum in Q23 units to `process_sample` before it saturates.
+  `ChannelMixer::with_dry_headroom(3)` accommodates four boosted tracks.
+  Restore those three bits when summing the dry bus with the wet returns.
 
 Mixer and effect controls accept sample-offset events. `Message::Wet` scales a
 return, and `Message::Enabled(false)` mutes it while its tail continues to decay.

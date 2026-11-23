@@ -1,7 +1,7 @@
 //! Route the 303 sidechain by instrument type as channel assignments change.
 
 use crate::{
-    fx::KeySource,
+    fx::{BassFx, KeySource},
     instrument::{Message, Part},
     panel::{CHANNELS, Channel},
 };
@@ -11,10 +11,10 @@ use wavegraph_fx::{Message as FxMessage, SidechainDucker};
 use wavegraph_sample::I24;
 
 /// Each source supplies its full signal and isolated kick. The first four
-/// outputs feed the strip faders. The last exposes the shared pre-fader key.
+/// outputs feed the strip faders. The last is scratch for the external key mix.
 pub(super) struct BassInserts {
     parts: [Part; CHANNELS],
-    key: KeySource,
+    controls: [BassFx; CHANNELS],
     duckers: [SidechainDucker; CHANNELS],
     factory: SidechainDucker,
 }
@@ -24,7 +24,7 @@ impl BassInserts {
         let factory = SidechainDucker::new(rate_hz, 32, 176).expect("valid 303 insert settings");
         Self {
             parts: [Part::Mono; CHANNELS],
-            key: KeySource::Kick,
+            controls: [BassFx::INITIAL; CHANNELS],
             duckers: [factory; CHANNELS],
             factory,
         }
@@ -34,10 +34,10 @@ impl BassInserts {
         clippy::arithmetic_side_effects,
         reason = "The sum of up to four Q23 signals fits i32."
     )]
-    fn detector(&self, inputs: &[&[I24]], output: &mut [I24]) {
+    fn detector(&self, key: KeySource, inputs: &[&[I24]], output: &mut [I24]) {
         let mut sources = Vec::<_, CHANNELS>::new();
         for (part, pair) in self.parts.iter().zip(inputs.as_chunks::<2>().0) {
-            let source = match (self.key, part) {
+            let source = match (key, part) {
                 (KeySource::Kick, Part::Tr909) | (KeySource::Kick808, Part::Tr808) => pair[1],
                 (KeySource::Kit, Part::Tr909)
                 | (KeySource::Kit808, Part::Tr808)
@@ -71,43 +71,52 @@ impl Process<Message, I24> for BassInserts {
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
-        let mut controls = Vec::<_, 3>::new();
+        let mut changed = [false; CHANNELS];
         for event in cx.events {
             match event.message {
                 Message::Insert(channel, part) => {
                     self.parts[channel.index()] = part;
                     self.duckers[channel.index()] = self.factory;
+                    changed[channel.index()] = true;
                 }
-                Message::Fx(FxMessage::SidechainKey(index)) => {
-                    self.key = KeySource::ALL[usize::from(index)];
+                Message::BassInsert(channel, settings) => {
+                    self.controls[channel.index()] = settings;
+                    changed[channel.index()] = true;
                 }
-                Message::Fx(message) => controls
-                    .push(Event {
-                        frame: event.frame,
-                        port: 0,
-                        message,
-                    })
-                    .expect("depth, crossover and bypass"),
                 _ => (),
             }
         }
         let (strips, detector) = cx.outputs.split_at_mut(CHANNELS);
-        self.detector(cx.inputs, detector[0]);
-        let key_bus: &[I24] = detector[0];
+        let mut last_key = None;
         for channel in Channel::ALL {
             let i = channel.index();
             let source = cx.inputs[channel.source_bus()];
             if self.parts[i] == Part::Bass {
-                let key = if self.key == KeySource::Bass {
+                let settings = self.controls[i];
+                let key = if settings.key == KeySource::Bass {
                     source
                 } else {
-                    key_bus
+                    if last_key != Some(settings.key) {
+                        self.detector(settings.key, cx.inputs, detector[0]);
+                        last_key = Some(settings.key);
+                    }
+                    &*detector[0]
                 };
+                let controls = [
+                    FxMessage::SidechainDepth(settings.depth),
+                    FxMessage::SidechainHz(settings.split_hz),
+                    FxMessage::Enabled(settings.enabled),
+                ]
+                .map(|message| Event {
+                    frame: 0,
+                    port: 0,
+                    message,
+                });
                 self.duckers[i].process(&mut ProcessContext {
                     frames: cx.frames,
                     inputs: &[source, key],
                     outputs: &mut [strips[i]],
-                    events: &controls,
+                    events: if changed[i] { &controls } else { &[] },
                     emit: &mut Err,
                 });
             } else {

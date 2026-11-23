@@ -8,7 +8,7 @@ use crate::{
     bass::Controls,
     capture::Trace,
     envelope::EnvelopeControls,
-    fx::{Fx, FxPage},
+    fx::{BassFx, Fx},
     instrument::{Part, SawControls, Track, Voice},
     keys::PolyKey,
     mixer::Mixer,
@@ -22,7 +22,6 @@ use fm1_audio::MasterLevel;
 pub struct Settings {
     tracks: [Track; CHANNELS],
     nav: Navigation,
-    fx_page: FxPage,
     mixer: Mixer,
     seq: Sequencer,
     fx: Fx,
@@ -34,7 +33,6 @@ impl Settings {
     const INITIAL: Self = Self {
         tracks: Track::rack(Navigation::INITIAL.assignments),
         nav: Navigation::INITIAL,
-        fx_page: FxPage::Reverb,
         mixer: Mixer::INITIAL,
         seq: Sequencer::INITIAL,
         fx: Fx::INITIAL,
@@ -58,7 +56,8 @@ impl Settings {
             poly_keys: track.poly_keys,
             menu_since: self.menu_since,
             view: self.nav.view,
-            fx_page: self.fx_page,
+            bass_fx: track.bass_fx,
+            bass_insert: self.nav.bass_insert(),
             mixer: self.mixer,
             seq: self.seq,
             fx: self.fx,
@@ -70,7 +69,10 @@ impl Settings {
 
     fn sel_lamp(self) -> bool {
         match self.nav.view {
-            View::Fx => self.fx.enabled(self.fx_page),
+            View::Fx => {
+                self.nav.bass_insert() && self.tracks[self.nav.focus.index()].bass_fx.enabled
+            }
+            View::MasterFx(Some(row)) => self.fx.enabled(row),
             View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
             View::Sequencer => self.seq.enabled[self.seq.channel.index()],
             _ => false,
@@ -92,7 +94,8 @@ pub(super) struct Labels {
     pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
     pub(super) menu_since: Option<u32>,
     pub(super) view: View,
-    pub(super) fx_page: FxPage,
+    pub(super) bass_fx: BassFx,
+    pub(super) bass_insert: bool,
     pub(super) mixer: Mixer,
     pub(super) seq: Sequencer,
     pub(super) fx: Fx,
@@ -106,6 +109,7 @@ pub struct Motion {
     pub(super) position: Option<Position>,
     pub(super) bass_automation: Option<(Channel, u8, u8)>,
     pub(super) peaks: [u8; CHANNELS],
+    pub(super) reduction: u8,
     pub(super) drums: [[DrumLamp; 6]; CHANNELS],
     pub(super) wave_frames: [u8; CHANNELS],
 }
@@ -124,8 +128,8 @@ mod app {
         capture::{Capture, FLAT, Scale},
         inserts::BassInserts,
         instrument::{
-            BUS_COUNT, FxMixer, FxNode, Instrument, Message, Node, Note, Part, Programs,
-            RoutedEvents, STRIP_BUS, Track,
+            BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Message, Node, Note,
+            Part, Programs, RoutedEvents, STRIP_BUS, Track,
         },
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
         mixer::Meter,
@@ -156,7 +160,7 @@ mod app {
         Process,
         control::{Controller, EditQueue, Host},
     };
-    use wavegraph_fx::{ChannelMixer, Delay, REVERB_SAMPLES, Reverb};
+    use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
 
@@ -215,10 +219,15 @@ mod app {
             ConstStaticCell::new([0; REVERB_SAMPLES]);
         static DELAY_STORAGE: ConstStaticCell<[i16; RATE_HZ as usize]> =
             ConstStaticCell::new([0; RATE_HZ as usize]);
-        type Effects = (FxMixer, FxNode<Reverb<'static>>, FxNode<Delay<'static>>);
+        type Effects = (
+            FxMixer,
+            FxNode<Reverb<'static>>,
+            FxNode<Delay<'static>>,
+            Master,
+        );
         static EFFECTS: StaticCell<Effects> = StaticCell::new();
         static INSERTS: StaticCell<BassInserts> = StaticCell::new();
-        type Nodes = [&'static mut dyn Process<Message, I24>; 8];
+        type Nodes = [&'static mut dyn Process<Message, I24>; 9];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
         let drums = DRUMS.init_with(|| DrumKits::new(FRAME_RATE));
@@ -232,15 +241,21 @@ mod app {
                 )
             })
         });
-        let (mixer, reverb, delay) = EFFECTS.init_with(|| {
+        let (mixer, reverb, delay, master) = EFFECTS.init_with(|| {
             (
-                FxMixer(ChannelMixer::new().with_boost()),
+                FxMixer(
+                    ChannelMixer::new()
+                        .with_boost()
+                        .with_dry_headroom(DRY_HEADROOM),
+                ),
                 FxNode(Reverb::new(REVERB_STORAGE.take())),
                 FxNode(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("one-second delay line")),
+                Master(MasterBus::new(RATE_HZ).expect("audio sample clock")),
             )
         });
         let inserts = INSERTS.init_with(|| BassInserts::new(RATE_HZ));
-        let nodes = NODES.init_with(|| [one, two, three, four, mixer, reverb, delay, inserts]);
+        let nodes =
+            NODES.init_with(|| [one, two, three, four, mixer, reverb, delay, inserts, master]);
         static INSTRUMENT: StaticCell<Instrument<'static>> = StaticCell::new();
         INSTRUMENT.init_with(|| {
             programs
@@ -279,6 +294,7 @@ mod app {
         let (tap, blocks) = make_channel!(ScopeBlock, 2);
         let mut leds = Leds::default();
         leds.set_play(PlayLedState::Red);
+        leds.set(Button::Sel, Settings::INITIAL.sel_lamp());
         (
             Shared {
                 settings: Settings::INITIAL,
@@ -394,7 +410,11 @@ mod app {
             .into_iter()
             .find(|(button, _)| scan.pressed(*button));
             let home = scan.pressed(Button::Home);
-            if let Some((_, button)) = page
+            if (scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
+                || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo))
+            {
+                self.nav.press(PageButton::GlobalFx);
+            } else if let Some((_, button)) = page
                 && !(home && self.seq.back())
             {
                 self.nav.press(button);
@@ -424,10 +444,17 @@ mod app {
             self.leds.set(Button::Seq, self.seq.page.is_some());
             self.leds.set(
                 Button::Home,
-                self.nav.view == View::Channel || self.seq.page == Some(SeqPage::Tempo),
+                matches!(self.nav.view, View::Channel | View::MasterFx(Some(_)))
+                    || self.seq.page == Some(SeqPage::Tempo),
             );
-            self.leds.set(Button::Glo, self.nav.view.is_mixer());
-            self.leds.set(Button::Fx, self.nav.view == View::Fx);
+            self.leds.set(
+                Button::Glo,
+                self.nav.view.is_mixer() || matches!(self.nav.view, View::MasterFx(_)),
+            );
+            self.leds.set(
+                Button::Fx,
+                matches!(self.nav.view, View::Fx | View::MasterFx(_)),
+            );
             self.leds.set(Button::Env, self.nav.view == View::Envelope);
             let now = cycles();
             // Time the recovery chord against the crystal even if scan interrupts run late.
@@ -569,10 +596,19 @@ mod app {
                 let algorithm = scan.encoder_delta(Encoder::Algorithm);
                 let sel = scan.pressed(Button::Sel);
                 match view {
+                    View::Mixer => self.settings.mixer.turn_faders(knobs),
                     View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
+                    View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
                     View::Fx => {
-                        self.settings.fx_page.turn(select);
-                        self.settings.fx.edit(self.settings.fx_page, knobs, sel);
+                        if nav.bass_insert() {
+                            self.settings.tracks[channel.index()]
+                                .bass_fx
+                                .edit(knobs, sel);
+                        } else {
+                            self.settings
+                                .mixer
+                                .turn_knobs(channel, [0, knobs[1], knobs[2], 0]);
+                        }
                     }
                     View::Scope | View::Envelope => {
                         let track = &mut self.settings.tracks[channel.index()];
@@ -592,7 +628,7 @@ mod app {
                             track.voice_tap = !track.voice_tap;
                         }
                     }
-                    View::Mixer | View::Sequencer => (),
+                    View::MasterFx(None) | View::Sequencer => (),
                 }
                 if let Some(master) = scan.master() {
                     self.settings.master = master;
@@ -607,7 +643,7 @@ mod app {
                         .leds
                         .lock(|leds| leds.set(Button::Sel, sel_lamp));
                 }
-                if view == View::Fx
+                if matches!(view, View::Fx | View::MasterFx(_))
                     && algorithm != 0
                     && self.editor.commit(!self.half_gain).await.is_ok()
                 {
@@ -647,18 +683,12 @@ mod app {
                 self.instrument.set_fx(settings.fx);
                 self.instrument.transport = settings.seq.transport;
                 self.instrument.sequences = settings.seq.enabled;
+                self.instrument.cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
                 let mono = self
                     .instrument
                     .render(settings.tracks, self.buses)
                     .expect("fixed patch");
                 fm1_audio::mix_stereo(out, mono, mono);
-                let cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
-                for (frame, &bytes) in out.iter_mut().zip(cue) {
-                    let sample = i32::from(i16::from_le_bytes(bytes)) << 8;
-                    for channel in frame {
-                        *channel = channel.saturating_add(sample);
-                    }
-                }
             });
             let Some(revision) = revision else { return }; // No DMA half was ready.
             if result == Refill::Written {
@@ -681,11 +711,13 @@ mod app {
                 let bass_automation = self.instrument.bass_automation(settings.nav.focus);
                 let drums = self.instrument.drums;
                 let wave_frames = self.instrument.wave_frames;
+                let reduction = self.instrument.reduction;
                 self.shared().motion.lock(|motion| {
                     *motion = Motion {
                         position,
                         bass_automation,
                         peaks,
+                        reduction,
                         drums,
                         wave_frames,
                     };
@@ -696,7 +728,17 @@ mod app {
                 let labels = settings.labels(self.instrument.half_gain);
                 let block = ScopeBlock {
                     samples: match labels.view {
-                        View::Mixer | View::Channel => [0; OUTPUT_FRAMES],
+                        View::Mixer | View::Channel | View::MasterFx(_) => [0; OUTPUT_FRAMES],
+                        View::Fx => {
+                            let i = labels.channel.index();
+                            let strip = &self.buses[STRIP_BUS + i];
+                            if labels.bass_insert {
+                                strip.map(I24::inner)
+                            } else {
+                                let level = i32::from(labels.mixer.0[i].level);
+                                strip.map(|s| (s.inner() * level) >> 7)
+                            }
+                        }
                         View::Scope if labels.voice_tap => {
                             labels.channel.scope_samples(labels.focus, self.buses)
                         }
@@ -733,9 +775,10 @@ mod app {
         async fn exec(&mut self, (): ()) {
             while let Ok(block) = self.blocks.recv().await {
                 let changed = self.previous.replace(block.labels) != Some(block.labels);
-                let scale = if block.labels.view == View::Scope
-                    && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
-                    && block.labels.voice_tap
+                let scale = if block.labels.bass_insert
+                    || (block.labels.view == View::Scope
+                        && matches!(block.labels.focus, Part::Bass | Part::Wavetable)
+                        && block.labels.voice_tap)
                 {
                     Scale::Auto
                 } else {
@@ -752,6 +795,7 @@ mod app {
                         } else if frame.labels.focus != block.labels.focus
                             || frame.labels.channel != block.labels.channel
                             || frame.labels.voice_tap != block.labels.voice_tap
+                            || frame.labels.bass_insert != block.labels.bass_insert
                             || frame.labels.view != block.labels.view
                         {
                             frame.trace = FLAT;

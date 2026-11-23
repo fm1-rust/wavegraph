@@ -895,6 +895,7 @@ dependencies = [
 name = "wavegraph-fx"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "wavegraph-core",
  "wavegraph-sample",
 ]
