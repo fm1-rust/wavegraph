@@ -45,11 +45,8 @@ pub(crate) fn filter_tan(x: f32) -> f32 {
 }
 
 pub(crate) fn fast_tanh(x: f32) -> f32 {
-    if x > 3.0 {
-        return 1.0;
-    }
-    if x < -3.0 {
-        return -1.0;
+    if x.abs() > 3.0 {
+        return 1.0_f32.copysign(x);
     }
     let x2 = x * x;
     x * (27.0 + x2) / (27.0 + 9.0 * x2)

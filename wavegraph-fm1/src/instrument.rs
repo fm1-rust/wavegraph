@@ -830,13 +830,21 @@ impl Process<Message, I24> for Master {
                 _ => (),
             }
         }
-        for (i, out) in cx.outputs[0].iter_mut().enumerate() {
-            let dry = cx.inputs[0][i].inner() << DRY_HEADROOM;
-            let wet = cx.inputs[1][i].inner() + cx.inputs[2][i].inner();
-            let bumper = cue
-                .get(i)
-                .map_or(0, |&le| i32::from(i16::from_le_bytes(le)) << 8);
-            *out = self.0.process_sample(dry + wet + bumper);
+        if cx.frames == 0 {
+            return;
+        }
+        let mut mix = cx.inputs[0].iter().zip(cx.inputs[1]).zip(cx.inputs[2]).map(
+            |((dry, reverb), delay)| (dry.inner() << DRY_HEADROOM) + reverb.inner() + delay.inner(),
+        );
+        let output = &mut *cx.outputs[0];
+        let (intro, rest) = output.split_at_mut(cue.len().min(output.len()));
+        for ((out, sum), &sample) in intro.iter_mut().zip(&mut mix).zip(cue) {
+            *out = self
+                .0
+                .process_sample(sum + (i32::from(i16::from_le_bytes(sample)) << 8));
+        }
+        for (out, sum) in rest.iter_mut().zip(mix) {
+            *out = self.0.process_sample(sum);
         }
         // One Q7 meter reading per block; the LCD converts it to dB.
         let reduction = ((1.0 - self.0.dynamics_gain()) * 128.0 + 0.5) as u8;

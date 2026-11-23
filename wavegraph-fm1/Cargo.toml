@@ -24,6 +24,7 @@ wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
+wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 embedded-graphics = "0.8.2"
 fm1-audio = "0.1"
 fm1-controls = "0.1.1"

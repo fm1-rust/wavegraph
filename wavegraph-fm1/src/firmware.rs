@@ -386,6 +386,11 @@ mod app {
     }
 
     impl RticTask for Panel {
+        // This scanner preempts audio every 100 us. Its instructions share the flash
+        // cache with the voices unless startup copies them into executable SRAM.
+        // SAFETY: the FM-1 linker and startup place and initialize .data before IRQs run.
+        #[unsafe(link_section = ".data.wavegraph_panel")]
+        #[inline(never)]
         fn exec(&mut self) {
             self.timer.on_interrupt();
             let Some((scan, touch)) = self.controls.scan(&self.leds) else {
@@ -680,7 +685,9 @@ mod app {
                     .instrument
                     .render(settings.tracks, self.buses)
                     .expect("fixed patch");
-                fm1_audio::mix_stereo(out, mono, mono);
+                for (frame, sample) in out.iter_mut().zip(mono) {
+                    *frame = [sample.inner(); 2];
+                }
             });
             let Some(revision) = revision else { return }; // No DMA half was ready.
             if result == Refill::Written {
