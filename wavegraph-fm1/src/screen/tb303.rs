@@ -185,7 +185,7 @@ impl Panel {
         &mut self,
         lcd: &mut AsyncDisplay<'_, Clock>,
         pixels: &mut [[u8; 2]],
-        selector: &Selector,
+        selector: &mut Selector,
         labels: &Labels,
         automation: Option<Automation>,
         entering: bool,
@@ -209,6 +209,7 @@ impl Panel {
         if entering {
             let mut logo = Band::new(pixels, 0, 0, 78, 20, paper);
             wordmark(&mut logo, selector);
+            logo.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(0, 0, 78, 20, logo.pixels.as_flattened())
                 .await?;
         }
@@ -221,6 +222,7 @@ impl Panel {
         if old.is_none_or(|s| s.status != state.status) {
             let mut status = Band::new(pixels, 0, 0, 158, 10, paper);
             state.status.draw(&mut status, selector.shade(GRAPHITE));
+            selector.badge.compose(0, 21, 158, status.pixels);
             lcd.write_rect_buffered(0, 21, 158, 10, status.pixels.as_flattened())
                 .await?;
         }

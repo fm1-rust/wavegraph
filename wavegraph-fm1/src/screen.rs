@@ -7,7 +7,7 @@ use crate::{
     envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion},
     instrument::Part,
-    panel::{CHANNELS, Channel, View},
+    panel::{CHANNELS, Channel, View, preset_age},
     scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
     sequencer::{Position, SeqPage, Sequencer},
 };
@@ -22,6 +22,7 @@ use fm1_rticx::{
 };
 use static_cell::{ConstStaticCell, StaticCell};
 
+mod badge;
 mod channel_fx;
 mod drums;
 mod jp8080;
@@ -124,7 +125,8 @@ impl Screen {
     pub(super) fn new() -> Self {
         static PLOT: StaticCell<Waveform<WIDTH, WIDTH>> = StaticCell::new();
         static LANES: [StaticCell<Lane>; 3] = [const { StaticCell::new() }; 3];
-        static SELECTOR: ConstStaticCell<Selector> = ConstStaticCell::new(Selector::new());
+        // Initialize the overlay buffers in SRAM instead of storing empty pixels in flash.
+        static SELECTOR: StaticCell<Selector> = StaticCell::new();
         static TEXT: StaticCell<TextGrid> = StaticCell::new();
         static STRIP: ConstStaticCell<[[u8; 2]; BAND * WIDTH]> =
             ConstStaticCell::new([[0; 2]; BAND * WIDTH]);
@@ -145,7 +147,7 @@ impl Screen {
             }),
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
-            selector: SELECTOR.take(),
+            selector: SELECTOR.init_with(Selector::new),
             drums: drums::Panel::new(),
             bass: tb303::Panel::default(),
             jp: jp8080::Panel::default(),
@@ -163,6 +165,7 @@ impl Screen {
     }
 
     fn change_view(&mut self, style: WaveformStyle) {
+        self.selector.badge.change_view(style.background);
         self.dot = None;
         self.dot_background = style.background;
         self.plot.set_style(style);
@@ -347,18 +350,9 @@ impl Screen {
         let page = Page::Sequencer(view, seq.channel, part);
         if self.page.replace(page) != Some(page) {
             self.change_view(STYLE);
-            lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
-            let title: &[u8] = match part {
-                Part::Mono => b"SEQ MONO",
-                Part::Organ => b"SEQ M1 ORG",
-                Part::Bass if seq.channel == Channel::Two => b"SEQ 303 HI",
-                Part::Bass => b"SEQ 303 LOW",
-                Part::Tr909 => b"SEQ TR-909",
-                Part::Tr808 => b"SEQ TR-808",
-                Part::Supersaw => b"SEQ JP-8080",
-                Part::Wavetable => b"SEQ WAVE",
-            };
-            self.text.text(0, 0, title, palette::WHITE);
+            self.selector
+                .badge
+                .fill_rows(lcd, 0, SIZE, STYLE.background)?;
             self.text.text(
                 12,
                 0,
@@ -376,8 +370,21 @@ impl Screen {
             }
             self.text.text(8, 1, b"BPM", palette::MUTED);
         }
-        self.text.text(
-            0,
+        let title: &[u8] = match part {
+            Part::Mono => b"SEQ MONO",
+            Part::Organ => b"SEQ M1 ORG",
+            Part::Bass if seq.channel == Channel::Two => b"SEQ 303 HI",
+            Part::Bass => b"SEQ 303 LOW",
+            Part::Tr909 => b"SEQ TR-909",
+            Part::Tr808 => b"SEQ TR-808",
+            Part::Supersaw => b"SEQ JP-8080",
+            Part::Wavetable => b"SEQ WAVE",
+        };
+        self.selector
+            .badge
+            .header_text(self.text, 0, title, palette::WHITE);
+        self.selector.badge.header_text(
+            self.text,
             1,
             if seq.transport.playing() {
                 b"PLAY"
@@ -472,10 +479,16 @@ impl Screen {
         motion: Motion,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        let menu = if labels
-            .menu_since
-            .is_some_and(|since| ticks().wrapping_sub(since) < MENU_TICKS)
-        {
+        let elapsed = labels
+            .preset_since
+            .and_then(|since| preset_age(since, ticks()));
+        self.selector.badge.select(
+            lcd,
+            self.strip,
+            self.text,
+            (labels.view != View::Channel && elapsed.is_some()).then_some(labels.channel),
+        )?;
+        let menu = if elapsed.is_some_and(|age| age < MENU_TICKS) {
             match labels.view {
                 View::Scope => Some(Menu::Channels {
                     parts: labels.assignments,
@@ -510,9 +523,9 @@ impl Screen {
                     lcd,
                     clock,
                     self.strip,
-                    labels.fx,
-                    selected,
+                    (labels.fx, selected),
                     motion.reduction,
+                    &mut self.selector.badge,
                 )
                 .await;
         }
@@ -530,7 +543,14 @@ impl Screen {
                 self.dot_background = mixer::BACKGROUND;
             }
             self.channel_fx
-                .paint(lcd, clock, self.strip, &labels, entering)
+                .paint(
+                    lcd,
+                    clock,
+                    self.strip,
+                    &labels,
+                    entering,
+                    &mut self.selector.badge,
+                )
                 .await?;
             let rows = channel_fx::SCOPE;
             let height = rows.end - rows.start;
@@ -647,11 +667,13 @@ impl Screen {
                 self.dot_background = self.selector.shade(microwave::FACE);
             }
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
-                lcd.fill_rect(0, y, SIZE, height, self.dot_background.into_storage())?;
+                self.selector
+                    .badge
+                    .fill_rows(lcd, y, height, self.dot_background)?;
             }
             if bass {
                 for y in [header - 1, SIZE - footer] {
-                    lcd.fill_rect(0, y, SIZE, 1, muted.into_storage())?;
+                    self.selector.badge.fill_rows(lcd, y, 1, muted)?;
                 }
             }
         }
@@ -742,7 +764,9 @@ impl Screen {
         let part = labels.focus;
         let voice = labels.voice;
         if organ {
-            self.text.text(0, 0, b"M1 ORGAN", ink);
+            self.selector
+                .badge
+                .header_text(self.text, 0, b"M1 ORGAN", ink);
             let voices = labels
                 .poly_keys
                 .iter()
@@ -756,7 +780,7 @@ impl Screen {
             self.text.number(10, 13, 4, u32::from(value), bright);
             self.text.text(15, 13, units, muted);
         } else {
-            self.text.text(0, 0, b"CUT", muted);
+            self.selector.badge.header_text(self.text, 0, b"CUT", muted);
             self.text.number(4, 0, 5, u32::from(voice.cutoff_hz()), ink);
             self.text.text(9, 0, b"HZ", muted);
         }
@@ -875,7 +899,7 @@ impl Screen {
         if self.sweep.as_ref() == Some(&sweep) {
             return Ok(());
         }
-        let list = &*self.selector;
+        let list = &mut *self.selector;
         let palette = self.scope_palette.get_or_insert_with(|| {
             Palette::new(
                 style.background.to_be_bytes(),
@@ -904,6 +928,7 @@ impl Screen {
                 let pixels = &mut self.strip[..w.width * w.height];
                 sweep.render(w, palette, usize::from(center), pixels);
                 list.overlay(w, pixels);
+                list.badge.compose(w.x, w.y, w.width, pixels);
                 lcd.write_rect_buffered(
                     w.x as u16,
                     w.y as u16,

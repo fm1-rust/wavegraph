@@ -192,14 +192,15 @@ impl Rack {
         lcd: &mut Display,
         clock: &mut Clock,
         pixels: &mut [[u8; 2]; BAND * WIDTH],
-        fx: Fx,
-        selected: Option<Device>,
+        state: (Fx, Option<Device>),
         reduction: u8,
+        badge: &mut super::badge::ChannelBadge,
     ) -> Result<(), Error> {
         let db = gr_db(reduction);
-        if self.previous == Some((fx, selected)) && self.gr_db == db {
+        if self.previous == Some(state) && self.gr_db == db {
             return Ok(());
         }
+        let (fx, selected) = state;
         let editing = selected.is_some();
         let rows = Device::ALL.map(|d| Row::new(d, fx, selected));
         let dirty = self
@@ -243,6 +244,7 @@ impl Rack {
                 band.label(top, Point::new(120, 211), Alignment::Center, POINTER);
                 band.label(bottom, Point::new(120, 225), Alignment::Center, LABEL);
             }
+            band.compose_badge(badge);
             lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
                 .await?;
         }
@@ -254,7 +256,7 @@ impl Rack {
                 .await?;
         }
         lcd.flush().await?;
-        self.previous = Some((fx, selected));
+        self.previous = Some(state);
         self.gr_db = db;
         Ok(())
     }

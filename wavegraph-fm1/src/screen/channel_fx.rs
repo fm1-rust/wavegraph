@@ -43,6 +43,7 @@ impl Rack {
         pixels: &mut [[u8; 2]; BAND * WIDTH],
         labels: &Labels,
         entering: bool,
+        badge: &mut super::badge::ChannelBadge,
     ) -> Result<(), Error> {
         let strip = labels.mixer.0[labels.channel.index()];
         let controls = Controls {
@@ -142,6 +143,7 @@ impl Rack {
                     }
                 }
             }
+            band.compose_badge(badge);
             lcd.write_rect_buffered(0, y, width, BAND as u16, band.pixels.as_flattened())
                 .await?;
         }
