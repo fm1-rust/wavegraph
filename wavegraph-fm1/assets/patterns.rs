@@ -19,7 +19,10 @@ const BAR: u64 = TICKS_PER_BEAT * 4;
 
 pub(super) fn compile_banks(out: &Path) {
     println!("cargo:rerun-if-changed=assets/patterns.rs");
-    let mut code = String::from("static BANKS: [[Clip; SLOTS]; 8] = [\n");
+    let mut code = String::from(
+        "#[cfg_attr(target_os = \"none\", unsafe(link_section = \".wavegraph_assets\"))]\n\
+         static BANKS: [[Clip; SLOTS]; 8] = [\n",
+    );
     for bank in BANKS {
         code.push_str("[\n");
         for slot in 1..=4 {
@@ -99,7 +102,9 @@ fn compile(bytes: &[u8], bank: &str) -> Result<String, String> {
     let mut pitches: Vec<_> = events.iter().filter(|e| e.1 == 9).map(|e| e.2).collect();
     pitches.sort_unstable_by(|a, b| b.cmp(a));
     pitches.dedup();
-    let mut code = format!("Clip {{ bars: {bars}, pitches: &{pitches:?}, events: &[");
+    let mut code = format!(
+        "Clip {{ bars: {bars}, pitches: flash_asset!(u8, &{pitches:?}), events: flash_asset!(Timed, &["
+    );
     let kit = matches!(bank, "tr808" | "tr909");
     let mut held_since = [None; 128];
     let mut last_tick = None;
@@ -145,6 +150,6 @@ fn compile(bytes: &[u8], bank: &str) -> Result<String, String> {
     if held_since.iter().any(Option::is_some) {
         return Err("end each held note before or at the loop boundary".into());
     }
-    code.push_str("] },\n");
+    code.push_str("]) },\n");
     Ok(code)
 }

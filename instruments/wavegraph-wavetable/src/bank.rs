@@ -46,6 +46,12 @@ pub struct Bank<'a> {
 }
 
 impl<'a> Bank<'a> {
+    /// Borrow the original packed 12-bit frames, including all harmonic levels.
+    #[must_use]
+    pub const fn as_packed12(&self) -> &'a [u8] {
+        self.frames.as_flattened()
+    }
+
     /// Borrow the packed signed 12-bit PCM produced by `tools/import_bank.py`.
     /// Returns `None` for empty, partial or oversized banks.
     #[must_use]

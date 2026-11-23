@@ -33,7 +33,7 @@ use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
 use wavegraph_supersaw::{Message as SawMessage, Supersaw};
-use wavegraph_wavetable::{BANKS, Message as WaveMessage, Wavetable};
+use wavegraph_wavetable::{Message as WaveMessage, Wavetable};
 
 const _: () = assert!(wavegraph_wavetable::POLYPHONY == POLYPHONY);
 
@@ -734,7 +734,8 @@ impl Process<Message, I24> for Node<'_> {
                 Part::Mono => Player::Mono(Monosynth::new(self.tuning).with_idle_suspension()),
                 Part::Organ => Player::Organ(self.organ.clone()),
                 Part::Wavetable => Player::Wavetable(
-                    Wavetable::new(self.tuning, &BANKS).expect("factory bank catalog"),
+                    Wavetable::new(self.tuning, &crate::assets::WAVETABLES)
+                        .expect("factory bank catalog"),
                 ),
                 Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
                 // Reserve headroom before the resonant signal is converted to Q23.

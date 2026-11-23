@@ -305,7 +305,8 @@ Each bank has four Standard MIDI Files under [patterns/](patterns/).
 For example, drag `patterns/tb303-low/01.mid` into a DAW to hear or edit the
 original bassline. For import, save a clip over `01.mid` through `04.mid` in
 the desired bank, then [build and flash](#build-and-flash). MIDI files are the
-source for both playback and the display. The build compiles them into flash.
+source for both playback and the display. The build compiles the events, pitches,
+and clip directory into the upper-flash asset file.
 
 Export one instrument channel in SMF format 0 or 1, with PPQN timing and one to
 four bars of 4/4. End-of-track determines the length, rounded up to a bar.
@@ -522,7 +523,8 @@ WaveGraph workspace root run
 ./wavegraph-fm1/build.sh
 ```
 
-Both files are written to `target/pi32v2-none/firmware/`.
+Both files are written to `target/pi32v2-none/firmware/`. The build reports the
+linked application size, the space available for code, and the end of the install.
 Cargo resolves the FM-1 SDK from crates.io, including `fm1` 0.1.3 and
 `fm1-rticx` 0.1.1. CI uses the SDK’s shared pi32v2 build workflow to package
 the flashable image.
@@ -541,6 +543,28 @@ cat wavegraph-fm1.bin >> wavegraph-fm1.xip.bin
 fm1-live --bin wavegraph-fm1.xip.bin --entry 0x02000120
 ```
 
+### Flash layout
+
+The `.fwsc` installs two checksummed files. The linker keeps code and initialized
+RAM below the stock application boundary. The sequencer, sampler, and renderer
+read the factory assets directly through the flash controller's XIP mapping.
+
+| Physical flash offsets (end exclusive) | Contents |
+| --- | --- |
+| `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
+| `0x04000..0x93000` | Application directory and `app.bin` (entry at physical `0x04120`). Unused space here is available for code growth. |
+| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks, the boot cue and its seek table, both splash bitmaps, and the 32 compiled MIDI patterns. |
+| `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
+
+M-Flasher installs through the last occupied asset sector. A first install can
+overwrite stock settings or Felucca projects, samples, and presets in that range.
+Keep a full flash backup to recover those data when switching firmware. Subsequent
+installs write only changed sectors. M-Flasher labels the range through the end of
+`assets.bin` as **FIRMWARE** on its map. The gap between the two files is physically
+erased and available for larger applications. The raw emulator `.bin` spans that
+gap so both files appear at the same addresses as on the FM-1. [M-Flasher firmware installation][flasher-install]
+and [FM-1 flash layouts][flash-layout].
+
 ## License
 
 The firmware source is available under the [Apache License, Version 2.0](LICENSE-APACHE)
@@ -552,6 +576,8 @@ or the [MIT License](LICENSE-MIT).
 [fm1-graphics]: https://docs.rs/fm1-graphics/0.1.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
+[flasher-install]: https://github.com/jvitkauskas/m-flasher/blob/8fbece7348d758ac284325eed455781675ac95ff/src/ops.rs#L360-L405
+[flash-layout]: https://sbegueria.github.io/fm1-dev-wiki/Flash-Storage.html
 [fm1-emu]: https://github.com/joakimeriksson/fm1-emu
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/953165a87c12fac5bc1e2897d13e38a3045bbf69/fm1/README.md#build-and-flash
 
