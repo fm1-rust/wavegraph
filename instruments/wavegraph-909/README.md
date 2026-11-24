@@ -5,7 +5,8 @@ snare and hand clap with three [one-shot PCM cymbals](../wavegraph-sampler/). Pa
 `Samples::X0XPROC1` for the bundled 44.1 kHz kit, or supply your own mono
 s16le cymbals. `Tr909::with_sample_rate` accepts a rational graph clock, such
 as 24,000,000 / 544 on the FM-1. Supply clips at that rate for native-pitch
-playback. An empty slice mutes that cymbal.
+playback. An empty slice mutes that cymbal. To use packed clips, pass the
+closed hat, open hat and ride as three `Sampler` voices to `Tr909::with_cymbals`.
 
 Send a `Voice` to message inlet 0. A strike retriggers that voice on the
 addressed frame. The hats choke each other. Simultaneous open and closed

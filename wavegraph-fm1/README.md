@@ -762,6 +762,12 @@ available for growth. Cargo.lock selects `fm1` 0.2.0-rc.2, `fm1-audio`,
 `fm1-controls` 0.2.0-rc.0.
 CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 tag.
 
+By default the build packs the 909 closed hat, open hat and ride from their
+original `.s16le` files. In each group of 32 samples it stores only the bits
+needed to reproduce every signed PCM value. The three clips take 114,181 bytes
+in flash, down from 148,124, and each voice decodes one sample at a time.
+For a raw PCM comparison build, run `./wavegraph-fm1/build.sh --no-default-features`.
+
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
 [release workflow] checks the tag against the Cargo version, tests and builds
@@ -792,7 +798,7 @@ renderer read the assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | From `0x04000` | Application directory and `app.bin` (entry at physical `0x04120`). The locked BSP still limits the end of `app.bin` to `0x93000`. |
-| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the raw PCM16 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
+| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can

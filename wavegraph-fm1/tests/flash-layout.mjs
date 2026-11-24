@@ -5,7 +5,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [flasher, image] = process.argv.slice(2);
+const [flasher, image, mode = "packed"] = process.argv.slice(2);
+assert.ok(["raw", "packed"].includes(mode), "expected raw or packed cymbals");
 const lib = pathToFileURL(resolve(flasher, "web/lib") + "/");
 const { appTable, appRead, appFilesStatus, AppStatus, BOOT_AREA, FLASH_SIZE, SECTOR } =
     await import(new URL("formats.js", lib));
@@ -51,6 +52,36 @@ function checkAsset(name, bytes) {
     assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
 }
 
+// Find the PCM1 clip by its frame count, then check the installed bit stream
+// against the source PCM, including the final, possibly short group.
+function checkPackedClip(pcm, name) {
+    const frames = pcm.length / 2;
+    const header = Buffer.alloc(8);
+    header.write("PCM1");
+    header.writeUInt32LE(frames, 4);
+    const start = upper.indexOf(header);
+    assert.ok(start >= 0, name);
+    assert.equal(upper.indexOf(header, start + 1), -1, name);
+    assert.ok(!upper.includes(pcm), `${name} also present as raw PCM`);
+    let offset = start + header.length;
+    for (let first = 0; first < frames; first += 32) {
+        const width = upper.readUInt8(offset++);
+        assert.ok(width >= 1 && width <= 16, name);
+        const count = Math.min(32, frames - first);
+        for (let i = 0; i < count; i++) {
+            let value = 0;
+            for (let b = 0; b < width; b++) {
+                const bit = i * width + b;
+                value |= ((upper.readUInt8(offset + (bit >> 3)) >> (bit & 7)) & 1) << b;
+            }
+            const sign = 1 << (width - 1);
+            assert.equal((value ^ sign) - sign, pcm.readInt16LE(2 * (first + i)), name);
+        }
+        offset += Math.ceil(count * width / 8);
+    }
+    assert.ok(!code.includes(upper.subarray(start, offset)), `${name} duplicated in app.bin`);
+}
+
 for (const [path, extension] of [
     ["../../instruments/wavegraph-909/samples/", ".s16le"],
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
@@ -63,7 +94,13 @@ for (const [path, extension] of [
     const names = readdirSync(dir).filter(name => name.endsWith(extension));
     assert.ok(names.length, path);
     for (const name of names) {
-        checkAsset(name, readFileSync(new URL(name, dir)));
+        const bytes = readFileSync(new URL(name, dir));
+        if (extension === ".s16le" && mode === "packed") {
+            assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
+            checkPackedClip(bytes, name);
+        } else {
+            checkAsset(name, bytes);
+        }
     }
 }
 

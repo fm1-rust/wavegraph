@@ -11,6 +11,10 @@ FM-1's 24 MHz / 544 clock is about 44,118 frames/s. The audio callback uses
 no heap and converts directly to the graph's signal format, including `I24`
 and `f32`.
 
+The optional `packed-pcm` feature adds `Sampler::from_packed` for lossless
+`fm1_assets::pcm::PackedPcm16` clips. Each voice streams from the borrowed
+clip with its own decoder cursor.
+
 ```rust
 use wavegraph_core::{Event, Process, ProcessContext};
 use wavegraph_sampler::{Message, Sampler};
