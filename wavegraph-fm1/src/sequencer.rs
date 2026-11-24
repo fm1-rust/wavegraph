@@ -51,6 +51,8 @@ pub(super) struct Sequencer {
     pub(super) channel: Channel,
     pub(super) bar: u8,
     pub(super) enabled: [bool; CHANNELS],
+    /// The pressed bank key is in the dark half of its blink.
+    pub(super) pressed_key_dark: bool,
     selected: [[Slot; Part::ALL.len()]; CHANNELS],
 }
 
@@ -61,6 +63,7 @@ impl Sequencer {
         channel: Channel::One,
         bar: 0,
         enabled: [true; CHANNELS],
+        pressed_key_dark: false,
         selected: [[Slot::FIRST; Part::ALL.len()]; CHANNELS],
     };
 

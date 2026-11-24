@@ -153,7 +153,10 @@ mod app {
         midi_out::{Batch, OutputQueue},
         mixer::Meter,
         overload::Overloads,
-        panel::{Assignment, CHANNELS, Channel, Navigation, PageButton, View, preset_age},
+        panel::{
+            Assignment, CHANNELS, Channel, Navigation, PageButton, View, pattern_press_lamp,
+            preset_age,
+        },
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer, pattern::Slot},
     };
@@ -364,6 +367,7 @@ mod app {
                     scans,
                     leds,
                     octave_since: None,
+                    pattern_pressed_at: None,
                 },
                 input: Input {
                     input,
@@ -414,6 +418,7 @@ mod app {
         scans: Sender<'static, PanelFrame, SCANS>,
         leds: Leds,
         octave_since: Option<u32>,
+        pattern_pressed_at: Option<u32>,
     }
 
     impl RticTask for Panel {
@@ -549,22 +554,35 @@ mod app {
                     .event(channel, assignment, MidiAction::Off(53 + key.index()));
             }
             if self.seq.page == Some(SeqPage::Pattern) {
+                let tick = ticks();
+                if channel_changed {
+                    self.pattern_pressed_at = None;
+                }
                 for (key, slot) in Slot::KEYS {
                     if scan.pressed(PianoKey::new(key).expect("physical bank key")) {
                         self.seq.choose(assignment.part, slot);
+                        self.pattern_pressed_at = Some(tick);
                     }
                 }
+                let press_lamp = pattern_press_lamp(&mut self.pattern_pressed_at, tick);
+                self.seq.pressed_key_dark = press_lamp == Some(false);
+                let requested = self.seq.slot(channel, assignment.part);
                 let active = if self.seq.transport.playing() {
                     self.shared().motion.lock(|m| m.banks[channel.index()].slot)
                 } else {
-                    self.seq.slot(channel, assignment.part)
+                    requested
                 };
                 for (key, slot) in Slot::KEYS {
-                    let lamp = slot != active || (now & (1 << 22)) == 0;
+                    let lamp = match (slot == requested, press_lamp) {
+                        (true, Some(lamp)) => lamp,
+                        _ => slot != active || (now & (1 << 22)) == 0,
+                    };
                     self.leds
                         .set(PianoKey::new(key).expect("physical bank key"), lamp);
                 }
             } else {
+                self.pattern_pressed_at = None;
+                self.seq.pressed_key_dark = false;
                 for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
                     self.leds.set(key, true);
                     if scan.pressed(key) {

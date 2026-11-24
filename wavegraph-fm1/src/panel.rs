@@ -10,6 +10,17 @@ pub(super) fn preset_age(since: u32, now: u32) -> Option<u32> {
     (age < 150).then_some(age)
 }
 
+/// Override the pressed pattern key for 100 ms off, then 100 ms on.
+pub(super) fn pattern_press_lamp(since: &mut Option<u32>, now: u32) -> Option<bool> {
+    const PHASE_TICKS: u32 = 10; // 100 Hz panel clock
+    let age = now.wrapping_sub((*since)?);
+    if age >= 2 * PHASE_TICKS {
+        *since = None;
+        return None;
+    }
+    Some(age >= PHASE_TICKS)
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Channel {
     #[default]
@@ -248,6 +259,20 @@ mod tests {
                 matches!(view, View::Scope | View::Fx | View::Envelope)
             );
         }
+    }
+
+    #[test]
+    fn pattern_press_goes_dark_then_lights_even_across_clock_wrap() {
+        let start = u32::MAX - 4;
+        let mut since = Some(start);
+        for (age, lamp) in [(0, false), (9, false), (10, true), (19, true)] {
+            assert_eq!(
+                pattern_press_lamp(&mut since, start.wrapping_add(age)),
+                Some(lamp)
+            );
+        }
+        assert_eq!(pattern_press_lamp(&mut since, start.wrapping_add(20)), None);
+        assert_eq!(pattern_press_lamp(&mut since, start), None);
     }
 
     #[test]
