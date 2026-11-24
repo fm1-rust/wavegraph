@@ -23,16 +23,39 @@ impl Cue {
         len: 0,
     };
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "The host encoder bounds widths to 16 and the bit reservoir to 23 bits."
+    )]
     pub(super) fn samples(self) -> impl Iterator<Item = i16> {
         let mut bytes = self.bytes.iter().copied();
         let mut previous = 0_i16;
+        let mut slope = 0_i16;
+        let mut frame = 0_u8;
+        let mut bits = 0_u32;
+        let mut count = 0_u8;
+        let mut width = 0_u8;
         core::iter::from_fn(move || {
-            let d = i8::from_le_bytes([bytes.next()?]);
-            previous = if d == i8::MIN {
-                i16::from_le_bytes([bytes.next()?, bytes.next()?])
-            } else {
-                previous.wrapping_add(i16::from(d))
-            };
+            if frame.is_multiple_of(128) {
+                previous = 0;
+                slope = 0;
+            }
+            if frame.is_multiple_of(16) {
+                width = bytes.next()?;
+            }
+            while count < width {
+                bits |= u32::from(bytes.next()?) << count;
+                count += 8;
+            }
+            let packed = (bits & ((1 << width) - 1)) as u16;
+            bits >>= width;
+            count -= width;
+            let residual = ((packed >> 1) as i16) ^ -((packed & 1) as i16);
+            slope = slope.wrapping_add(residual);
+            previous = previous.wrapping_add(slope);
+            frame = frame.wrapping_add(1);
             Some(previous)
         })
         .skip(self.skip)
@@ -42,7 +65,7 @@ impl Cue {
     #[cfg(test)]
     pub(super) const fn test_peak() -> Self {
         Self {
-            bytes: &[128, 0xfe, 0x7f, 128, 0, 0x80],
+            bytes: &[16, 0xfc, 0xff, 0xf7, 0xff],
             skip: 0,
             len: 2,
         }

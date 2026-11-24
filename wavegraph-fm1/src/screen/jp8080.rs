@@ -1,21 +1,13 @@
 //! JP-8080 rack panel above and below the channel's full-width oscilloscope.
 
 use super::{BAND, GRID, mixer::Band, selector::Selector};
-use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
     envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
 };
 use core::fmt::Write;
 use embedded_graphics::{
-    Drawable,
-    framebuffer::Framebuffer,
-    mono_font::MonoTextStyle,
-    pixelcolor::{
-        BinaryColor,
-        raw::{BigEndian, RawU1, ToBytes},
-    },
     prelude::{Point, Size},
-    text::{Alignment, Baseline, Text},
+    text::Alignment,
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
@@ -59,7 +51,7 @@ impl Panel {
         let mut lcd = lcd.as_async(clock)?;
         if entering {
             for y in (0..32).step_by(BAND) {
-                let mut band = Band::new(pixels, 0, y, SIZE, 8, ink(FACE));
+                let mut band = Band::new(pixels, 0, y, SIZE, 8, ink(FACE)).with_panel_type(true);
                 band.label("SUPER SAW", Point::new(9, 18), Alignment::Left, ink(PRINT));
                 band.rect(Point::new(66, 23), Size::new(49, 1), ink(EDGE));
                 band.rect(Point::new(0, 30), Size::new(240, 1), ink(EDGE));
@@ -84,7 +76,7 @@ impl Panel {
         }
         let status = (labels.channel, labels.voice_tap, key);
         if entering || self.status != Some(status) {
-            let mut display = Band::new(pixels, 0, 0, 102, 18, ink(BLACK));
+            let mut display = Band::new(pixels, 0, 0, 102, 18, ink(BLACK)).with_panel_type(true);
             display.rect(Point::new(1, 1), Size::new(100, 16), ink(RIM));
             display.rect(Point::new(3, 3), Size::new(96, 12), ink(LCD));
             let left = Alignment::Left;
@@ -146,7 +138,7 @@ impl Panel {
                 127
             };
             for y in [200, 220] {
-                let mut band = Band::new(pixels, x, y, 60, 20, ink(FACE));
+                let mut band = Band::new(pixels, x, y, 60, 20, ink(FACE)).with_panel_type(true);
                 band.rect(Point::new(left, 200), Size::new(60, 1), ink(BLACK));
                 band.rect(Point::new(left, 201), Size::new(60, 1), ink(EDGE));
                 band.rect(Point::new(left + 59, 206), Size::new(1, 29), ink(RIM));
@@ -189,13 +181,13 @@ pub(super) async fn envelope_header(
         wordmark(pixels, FACE, AMBER);
         lcd.write_rect_buffered(7, 2, 100, 16, pixels[..1600].as_flattened())
             .await?;
-        let mut band = Band::new(pixels, 0, 18, 108, 14, FACE);
+        let mut band = Band::new(pixels, 0, 18, 108, 14, FACE).with_panel_type(true);
         band.label("ENVELOPES", Point::new(9, 19), Alignment::Left, PRINT);
         lcd.write_rect_buffered(0, 18, 108, 14, band.pixels.as_flattened())
             .await?;
     }
     for y in [0, 16] {
-        let mut band = Band::new(pixels, 110, y, 114, 16, FACE);
+        let mut band = Band::new(pixels, 110, y, 114, 16, FACE).with_panel_type(true);
         band.label("SELECT", Point::new(113, 0), Alignment::Left, PRINT);
         for (x, width, name, page) in [
             (112, 40, "AMP", EnvelopeTarget::Amp),
@@ -223,27 +215,6 @@ pub(super) async fn envelope_header(
     lcd.flush().await
 }
 
-// Stretch and shear the glyphs on the rack's printed model badge.
 fn wordmark(pixels: &mut [[u8; 2]], face: Rgb565, amber: Rgb565) {
-    let mut mask = Framebuffer::<BinaryColor, RawU1, BigEndian, 64, 16, 128>::new();
-    Text::with_baseline(
-        "JP-8080",
-        Point::new(0, 0),
-        MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On),
-        Baseline::Top,
-    )
-    .draw(&mut mask)
-    .expect("infallible wordmark");
-    let paper = face.to_be_bytes();
-    let print = amber.to_be_bytes();
-    for (y, row) in pixels[..1600].chunks_exact_mut(100).enumerate() {
-        let shear = (15 - y) / 3;
-        row.fill(paper);
-        for (x, pixel) in row.iter_mut().skip(shear).take(96).enumerate() {
-            let bit = x * 2 / 3;
-            if mask.data()[y * 8 + bit / 8] & (0x80 >> (bit % 8)) != 0 {
-                *pixel = print;
-            }
-        }
-    }
+    Band::new(pixels, 0, 0, 100, 16, face).mask(Point::zero(), super::lettering::JP, 0, [amber; 2]);
 }

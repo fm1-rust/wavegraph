@@ -45,6 +45,8 @@ for (const [path, extension] of [
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
     ["../assets/", ".2bpp"],
     ["../assets/fonts/", ".raw"],
+    ["../assets/panel-type/", ".raw"],
+    ["../assets/panel-type/", ".txt"],
     ["../patterns/", ".txt"],
 ]) {
     const dir = new URL(path, import.meta.url);

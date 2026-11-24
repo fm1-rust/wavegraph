@@ -112,6 +112,26 @@ impl Selector {
                     .draw(&mut self.mask)
                     .expect("infallible framebuffer");
                 }
+                if super::lettering::panel_type(*part) {
+                    let left = if numbered { 27 } else { 8 };
+                    for (i, ch) in part.name().bytes().enumerate() {
+                        let mask = super::lettering::GRID.glyph(ch);
+                        for dy in 0..mask.height {
+                            for dx in 0..mask.width {
+                                if mask.coverage(dx, dy) >= 2 {
+                                    let p = Point::new(
+                                        (left + i * mask.width + dx) as i32,
+                                        y + 2 + dy as i32,
+                                    );
+                                    embedded_graphics::Pixel(p, BinaryColor::On)
+                                        .draw(&mut self.mask)
+                                        .expect("infallible mask");
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 Text::with_baseline(
                     part.name(),
                     Point::new(if numbered { 27 } else { 8 }, y + 3),

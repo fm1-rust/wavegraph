@@ -6,6 +6,7 @@
     reason = "Grid coordinates fit the 240-pixel panel and clips are bounded to 512 ticks."
 )]
 
+use super::TextGrid;
 use super::{drums, mixer::Band};
 use crate::{
     bass::CC_SLIDE,
@@ -20,7 +21,7 @@ use embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
+use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
@@ -334,7 +335,8 @@ impl Grid {
         let rows = Roll::rows(part, clip);
         let paper = style(part).background;
         for y in (0..HEIGHT).step_by(16) {
-            let mut band = Band::new(strip, 0, 0, LEFT as u16, 16, paper);
+            let mut band = Band::new(strip, 0, 0, LEFT as u16, 16, paper)
+                .with_panel_type(super::lettering::panel_type(part));
             if !part.is_kit() {
                 let row = y / 16;
                 if row < rows {
@@ -369,7 +371,8 @@ impl Grid {
         if part.is_kit() {
             let h = if part == Part::Tr808 { 32 } else { 22 };
             for (i, v) in part.pads().iter().enumerate() {
-                let mut band = Band::new(strip, 0, 0, LEFT as u16, 12, paper);
+                let mut band = Band::new(strip, 0, 0, LEFT as u16, 12, paper)
+                    .with_panel_type(super::lettering::panel_type(part));
                 band.label(drum_label(*v), Point::new(4, 1), Alignment::Left, ink(part));
                 lcd.write_rect_buffered(
                     0,
@@ -407,7 +410,8 @@ impl Grid {
             if self.buttons[i] == Some(state) {
                 continue;
             }
-            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background);
+            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background)
+                .with_panel_type(super::lettering::panel_type(part));
             if !state.dark {
                 let (cap, text) = if state.selected {
                     (ink(part), skin.background)

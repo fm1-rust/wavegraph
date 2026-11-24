@@ -74,7 +74,8 @@ impl Rack {
             }
             // A trim change updates the header without erasing the overload lamp.
             let width = if y < 16 && !entering { SIZE - 12 } else { SIZE };
-            let mut band = Band::new(pixels, 0, y, width, BAND as u16, BACKGROUND);
+            let mut band = Band::new(pixels, 0, y, width, BAND as u16, BACKGROUND)
+                .with_panel_type(super::lettering::panel_type(labels.focus));
             match y {
                 0..16 => {
                     let title = heapless::format!(24; "CH{} / {} FX", labels.channel.index() + 1, labels.focus.name())

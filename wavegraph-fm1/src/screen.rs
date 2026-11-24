@@ -18,7 +18,7 @@ use core::{
     task::{Context, Poll},
 };
 use embedded_graphics::pixelcolor::raw::ToBytes;
-use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
+use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
         display::{AsyncDisplay, Display, Error, SIZE},
@@ -33,7 +33,10 @@ mod badge;
 mod channel_fx;
 mod drums;
 mod envelope_plot;
+mod grid;
 mod jp8080;
+mod lettering;
+use grid::TextGrid;
 mod master_fx;
 mod microwave;
 mod mixer;
