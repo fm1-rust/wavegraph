@@ -9,12 +9,7 @@ SECTIONS {
       .text.*panicking*panic_fmt .text.*cell*panic_already_borrowed
       .text.*result*unwrap_failed) }
 } INSERT BEFORE .text;
-INCLUDE fm1.ld
-/* Physical flash 0x93000..0xE0000, before Felucca's update staging area.
-   XIP logical offset zero corresponds to physical 0x4000. */
-MEMORY {
-  assets (r) : ORIGIN = ORIGIN(flash) + LENGTH(flash), LENGTH = 0x4D000
-}
+INCLUDE fm1-assets.ld
 SECTIONS {
   /* The BSP already reserves its ROM exchange and 1 KiB bootstrap and
      supervisor stacks in .cpu1_scratch. The running DSP has a separate USP. */
@@ -29,10 +24,6 @@ SECTIONS {
     . += 12K;
     __cpu1_ustack_top = .;
   } > ram
-  .wavegraph_assets : ALIGN(4) {
-    *(.wavegraph_assets)
-    KEEP(*(.wavegraph_assets.notices))
-  } > assets
 }
 __sstack_top = __stack_top - 16K;
 __sstack_bottom = __sstack_top - 20K;

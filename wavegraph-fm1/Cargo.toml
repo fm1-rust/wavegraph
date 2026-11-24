@@ -16,6 +16,7 @@ short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 qualified-usb = []
 
 [dependencies]
+fm1-assets = { version = "0.2.0-rc.0", default-features = false }
 fm1-audio.workspace = true
 heapless.workspace = true
 micromath = "2.2"

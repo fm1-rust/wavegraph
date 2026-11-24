@@ -743,10 +743,11 @@ WaveGraph workspace root run
 ./wavegraph-fm1/build.sh
 ```
 
-Both files are written to `target/pi32v2-none/firmware/`. The build reports the
-linked application size, the space available for code, and the end of the install.
-Cargo.lock selects the published `fm1` 0.2.0-rc.2, `fm1-audio` and
-`fm1-rticx` 0.2.0-rc.1, and `fm1-controls` and `fm1-graphics` 0.2.0-rc.0.
+Both files are written to `target/pi32v2-none/firmware/`. The build reports
+both file sizes, the asset address, the end of the install and the whole sectors
+available for growth. Cargo.lock selects `fm1` 0.2.0-rc.2, `fm1-audio`,
+`fm1-graphics` and `fm1-rticx` 0.2.0-rc.1, and `fm1-assets` and
+`fm1-controls` 0.2.0-rc.0.
 CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 tag.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
@@ -770,24 +771,25 @@ fm1-live --bin wavegraph-fm1.xip.bin --entry 0x02000120
 
 ### Flash layout
 
-The `.fwsc` installs two checksummed files. The linker keeps code and initialized
-RAM below the stock application boundary. The sequencer, sampler, and renderer
-read the factory assets directly through the flash controller's XIP mapping.
+The `.fwsc` installs two checksummed files. The `fm1-assets` linker script
+places the factory assets on the first 4 KiB boundary after `app.bin`, including
+the code and data copied into RAM at startup. The sequencer, sampler and
+renderer read the assets directly through the flash controller's XIP mapping.
 
 | Physical flash offsets (end exclusive) | Contents |
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
-| `0x04000..0x93000` | Application directory and `app.bin` (entry at physical `0x04120`). Unused space here is available for code growth. |
-| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
+| From `0x04000` | Application directory and `app.bin` (entry at physical `0x04120`). The locked BSP still limits the end of `app.bin` to `0x93000`. |
+| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the raw PCM16 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can
 overwrite stock settings or Felucca projects, samples, and presets in that range.
 Keep a full flash backup to recover those data when switching firmware. Subsequent
 installs write only changed sectors. M-Flasher labels the range through the end of
-`assets.bin` as **FIRMWARE** on its map. The gap between the two files is physically
-erased and available for larger applications. The raw emulator `.bin` spans that
-gap so both files appear at the same addresses as on the FM-1. [M-Flasher firmware installation][flasher-install]
+`assets.bin` as **FIRMWARE** on its map. When code growth moves the asset file
+to a new sector, the installer may rewrite its contents. The raw emulator
+`.bin` preserves both files' linked addresses. [M-Flasher firmware installation][flasher-install]
 and [FM-1 flash layouts][flash-layout].
 
 ## License

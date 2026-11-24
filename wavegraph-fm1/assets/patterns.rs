@@ -20,7 +20,7 @@ const BAR: u64 = TICKS_PER_BEAT * 4;
 pub(super) fn compile_banks(out: &Path) {
     println!("cargo:rerun-if-changed=assets/patterns.rs");
     let mut code = String::from(
-        "#[cfg_attr(target_os = \"none\", unsafe(link_section = \".wavegraph_assets\"))]\n\
+        "#[cfg_attr(target_os = \"none\", unsafe(link_section = \".fm1_assets\"))]\n\
          static BANKS: [[Clip; SLOTS]; 8] = [\n",
     );
     for bank in BANKS {
