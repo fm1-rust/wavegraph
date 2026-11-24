@@ -234,10 +234,11 @@ impl Navigation {
             && matches!(self.view, View::Scope | View::Envelope)
             && self.part() == Part::Bass
         {
-            // Enter at Tuning clockwise or Drive counterclockwise, counting every detent.
+            // Enter at Attack clockwise or Drive counterclockwise, counting every detent.
+            const ATTACK_SLOT: i16 = 6; // Index in Knob::PANEL.
             let start = self
                 .bass_slot
-                .map_or(if select > 0 { -1 } else { 0 }, i16::from);
+                .map_or(if select > 0 { ATTACK_SLOT - 1 } else { 0 }, i16::from);
             let count = i16::try_from(Knob::PANEL.len()).expect("eight knobs");
             let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
             self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
@@ -347,7 +348,7 @@ mod tests {
         nav.turn(0, 1);
         assert_eq!((nav.part(), nav.bass_knob()), (Part::Bass, None));
         nav.turn(3, 0);
-        assert_eq!(nav.bass_knob(), Some(Knob::Resonance));
+        assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
         nav.press(PageButton::Env);
         assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
         nav.turn(-3, 0);

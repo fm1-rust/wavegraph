@@ -72,8 +72,8 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
 [Roland TB-03][tb03]. The four numbered encoders map to the boxed, blue-gray
-knobs in the middle. Turn SELECT clockwise to visit all six dials from left to
-right, then Attack and Drive beside the display. One click counterclockwise
+knobs in the middle. Turn SELECT clockwise to select Attack, then Drive, then the
+six dials from Tuning to Accent. One click counterclockwise
 from idle goes straight to Drive.
 
 The selected cap turns neon green with a black pointer and HOME lights up.
