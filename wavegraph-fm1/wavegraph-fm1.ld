@@ -1,14 +1,5 @@
 /* Keep the BSP memory map and startup symbols. Graph initialization runs on
    the user stack. Nested panel, display and audio work uses the supervisor stack. */
-/* The panel ISR, 303 renderer and CPU1 worker run in SRAM. Their direct calls
-   reach only the lower part of XIP as firmware grows. */
-SECTIONS {
-  .wavegraph_near : { *(.text .text.memcpy .text.memmove .text.wavegraph_boot .text.wavegraph_stack .text.*decay_exp* .text.*rticx_pi32v2*Restore*Drop4drop
-      .text.*fm1*panel*select .text.*TouchControls*start_column
-      .text.*option*expect_failed .text.*panicking*panic_bounds_check
-      .text.*panicking*panic_fmt .text.*cell*panic_already_borrowed
-      .text.*result*unwrap_failed) }
-} INSERT BEFORE .text;
 INCLUDE fm1-assets.ld
 SECTIONS {
   /* The BSP already reserves its ROM exchange and 1 KiB bootstrap and
