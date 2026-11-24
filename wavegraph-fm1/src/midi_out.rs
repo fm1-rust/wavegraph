@@ -40,6 +40,10 @@ pub struct OutputQueue {
 }
 
 impl OutputQueue {
+    pub(super) fn active(&self) -> bool {
+        self.active
+    }
+
     pub(super) fn connect(&mut self, active: bool) {
         self.active = active;
         self.queue.clear();
@@ -152,9 +156,11 @@ mod tests {
         batch.push(Channel::Two, at(0, MidiMessage::Control(74, 89)));
         batch.push(Channel::Two, at(0, MidiMessage::Off(45)));
         let mut packets = [[0; 4]; 16];
+        assert!(!out.active());
         out.append(&batch);
         assert_eq!(out.peek(&mut packets).1, 0);
         out.connect(true);
+        assert!(out.active());
         out.append(&batch);
         let (revision, n) = out.peek(&mut packets);
         assert_eq!(
@@ -165,6 +171,7 @@ mod tests {
         assert_eq!(out.peek(&mut packets).1, 2);
         assert_eq!(packets[0], [11, 0xb1, 74, 89]);
         out.connect(false);
+        assert!(!out.active());
         out.connect(true);
         batch.clear();
         batch.push(Channel::Four, at(0, MidiMessage::Off(51)));

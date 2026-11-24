@@ -33,7 +33,7 @@ jobs:
       - run: cargo test -p wavegraph-fm1 --locked
 
   firmware:
-    uses: fm1-rust/fm1-rust/.github/workflows/pi32v2-build.yml@d57cac3a09f51274d2fddb4ccead99222e6f2850 # fm1-rticx/v0.2.0-rc.0
+    uses: fm1-rust/fm1-rust/.github/workflows/pi32v2-build.yml@f360cf357a71b9a3f59ed0f68c8e33a3ac3aa0d7 # fm1-rticx/v0.2.0-rc.1
     with:
       script: wavegraph-fm1/build.sh
       artifact-name: wavegraph-fm1
