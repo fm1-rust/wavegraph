@@ -468,6 +468,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c938015719552d665fd0553b90d96cd7ff58e83e4c061ca99e6bb78865a72752"
 
 [[package]]
+name = "pkg-config"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -658,6 +664,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
+name = "sdl3"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68fa206a2da1250b294edc95defee46fa6e61a04aaff0ca69c0352e23c351166"
+dependencies = [
+ "bitflags",
+ "libc",
+ "sdl3-sys",
+]
+
+[[package]]
+name = "sdl3-sys"
+version = "0.7.3+SDL-3.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e68da4d2bcf29a81a1ea71ec27b93bb27151d649c2b186eb5988ad4dcb17d11"
+dependencies = [
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -814,6 +841,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
 name = "wavegraph"
 version = "0.1.0"
 dependencies = [
@@ -867,6 +900,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavegraph-audio"
+version = "0.1.0"
+dependencies = [
+ "fm1-audio",
+ "sdl3",
+ "wavegraph",
+ "wavegraph-monosynth",
+ "wavegraph-sample",
+]
+
+[[package]]
 name = "wavegraph-core"
 version = "0.1.0"
 
@@ -891,6 +935,7 @@ dependencies = [
  "wavegraph-909",
  "wavegraph-adsr",
  "wavegraph-arp",
+ "wavegraph-audio",
  "wavegraph-fx",
  "wavegraph-monosynth",
  "wavegraph-organ",

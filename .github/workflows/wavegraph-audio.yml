@@ -1,0 +1,33 @@
+name: wavegraph-audio
+
+on:
+  pull_request:
+    paths: &audio-paths
+      - 'wavegraph-audio/**'
+      - 'wavegraph/**'
+      - 'instruments/wavegraph-monosynth/**'
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/wavegraph-audio.yml
+  push:
+    branches: [main]
+    paths: *audio-paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: brew install sdl3 pkgconf
+      - run: cargo clippy --locked -p wavegraph-audio --features coreaudio --all-targets -- -Dwarnings
+      - run: cargo build --locked -p wavegraph-audio --features coreaudio --example play
+      - run: cargo test --locked -p wavegraph-audio --features coreaudio -- --include-ignored
+        env:
+          SDL_AUDIO_DRIVER: dummy

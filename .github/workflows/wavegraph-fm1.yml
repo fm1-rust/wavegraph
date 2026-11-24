@@ -4,6 +4,7 @@ on:
   pull_request:
     paths: &firmware-paths
       - 'wavegraph-fm1/**'
+      - 'wavegraph-audio/**'
       - 'wavegraph/**'
       - 'instruments/wavegraph-*/**'
       - 'wavegraph-adsr/**'
