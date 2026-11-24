@@ -22,6 +22,10 @@ impl FilterParams {
         filter
     }
 
+    pub(super) fn base_warp(&self) -> f32 {
+        self.warp[0]
+    }
+
     pub(super) fn set_cutoff(&mut self, hz: u16, period: f32) {
         let mut cycles = f32::from(hz.max(1)) * period;
         for g in &mut self.warp {
@@ -34,21 +38,6 @@ impl FilterParams {
         // Q rises from Butterworth to 5 at the top of the dial.
         self.damping = SQRT_2 + (0.2 - SQRT_2) * (f32::from(resonance.min(127)) / 127.0);
     }
-}
-
-#[derive(Clone, Debug, Default)]
-pub(super) struct LowPass {
-    g: f32,
-    band: f32,
-    low: f32,
-}
-
-impl LowPass {
-    pub(super) fn reset(&mut self, params: &FilterParams) {
-        self.band = 0.0;
-        self.low = 0.0;
-        self.g = params.warp[0];
-    }
 
     #[allow(
         clippy::arithmetic_side_effects,
@@ -56,18 +45,38 @@ impl LowPass {
         clippy::cast_sign_loss,
         reason = "The envelope is in 0..=1 and selects one of eight intervals."
     )]
-    pub(super) fn process(&mut self, input: f32, envelope: f32, params: &FilterParams) -> f32 {
+    pub(super) fn coefficients(&self, g: &mut f32, envelope: f32) -> Coefficients {
         let position = envelope * 8.0;
         let i = (position as u8).min(7);
         let fraction = position - f32::from(i);
         let i = usize::from(i);
-        let (lo, hi) = (params.warp[i], params.warp[i + 1]);
+        let (lo, hi) = (self.warp[i], self.warp[i + 1]);
         // Smooth panel steps over about half a millisecond.
-        self.g += params.slew * (lo + fraction * (hi - lo) - self.g);
+        *g += self.slew * (lo + fraction * (hi - lo) - *g);
+        Coefficients {
+            g: *g,
+            denominator: 1.0 + *g * (*g + self.damping),
+        }
+    }
+}
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct Coefficients {
+    g: f32,
+    denominator: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct LowPass {
+    band: f32,
+    low: f32,
+}
+
+impl LowPass {
+    pub(super) fn process(&mut self, input: f32, coeff: Coefficients) -> f32 {
         // Solve the feedback loop of two trapezoidal integrators for this sample.
-        let g = self.g;
-        let band = (self.band + g * (input - self.low)) / (1.0 + g * (g + params.damping));
+        let g = coeff.g;
+        let band = (self.band + g * (input - self.low)) / coeff.denominator;
         let low = self.low + g * band;
         self.band = 2.0 * band - self.band;
         self.low = 2.0 * low - self.low;

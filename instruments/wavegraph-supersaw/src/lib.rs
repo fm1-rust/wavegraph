@@ -1,16 +1,20 @@
 #![no_std]
-#![forbid(unsafe_code)]
+#![cfg_attr(pi32v2_simd, feature(asm_experimental_arch))]
+#![cfg_attr(not(pi32v2_simd), forbid(unsafe_code))]
+#![deny(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
 mod decimator;
 mod filter;
+#[cfg(pi32v2_simd)]
+mod pi32v2;
 
 pub use wavegraph_adsr::Adsr;
 pub use wavegraph_core::Tuning;
 
 use core::f32::consts::PI;
-use decimator::Decimator;
-use filter::{FilterParams, LowPass};
+use decimator::{Decimator, Scratch};
+use filter::{Coefficients, FilterParams, LowPass};
 use micromath::F32;
 use wavegraph_adsr::{Envelope, Timing};
 pub use wavegraph_core::polyphony::VoiceMode;
@@ -67,6 +71,8 @@ pub enum Message {
     FilterEnvelope(Adsr),
 }
 
+const BLOCK_FRAMES: usize = 32;
+
 // Side offsets from the oscillator DSP, in units of 1/128 of the detune base.
 const SPREAD: [i32; 6] = [128, -128, 408, -412, 704, -720];
 
@@ -89,8 +95,8 @@ fn detune_amount(value: u8) -> i32 {
     }
 }
 
-fn side_gain(mix: u8) -> i32 {
-    i32::from(mix.min(127).saturating_add(6) / 4)
+fn side_gain(mix: u8) -> u16 {
+    u16::from(mix.min(127).saturating_add(6) / 4)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,6 +105,7 @@ struct Saw {
     step: u32,
 }
 
+#[cfg(not(pi32v2_simd))]
 impl Saw {
     #[allow(
         clippy::cast_possible_wrap,
@@ -107,6 +114,19 @@ impl Saw {
     fn tick(&mut self) -> i32 {
         self.phase = self.phase.wrapping_add(self.step);
         (self.phase as i32) >> 8
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_precision_loss,
+        reason = "Seven signed 24-bit ramps weighted by at most 25 + 6*33 fit in i32. Only the mixed signal is rounded to f32."
+    )]
+    fn mix(saws: &mut [Self; 7], side_gain: i32) -> f32 {
+        let [center, sides @ ..] = saws;
+        let sides: i32 = sides.iter_mut().map(Saw::tick).sum();
+        let mixed = center.tick() * 25 + sides * side_gain;
+        // Fixed headroom keeps the center gain independent of MIX.
+        mixed as f32 * (1.0 / 4_294_967_296.0)
     }
 }
 
@@ -124,7 +144,7 @@ pub struct Supersaw<'a> {
 #[derive(Clone, Debug)]
 struct Params {
     detune: i32,
-    side_gain: i32,
+    side_gain: u16,
     filter: FilterParams,
     filter_timing: Timing,
     amp_timing: Timing,
@@ -139,10 +159,70 @@ struct Voice {
     hp_state: f32,
     decimator: Decimator,
     filter: LowPass,
+    modulation: Modulation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Modulation {
+    g: f32,
     filter_env: Envelope,
     amp_env: Envelope,
     velocity: f32,
     target_velocity: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ControlFrame {
+    filter: Coefficients,
+    gain: f32,
+}
+
+#[derive(Default)]
+struct ControlBlock {
+    frames: [ControlFrame; BLOCK_FRAMES],
+    states: Option<(Modulation, Modulation)>,
+}
+
+struct RenderScratch {
+    fir: Scratch,
+    controls: ControlBlock,
+    #[cfg(pi32v2_simd)]
+    ramps: [[i32; 2]; BLOCK_FRAMES],
+}
+
+impl RenderScratch {
+    fn new() -> Self {
+        Self {
+            fir: Scratch::new(),
+            controls: ControlBlock::default(),
+            #[cfg(pi32v2_simd)]
+            ramps: [[0; 2]; BLOCK_FRAMES],
+        }
+    }
+}
+
+impl ControlBlock {
+    fn for_voice(&mut self, voice: &mut Modulation, len: usize, p: &Params) -> &[ControlFrame] {
+        let frames = &mut self.frames[..len];
+        // Notes struck together can have identical modulation for the whole block.
+        // Compare both envelopes, the smoothed cutoff and velocity, including its target.
+        if let Some((start, end)) = self.states
+            && start == *voice
+        {
+            *voice = end;
+        } else {
+            let start = *voice;
+            for frame in &mut *frames {
+                let cutoff = voice.filter_env.advance(&p.filter_timing);
+                frame.filter = p.filter.coefficients(&mut voice.g, cutoff);
+                voice.velocity += (voice.target_velocity - voice.velocity)
+                    .clamp(-p.velocity_slew, p.velocity_slew);
+                frame.gain = voice.velocity * voice.amp_env.advance(&p.amp_timing);
+            }
+            self.states = Some((start, *voice));
+        }
+        frames
+    }
 }
 
 impl Voice {
@@ -164,10 +244,13 @@ impl Voice {
             hp_state: 0.0,
             decimator: Decimator::new(),
             filter: LowPass::default(),
-            filter_env: Envelope::IDLE,
-            amp_env: Envelope::IDLE,
-            velocity: 0.0,
-            target_velocity: 0.0,
+            modulation: Modulation {
+                g: 0.0,
+                filter_env: Envelope::IDLE,
+                amp_env: Envelope::IDLE,
+                velocity: 0.0,
+                target_velocity: 0.0,
+            },
         };
         voice.set_pitch(step, detune);
         voice
@@ -202,71 +285,82 @@ impl Voice {
     }
 
     fn release(&mut self, p: &Params) {
-        self.amp_env.gate_off(&p.amp_timing);
-        self.filter_env.gate_off(&p.filter_timing);
+        self.modulation.amp_env.gate_off(&p.amp_timing);
+        self.modulation.filter_env.gate_off(&p.filter_timing);
     }
 
     fn strike(&mut self, note: Note, step: u32, p: &Params) {
         self.note = note.number;
         self.set_pitch(step, p.detune);
-        self.target_velocity = f32::from(note.velocity.min(127)) / 127.0;
-        if self.amp_env.is_idle() {
+        self.modulation.target_velocity = f32::from(note.velocity.min(127)) / 127.0;
+        if self.modulation.amp_env.is_idle() {
             self.hp_state = 0.0;
             self.decimator = Decimator::new();
-            self.filter.reset(&p.filter);
-            self.velocity = self.target_velocity;
+            self.filter = LowPass::default();
+            self.modulation.g = p.filter.base_warp();
+            self.modulation.velocity = self.modulation.target_velocity;
         } else {
             self.release(p);
         }
-        self.amp_env.gate_on(&p.amp_timing);
-        self.filter_env.gate_on(&p.filter_timing);
-    }
-
-    #[allow(
-        clippy::arithmetic_side_effects,
-        clippy::cast_precision_loss,
-        reason = "Seven signed 24-bit ramps weighted by at most 25 + 6*33 fit in i32. Only the mixed signal is rounded to f32."
-    )]
-    fn tick(&mut self, side_gain: i32) -> f32 {
-        let [center, sides @ ..] = &mut self.saws;
-        let sides: i32 = sides.iter_mut().map(Saw::tick).sum();
-        let mixed = center.tick() * 25 + sides * side_gain;
-        // Fixed headroom keeps the center gain independent of MIX.
-        let input = mixed as f32 * (1.0 / 4_294_967_296.0);
-        let delta = input - self.hp_state;
-        let low = delta * self.hp_coeff;
-        self.hp_state += low + low;
-        delta - low
+        self.modulation.amp_env.gate_on(&p.amp_timing);
+        self.modulation.filter_env.gate_on(&p.filter_timing);
     }
 
     #[allow(
         clippy::cast_possible_truncation,
         reason = "Phase accumulation wraps modulo 2^32, including when skipping silent frames."
     )]
-    fn render_add(&mut self, output: &mut [f32], p: &Params) {
-        if self.amp_env.is_idle() {
+    fn render_add(&mut self, output: &mut [f32], p: &Params, scratch: &mut RenderScratch) {
+        if self.modulation.amp_env.is_idle() {
             let ticks = (output.len() as u32).wrapping_mul(2);
             for saw in &mut self.saws {
                 saw.phase = saw.phase.wrapping_add(saw.step.wrapping_mul(ticks));
             }
             // A short VCA release can leave the VCF releasing into the next strike.
             for _ in 0..output.len() {
-                if self.filter_env.is_idle() {
+                if self.modulation.filter_env.is_idle() {
                     break;
                 }
-                self.filter_env.advance(&p.filter_timing);
+                self.modulation.filter_env.advance(&p.filter_timing);
             }
             return;
         }
-        for out in output {
-            let pair = [self.tick(p.side_gain), self.tick(p.side_gain)];
-            let sample = self.decimator.process(pair);
-            let cutoff = self.filter_env.advance(&p.filter_timing);
-            let filtered = self.filter.process(sample, cutoff, &p.filter);
-            self.velocity +=
-                (self.target_velocity - self.velocity).clamp(-p.velocity_slew, p.velocity_slew);
-            let gain = self.velocity * self.amp_env.advance(&p.amp_timing);
-            *out += filtered * gain;
+        let mut high_pass = |input| {
+            let delta = input - self.hp_state;
+            let low = delta * self.hp_coeff;
+            self.hp_state += low + low;
+            delta - low
+        };
+        #[cfg(not(pi32v2_simd))]
+        let samples = {
+            let mut tick = || high_pass(Saw::mix(&mut self.saws, i32::from(p.side_gain)));
+            self.decimator
+                .process(&mut scratch.fir, output.len(), || [tick(), tick()])
+        };
+        #[cfg(pi32v2_simd)]
+        let samples = {
+            let ramps = &mut scratch.ramps[..output.len()];
+            pi32v2::mix(&mut self.saws, p.side_gain, ramps);
+            let mut pairs = ramps.iter();
+            self.decimator.process(&mut scratch.fir, output.len(), || {
+                pairs
+                    .next()
+                    .expect("one pair per output frame")
+                    .map(|mixed| {
+                        #[allow(
+                            clippy::cast_precision_loss,
+                            reason = "Only the final 24-bit ramp mix is rounded."
+                        )]
+                        let input = mixed as f32 * (1.0 / 4_294_967_296.0);
+                        high_pass(input)
+                    })
+            })
+        };
+        let controls = scratch
+            .controls
+            .for_voice(&mut self.modulation, output.len(), p);
+        for ((out, &sample), frame) in output.iter_mut().zip(samples).zip(controls) {
+            *out += self.filter.process(sample, frame.filter) * frame.gain;
         }
     }
 }
@@ -324,14 +418,14 @@ impl<'a> Supersaw<'a> {
             Message::AmpEnvelope(adsr) => {
                 let next = adsr.at_sample_period(period);
                 for v in &mut self.voices {
-                    v.amp_env.retime(&p.amp_timing, &next);
+                    v.modulation.amp_env.retime(&p.amp_timing, &next);
                 }
                 p.amp_timing = next;
             }
             Message::FilterEnvelope(adsr) => {
                 let next = adsr.at_sample_period(period);
                 for v in &mut self.voices {
-                    v.filter_env.retime(&p.filter_timing, &next);
+                    v.modulation.filter_env.retime(&p.filter_timing, &next);
                 }
                 p.filter_timing = next;
             }
@@ -370,16 +464,18 @@ impl<'a> Supersaw<'a> {
                 let rank = self
                     .order
                     .iter()
-                    .position(|&i| self.voices[i].amp_env.is_gated() && self.voices[i].note == note)
-                    .or_else(|| {
-                        self.order
-                            .iter()
-                            .position(|&i| self.voices[i].amp_env.is_idle())
+                    .position(|&i| {
+                        self.voices[i].modulation.amp_env.is_gated() && self.voices[i].note == note
                     })
                     .or_else(|| {
                         self.order
                             .iter()
-                            .rposition(|&i| !self.voices[i].amp_env.is_gated())
+                            .position(|&i| self.voices[i].modulation.amp_env.is_idle())
+                    })
+                    .or_else(|| {
+                        self.order
+                            .iter()
+                            .rposition(|&i| !self.voices[i].modulation.amp_env.is_gated())
                     })
                     .unwrap_or(3);
                 self.order[..=rank].rotate_right(1);
@@ -389,11 +485,17 @@ impl<'a> Supersaw<'a> {
     }
 
     fn render<S: FromSample<f32>>(&mut self, output: &mut [S]) {
-        for chunk in output.chunks_mut(32) {
-            let mut mix = [0.0; 32];
+        // Skip the workspace when consecutive messages share a frame.
+        if output.is_empty() {
+            return;
+        }
+        let mut scratch = RenderScratch::new();
+        for chunk in output.chunks_mut(BLOCK_FRAMES) {
+            let mut mix = [0.0; BLOCK_FRAMES];
             let mix = &mut mix[..chunk.len()];
+            scratch.controls.states = None;
             for voice in &mut self.voices {
-                voice.render_add(mix, &self.params);
+                voice.render_add(mix, &self.params, &mut scratch);
             }
             for (out, value) in chunk.iter_mut().zip(mix) {
                 *out = S::from_sample_(value.clamp(-1.0, 1.0 - f32::EPSILON));

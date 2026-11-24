@@ -9,6 +9,9 @@ keywords = ["audio", "dsp", "no-alloc", "puredata"]
 edition = "2024"
 rust-version.workspace = true
 
+[features]
+pi32v2-simd = []
+
 [dependencies]
 micromath = { version = "2.2", default-features = false }
 wavegraph-adsr.workspace = true
