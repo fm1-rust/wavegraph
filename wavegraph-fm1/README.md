@@ -596,6 +596,14 @@ failure. Only accepted blocks can send new attacks. The next render advances
 clip and arpeggiator clocks across skipped frames and chases clip automation.
 Drums and effect tails resume from their existing DSP state.
 
+When CPU0 services multiple DMA half releases in one interrupt, it advances
+the output frame by the known number of skipped halves before selecting PCM.
+If the BSP reports an ambiguous interval, CPU0 silences that refill, retires
+the old job and resumes from the next logical half. The elapsed musical time
+across an ambiguous interval is unknown. Neither case acknowledges an edit
+on discarded PCM. A recorded DMA gap does not reveal what the DAC played
+during the missed releases.
+
 Factory-pattern and arpeggiator events retain their offsets within each block.
 Live panel and USB MIDI input still update CPU0's key-state snapshot. Pressing
 and releasing a note within a single snapshot interval can coalesce both edges.
