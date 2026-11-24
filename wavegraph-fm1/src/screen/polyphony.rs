@@ -1,6 +1,6 @@
 //! Voice mode selector for the four-voice instruments.
 
-use super::{BAND, ORGAN_LIME, ORGAN_STYLE, WIDTH, microwave, mixer::Band};
+use super::{BAND, ORGAN_LIME, ORGAN_STYLE, WIDTH, jp8080, microwave, mixer::Band};
 use crate::{firmware::Labels, instrument::Part};
 use fm1_graphics::{
     embedded_graphics::{
@@ -22,10 +22,10 @@ pub(super) async fn paint(
     labels: &Labels,
     entering: bool,
 ) -> Result<(), Error> {
-    let (face, ink, accent) = if labels.focus == Part::Organ {
-        (ORGAN_STYLE.background, palette::WHITE, ORGAN_LIME)
-    } else {
-        (microwave::FACE, microwave::PRINT, microwave::LIME)
+    let (face, ink, accent) = match labels.focus {
+        Part::Organ => (ORGAN_STYLE.background, palette::WHITE, ORGAN_LIME),
+        Part::Supersaw => (jp8080::FACE, jp8080::PRINT, jp8080::AMBER),
+        _ => (microwave::FACE, microwave::PRINT, microwave::LIME),
     };
     let (selected, value) = match labels.mode {
         VoiceMode::Poly => (0, "One voice per key"),
@@ -77,7 +77,7 @@ pub(super) async fn paint(
             112..168 => {
                 if selected == 1 {
                     band.label(
-                        "KNOB 1   CHORD TYPE",
+                        "ALGORITHM / KNOB 1   CHORD TYPE",
                         Point::new(12, 117),
                         Alignment::Left,
                         ink,
@@ -86,7 +86,12 @@ pub(super) async fn paint(
                 band.title(value, Point::new(12, 143), accent);
             }
             192.. => {
-                band.label("SEL   Next mode", Point::new(12, 197), Alignment::Left, ink);
+                band.label(
+                    "SELECT   Mode      SEL   Next",
+                    Point::new(12, 197),
+                    Alignment::Left,
+                    ink,
+                );
                 band.label("EDIT  Back", Point::new(12, 216), Alignment::Left, ink);
             }
             _ => (),

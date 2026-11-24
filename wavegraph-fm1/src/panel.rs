@@ -119,18 +119,32 @@ impl Polyphony {
         chord: Chord::MAJOR,
     };
 
-    pub(super) fn edit(&mut self, sel: bool, detents: i8) {
-        if sel {
-            self.mode = match self.mode {
-                VoiceMode::Poly => VoiceMode::Chord(self.chord),
-                VoiceMode::Chord(_) => VoiceMode::Unison,
-                VoiceMode::Unison => VoiceMode::Poly,
-            };
+    pub(super) fn label(mode: VoiceMode) -> &'static str {
+        match mode {
+            VoiceMode::Poly => "POLY",
+            VoiceMode::Unison => "UNISON",
+            VoiceMode::Chord(chord) => chord.name(),
         }
-        if matches!(self.mode, VoiceMode::Chord(_)) && detents != 0 {
-            self.chord = self.chord.turn(detents);
-            self.mode = VoiceMode::Chord(self.chord);
-        }
+    }
+
+    pub(super) fn edit(&mut self, select: i8, algorithm: i8, sel: bool, knob1: i8) {
+        let index: i16 = match self.mode {
+            VoiceMode::Poly => 0,
+            VoiceMode::Chord(_) => 1,
+            VoiceMode::Unison => 2,
+        };
+        let next = index
+            .saturating_add(i16::from(select))
+            .saturating_add(i16::from(sel))
+            .rem_euclid(3);
+        self.mode = match next {
+            0 => VoiceMode::Poly,
+            1 => {
+                self.chord = self.chord.turn(algorithm).turn(knob1);
+                VoiceMode::Chord(self.chord)
+            }
+            _ => VoiceMode::Unison,
+        };
     }
 }
 
@@ -197,6 +211,8 @@ impl Navigation {
         ..Self::INITIAL
     };
 
+    // Page transitions run only on button edges. Keep them out of the SRAM panel ISR.
+    #[cfg_attr(target_os = "none", inline(never))]
     pub(super) fn press(&mut self, button: PageButton) {
         if matches!(button, PageButton::Home) && self.bass_slot.take().is_some() {
             return;
@@ -239,10 +255,7 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
-            PageButton::Edit
-                if self.view == View::Scope
-                    && matches!(self.part(), Part::Organ | Part::Wavetable) =>
-            {
+            PageButton::Edit if self.view == View::Scope && self.part().is_polyphonic() => {
                 View::VoiceMode
             }
             PageButton::Edit if self.view != View::VoiceMode => self.view,
@@ -277,6 +290,7 @@ impl Navigation {
         self.bass_slot.map(|i| Knob::PANEL[usize::from(i)])
     }
 
+    #[cfg_attr(target_os = "none", inline(never))]
     pub(super) fn turn(&mut self, select: i8, presets: i8) {
         if select != 0
             && matches!(self.view, View::Scope | View::Envelope)
@@ -332,8 +346,7 @@ impl Navigation {
                 self.bass_slot = None;
             }
             if self.view == View::Envelope
-                || (self.view == View::VoiceMode
-                    && !matches!(self.part(), Part::Organ | Part::Wavetable))
+                || (self.view == View::VoiceMode && !self.part().is_polyphonic())
                 || (self.view == View::Lfo && self.part() != Part::Bass)
             {
                 self.view = View::Scope;

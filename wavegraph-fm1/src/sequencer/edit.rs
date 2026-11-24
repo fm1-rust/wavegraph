@@ -138,7 +138,7 @@ impl Cell {
                 return false;
             };
             voice as usize
-        } else if matches!(part, Part::Organ | Part::Wavetable) {
+        } else if part.is_polyphonic() {
             let i = (0..4).find(|&i| {
                 old.mask & (1 << i) == 0 || old.notes[i].to_le_bytes()[0] == note.number
             });

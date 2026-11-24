@@ -15,14 +15,17 @@ const TAPS: [f32; 8] = [
 
 #[derive(Clone, Debug)]
 pub(super) struct Decimator {
-    history: [[f32; 2]; 16],
+    // Only the center tap reads the first sample of a pair, seven pairs later.
+    first: [f32; 8],
+    second: [f32; 16],
     next: usize,
 }
 
 impl Decimator {
     pub(super) const fn new() -> Self {
         Self {
-            history: [[0.0; 2]; 16],
+            first: [0.0; 8],
+            second: [0.0; 16],
             next: 0,
         }
     }
@@ -33,15 +36,15 @@ impl Decimator {
     )]
     pub(super) fn process(&mut self, pair: [f32; 2]) -> f32 {
         let i = self.next;
-        self.history[i] = pair;
+        self.first[i & 7] = pair[0];
+        self.second[i] = pair[1];
         self.next = (i + 1) & 15;
         // Evaluate the FIR at the second sample of the pair. The center tap
         // reads the first sample from seven pairs ago. Fold the eight symmetric
         // pairs of remaining taps, which all read second samples.
-        let mut out = 0.5 * self.history[(i + 9) & 15][0];
+        let mut out = 0.5 * self.first[(i + 1) & 7];
         for (j, weight) in TAPS.into_iter().enumerate() {
-            out +=
-                weight * (self.history[(i + 16 - j) & 15][1] + self.history[(i + 1 + j) & 15][1]);
+            out += weight * (self.second[(i + 16 - j) & 15] + self.second[(i + 1 + j) & 15]);
         }
         out
     }

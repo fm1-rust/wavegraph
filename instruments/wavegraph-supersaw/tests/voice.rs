@@ -98,7 +98,8 @@ fn invalid_notes_and_controls_are_bounded_at_the_public_inlet() {
     );
     assert_eq!(a, b);
     render(&mut voice, &mut a, &[at(0, on(127, 100))]); // above output Nyquist
-    assert_eq!(a, [0.0; 512]);
+    render(&mut expected, &mut b, &[]);
+    assert_eq!(a, b); // An unplayable pitch leaves the other keys sounding.
 }
 
 #[test]
@@ -248,4 +249,75 @@ fn full_detune_has_seven_pitches_and_mix_only_raises_the_sides() {
         assert!(peak > center, "missing side saw at {hz} Hz");
         assert!((31.0..35.0).contains(&(peak / magnitude(&quiet, hz))));
     }
+}
+
+#[test]
+fn seventh_chord_matches_four_independent_stacks_and_releases_by_root() {
+    use wavegraph_core::polyphony::{Chord, VoiceMode};
+    let tuning = Tuning::new(44_118, 1).expect("clock");
+    let mut chord = Supersaw::new(&tuning);
+    let mut poly = chord.clone();
+    let mut manual = [0.0_f32; 256];
+    let mut actual = manual;
+    let pitches = [60, 64, 67, 71];
+    render(
+        &mut chord,
+        &mut actual,
+        &[
+            at(
+                0,
+                Message::VoiceMode(VoiceMode::Chord(Chord::MAJOR.turn(2))),
+            ),
+            at(0, on(60, 95)),
+        ],
+    );
+    render(&mut poly, &mut manual, &pitches.map(|n| at(0, on(n, 95))));
+    assert_eq!(actual, manual);
+    let mut sum = [0.0_f32; 256];
+    for n in pitches {
+        let mut voice = Supersaw::new(&tuning);
+        render(&mut voice, &mut manual, &[at(0, on(n, 95))]);
+        for (s, v) in sum.iter_mut().zip(manual) {
+            *s += v;
+        }
+    }
+    assert_eq!(actual, sum);
+    render(&mut chord, &mut actual, &[at(0, on(60, 0))]);
+    assert!(actual[100..].iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn unison_returns_to_held_root_and_stale_off_cannot_release_stolen_voice() {
+    use wavegraph_supersaw::VoiceMode;
+    let tuning = Tuning::new(44_118, 1).expect("clock");
+    let mut synth = Supersaw::new(&tuning);
+    let mut out = [0.0_f32; 256];
+    render(
+        &mut synth,
+        &mut out,
+        &[
+            at(0, Message::VoiceMode(VoiceMode::Unison)),
+            at(0, on(60, 110)),
+            at(32, on(67, 90)),
+            at(64, Message::NoteOff(67)),
+        ],
+    );
+    assert!(out[190..].iter().any(|s| s.abs() > 0.001));
+    render(&mut synth, &mut out, &[at(0, Message::NoteOff(60))]);
+    assert!(out[100..].iter().all(|&s| s == 0.0));
+    render(
+        &mut synth,
+        &mut out,
+        &[at(0, Message::VoiceMode(VoiceMode::Poly))],
+    );
+    render(
+        &mut synth,
+        &mut out,
+        &[60, 62, 64, 65, 67].map(|n| at(0, on(n, 100))),
+    );
+    let mut reference = synth.clone();
+    let mut expected = [0.0_f32; 256];
+    render(&mut synth, &mut out, &[at(0, Message::NoteOff(60))]);
+    render(&mut reference, &mut expected, &[]);
+    assert_eq!(out, expected);
 }

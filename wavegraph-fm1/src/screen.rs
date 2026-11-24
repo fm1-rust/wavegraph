@@ -113,7 +113,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Timing,
-    Scope(Channel, Part),
+    Scope(Channel, Part, wavegraph_organ::VoiceMode),
     Arp(Channel, Part),
     VoiceMode(Channel, Part, wavegraph_organ::VoiceMode),
     Lfo(Channel, crate::lfo::Controls),
@@ -661,10 +661,10 @@ impl Screen {
             }
             let entering = !matches!(self.page, Some(Page::VoiceMode(channel, part, _)) if (channel, part) == (labels.channel, labels.focus));
             if entering {
-                self.change_view(if labels.focus == Part::Organ {
-                    ORGAN_STYLE
-                } else {
-                    microwave::STYLE
+                self.change_view(match labels.focus {
+                    Part::Organ => ORGAN_STYLE,
+                    Part::Supersaw => jp8080::STYLE,
+                    _ => microwave::STYLE,
                 });
             }
             let mut draw = pin!(polyphony::paint(lcd, clock, self.strip, &labels, entering));
@@ -848,7 +848,7 @@ impl Screen {
         };
         let style = self.selector.style(style);
         let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
-        let page = Page::Scope(labels.channel, labels.focus);
+        let page = Page::Scope(labels.channel, labels.focus, labels.mode);
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
             self.change_view(style);
@@ -1006,6 +1006,19 @@ impl Screen {
             self.selector
                 .badge
                 .header_text(self.text, 0, b"M1 ORGAN", ink);
+            if changed_page {
+                // The grid folds lowercase to uppercase. Preserve the exact chord symbol.
+                let mut band = mixer::Band::new(self.strip, 144, 224, 48, 16, style.background);
+                band.label(
+                    crate::panel::Polyphony::label(labels.mode),
+                    fm1_graphics::embedded_graphics::prelude::Point::new(168, 227),
+                    fm1_graphics::embedded_graphics::text::Alignment::Center,
+                    ink,
+                );
+                let mut lcd = lcd.as_async(clock)?;
+                lcd.write_rect_buffered(144, 224, 48, 16, band.pixels.as_flattened())
+                    .await?;
+            }
             let voices = labels
                 .poly_keys
                 .iter()
