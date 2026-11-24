@@ -995,6 +995,61 @@ mod tests {
     }
 
     #[test]
+    fn live_909_burst_fits_an_edited_step_with_alternate_drum_pitches() -> Result<(), Error> {
+        use crate::instrument::RoutedEvents;
+        use wavegraph::midi::Note;
+
+        let channel = Channel::Four;
+        let track = &mut Track::rack(Navigation::INITIAL.assignments)[channel.index()];
+        let edits = Edits::new();
+        let at = Address {
+            channel,
+            part: Part::Tr909,
+            slot: Slot::FIRST,
+            bar: 0,
+            step: 0,
+        };
+        let note = |number| Note {
+            number,
+            velocity: 100,
+        };
+        for pitch in [39, 46, 51] {
+            assert!(edits.write(at, note(pitch), false));
+        }
+        let step = edits.step(at);
+        let mut events = RoutedEvents::new();
+        for _ in 0..8 {
+            track.panel_hits.push(Voice::Kick, 82);
+        }
+        for _ in 0..32 {
+            track.midi_hits.push(Voice::Snare, 88);
+        }
+        track.panel_hits.append_since(0, &mut events)?;
+        track.midi_hits.append_since(0, &mut events)?;
+        let mut lane = Lane::EMPTY;
+        let mut route = Route {
+            frame: 0,
+            channel,
+            track,
+            graph: &mut |_, event| events.push(event).map_err(|_| Error::Capacity),
+            wire: &mut |_, _| {},
+        };
+        // Six simultaneous imported pitches use three 909 voices. The panel
+        // edits on the other three voices leave every imported strike audible.
+        for pitch in [35, 36, 38, 40, 42, 44] {
+            let msg = MidiMessage::On(note(pitch));
+            if lane.suppressed.factory(step, Part::Tr909, msg, 0) {
+                lane.dispatch(msg, true, &mut route)?;
+            }
+        }
+        for msg in step.events(0) {
+            lane.dispatch(msg, true, &mut route)?;
+        }
+        assert_eq!(events.len(), 49);
+        Ok(())
+    }
+
+    #[test]
     fn edited_notes_loop_with_velocity_and_releases_while_other_lanes_keep_playing() {
         use alloc::boxed::Box;
         use wavegraph::midi::Note;

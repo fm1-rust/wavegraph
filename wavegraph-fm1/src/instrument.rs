@@ -737,9 +737,10 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
 // Four organ note-offs, four note-ons, four panel values and a voicing event.
 const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
-// A drum channel can receive 32 USB strikes and 8 panel strikes along with
-// controls and a sequence step. The four routed queues live off the IRQ stack.
-const MAX_ROUTED_EVENTS: usize = 48;
+// The 909 accepts nine MIDI pitches across six voices. Clip strikes on alternate
+// pitches can coincide with overdubs on the other voices, a full live burst,
+// and frame-zero assignment or release events. Storage is off the IRQ stack.
+const MAX_ROUTED_EVENTS: usize = 32 + 8 + 9 + 2;
 pub(super) type RoutedEvents = Vec<Event<Message>, MAX_ROUTED_EVENTS>;
 
 // Only the assigned engine occupies mutable storage on each channel.
