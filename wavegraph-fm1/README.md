@@ -61,7 +61,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
 | PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
-| FX on an instrument | Open the channel’s two insert slots and live post-FX scope. On a TB-303, SELECT switches the knobs between the compressor and the sends. With the sends highlighted, knobs 2 and 3 set reverb and delay. |
+| FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
 | FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |

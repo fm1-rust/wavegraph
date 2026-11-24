@@ -1,6 +1,9 @@
 //! Three-band EQ, feed-forward compression and sample-peak limiting on the dry/wet sum.
 
-use crate::pcm;
+use crate::{
+    eq::{Bands, GainRamp, band_gain},
+    pcm,
+};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::I24;
 
@@ -54,12 +57,8 @@ fn gain(db: i8) -> f32 {
 /// zero-lookahead limiter acts on every sample, including the first transient.
 #[derive(Clone, Copy, Debug)]
 pub struct MasterBus {
-    poles: [f32; 2],
-    lowpass: [f32; 2],
-    gains: [f32; 4],
-    target_gains: [f32; 4],
-    gain_step: [f32; 4],
-    ramp: u8,
+    bands: Bands,
+    gains: GainRamp<4>,
     dynamics: bool,
     inv_threshold: f32,
     curve: [f32; 2],
@@ -91,15 +90,10 @@ impl MasterBus {
             return None;
         }
         let rate = rate_hz as f32;
-        let hz = |f: f32| -libm::expm1f(-core::f32::consts::TAU * f / rate);
         let ms = |t: f32| -libm::expm1f(-1000.0 / (t * rate));
         Some(Self {
-            poles: [hz(250.0), hz(3200.0)],
-            lowpass: [0.0; 2],
-            gains: [1.0; 4],
-            target_gains: [1.0; 4],
-            gain_step: [0.0; 4],
-            ramp: 0,
+            bands: Bands::new(rate),
+            gains: GainRamp::UNITY,
             dynamics: false,
             inv_threshold: 1.0 / FULL,
             curve: [1.0; 2],
@@ -119,10 +113,10 @@ impl MasterBus {
     /// Apply one insert edit. Filter and detector state survive parameter edits.
     #[cold]
     pub fn edit(&mut self, control: MasterControls) {
-        let mut gains = self.target_gains;
+        let mut gains = self.gains.target;
         match control {
             MasterControls::Eq(eq) => {
-                gains[..3].copy_from_slice(&eq.unwrap_or([0; 3]).map(|db| gain(db.clamp(-12, 12))));
+                gains[..3].copy_from_slice(&eq.unwrap_or([0; 3]).map(band_gain));
             }
             MasterControls::Dynamics(Some(d)) => {
                 self.dynamics = true;
@@ -143,13 +137,7 @@ impl MasterBus {
                 self.limit_gain = 1.0;
             }
         }
-        if gains != self.target_gains {
-            // Dezipper EQ and makeup moves over 64 samples, starting at the
-            // currently audible gain even when another edit interrupts a ramp.
-            self.target_gains = gains;
-            self.ramp = 64;
-            self.gain_step = core::array::from_fn(|i| (gains[i] - self.gains[i]) / 64.0);
-        }
+        self.gains.set(gains);
     }
 
     // Piecewise-linear approximation to over^(1/ratio - 1), with knots at
@@ -191,7 +179,7 @@ impl MasterBus {
             self.peak = 0.0;
         }
         self.comp_gain += self.comp_rate * (self.target - self.comp_gain);
-        let boosted = x * self.comp_gain * self.gains[3];
+        let boosted = x * self.comp_gain * self.gains.current[3];
         let out = if self.limit_gain == 1.0 {
             boosted
         } else {
@@ -222,22 +210,9 @@ impl MasterBus {
     )]
     pub fn process_sample(&mut self, sum: i32) -> I24 {
         let x = sum as f32;
-        if self.ramp != 0 {
-            self.ramp -= 1;
-            if self.ramp == 0 {
-                self.gains = self.target_gains;
-            } else {
-                for (gain, step) in self.gains.iter_mut().zip(self.gain_step) {
-                    *gain += step;
-                }
-            }
-        }
-        let [lo, mid, hi, _] = self.gains;
-        // Complementary bands: low + (upper low-pass − low) + (x − upper low-pass).
-        let [low, upper] = &mut self.lowpass;
-        *low += self.poles[0] * (x - *low);
-        *upper += self.poles[1] * (x - *upper);
-        let eq = x * hi + *upper * (mid - hi) + *low * (lo - mid);
+        self.gains.advance();
+        let [lo, mid, hi, _] = self.gains.current;
+        let eq = self.bands.tick(x, [lo, mid, hi]);
         let y = if self.dynamics { self.compress(eq) } else { eq };
         pcm(y as i32)
     }
