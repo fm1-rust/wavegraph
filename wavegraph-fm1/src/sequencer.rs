@@ -438,8 +438,8 @@ impl Lane {
 
     fn chase(&self, route: &mut Route<'_>) -> Result<(), Error> {
         for (cc, value) in self.automation.values() {
+            route.wire(MidiMessage::Control(cc, value));
             if let Some(message) = bass::midi_parameter(cc, value) {
-                route.wire(MidiMessage::Control(cc, value));
                 route.graph(Message::Bass(message))?;
             }
         }
@@ -1359,6 +1359,34 @@ mod tests {
                 .any(|(_, event)| event.message == Message::Bass(BassMessage::NoteOff(38)))
         );
         assert!(render(&mut player, 128, restart, [true; 4]).is_empty());
+    }
+
+    #[test]
+    fn bass_lane_chases_external_delay_controls_after_skipped_frames() -> Result<(), Error> {
+        let tracks = Track::rack(Navigation::INITIAL.assignments);
+        let mut lane = Lane::EMPTY;
+        let mut wire = Vec::new();
+        let mut route = Route {
+            frame: 0,
+            channel: Channel::One,
+            track: &tracks[Channel::One.index()],
+            graph: &mut |_, _| unreachable!("external delay has no graph parameter"),
+            wire: &mut |_, event| wire.push(event.message),
+        };
+        // A clip can change the same knob several times while the lane is parked.
+        for (cc, value) in [(18, 10), (19, 20), (18, 42)] {
+            lane.dispatch(MidiMessage::Control(cc, value), false, &mut route)?;
+        }
+        lane.chase(&mut route)?;
+        assert_eq!(
+            wire,
+            [
+                MidiMessage::Control(18, 42),
+                MidiMessage::Control(19, 20),
+                MidiMessage::Control(CC_SLIDE, 0)
+            ]
+        );
+        Ok(())
     }
 
     #[test]

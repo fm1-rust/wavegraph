@@ -1,7 +1,7 @@
 //! A bounded USB-MIDI output queue shared by the audio producer and USB owner.
 
 use crate::{
-    bass::{CC_SLIDE, CONTROLLERS},
+    bass::{self, CC_SLIDE},
     panel::{CHANNELS, Channel},
 };
 use heapless::{Deque, Vec};
@@ -10,13 +10,11 @@ use wavegraph::{Event, midi::MidiMessage};
 type Packet = [u8; 4];
 
 const BLOCK_PACKETS: usize = 96;
-// The 303 parameters plus TB-03 delay time, feedback and slide are absolute CCs.
-const EXTRA_CC: [u8; 3] = [18, 19, CC_SLIDE];
-const LATCHES: usize = CONTROLLERS.len() + EXTRA_CC.len();
+const LATCHES: usize = bass::AUTOMATION_COUNT + 1;
 const QUEUE_PACKETS: usize = BLOCK_PACKETS + CHANNELS * (2 + LATCHES);
 
 fn latched_ccs() -> impl Iterator<Item = u8> {
-    CONTROLLERS.into_iter().chain(EXTRA_CC)
+    bass::automation_ccs().chain([CC_SLIDE])
 }
 
 #[derive(Clone, Copy)]
@@ -71,10 +69,15 @@ impl Batch {
         self.lost = false;
     }
 
+    /// Update the receiver state to restore, without enqueueing a packet.
+    pub(super) fn remember_cc(&mut self, channel: Channel, cc: u8, value: u8) {
+        self.current.set(channel, cc, value);
+    }
+
     pub(super) fn push(&mut self, channel: Channel, event: Event<MidiMessage>) {
         if let Some(bytes) = event.message.encode(channel as u8) {
             if let MidiMessage::Control(cc, value) = event.message {
-                self.current.set(channel, cc, value);
+                self.remember_cc(channel, cc, value);
             }
             // Clip and arp producers each emit in frame order. USB drains one
             // merged batch, retaining insertion order for pairs at the same frame.
