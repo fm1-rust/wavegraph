@@ -219,7 +219,7 @@ impl Sweep {
             let y = w.y + dy;
             if y == center {
                 row.fill(palette.center);
-            } else if y.is_multiple_of(usize::from(GRID)) {
+            } else if y.abs_diff(center).is_multiple_of(grid) {
                 row.fill(palette.grid);
             } else {
                 row.fill(palette.background);
@@ -287,9 +287,10 @@ mod tests {
     fn dirty_windows_match_a_full_repaint_across_wrap_stop_and_silence() {
         for stripes in [Stripes::Fine, Stripes::Normal, Stripes::Wide] {
             let palette = palette();
-            let flat = [120; WIDTH];
-            let saw = core::array::from_fn(|x| 34 + u8::try_from(x % 171).expect("bounded ramp"));
-            let square = core::array::from_fn(|x| if (x / 24) % 2 == 0 { 205 } else { 34 });
+            let center: u8 = 152;
+            let flat = [center; WIDTH];
+            let saw = core::array::from_fn(|x| 66 + u8::try_from(x % 171).expect("bounded ramp"));
+            let square = core::array::from_fn(|x| if (x / 24) % 2 == 0 { 237 } else { 66 });
             let mut lcd = vec![OUTSIDE; WIDTH * WIDTH];
             let mut previous = None;
             for (trace, head) in [
@@ -304,14 +305,14 @@ mod tests {
             ] {
                 let sweep = Sweep { trace, head };
                 let damage = previous.as_ref().map_or_else(
-                    || Damage::full(32..208, None),
+                    || Damage::full(64..240, None),
                     |old| sweep.damage(old, &palette, stripes),
                 );
                 let mut touched = vec![false; lcd.len()];
                 for w in damage.windows().flat_map(|w| w.strips(CAPACITY)) {
                     assert!(w.width * w.height <= CAPACITY);
                     let mut strip = vec![OUTSIDE; w.width * w.height];
-                    sweep.render(w, &palette, WIDTH / 2, &mut strip);
+                    sweep.render(w, &palette, usize::from(center), &mut strip);
                     for (dy, row) in strip.chunks_exact(w.width).enumerate() {
                         let i = (w.y + dy) * WIDTH + w.x;
                         assert!(touched[i..i + w.width].iter().all(|&p| !p));
@@ -325,11 +326,11 @@ mod tests {
                     let b = usize::from(trace[x]);
                     let age = head.map_or(TRAIL, |head| (head + WIDTH - x) % WIDTH);
                     let pen = palette.pens[age.min(TRAIL)];
-                    let paper = if !(32..208).contains(&y) {
+                    let paper = if !(64..240).contains(&y) {
                         OUTSIDE
-                    } else if y == 120 {
+                    } else if y == usize::from(center) {
                         CENTER
-                    } else if x % 24 == 0 || y % 24 == 0 {
+                    } else if x % 24 == 0 || y % 24 == usize::from(center) % 24 {
                         LINE
                     } else {
                         BG

@@ -200,11 +200,15 @@ impl Selector {
     }
 
     pub(super) fn bounds(&self) -> Option<Window> {
-        self.visible().then_some(Window {
+        let height = match self.menu? {
+            Menu::Channels { .. } => CHANNELS * ROW_HEIGHT,
+            _ => HEIGHT,
+        };
+        Some(Window {
             x: LEFT,
-            y: TOP,
+            y: TOP + (HEIGHT - height) / 2,
             width: WIDTH,
-            height: HEIGHT,
+            height,
         })
     }
 

@@ -1,4 +1,4 @@
-//! Six fixed sound knobs below the scope and two auxiliary knobs beside the wordmark.
+//! Six fixed sound knobs above the scope and two auxiliary knobs beside the wordmark.
 
 use super::{OXIDE_RED, mixer::Band, selector::Selector};
 use crate::{
@@ -22,7 +22,8 @@ use fm1_rticx::{
 };
 use heapless::String;
 
-pub(super) const MARGIN: u16 = 32;
+const KNOB_ROW: u16 = 32;
+pub(super) const SCOPE_TOP: u16 = KNOB_ROW + CELL_HEIGHT + 1;
 pub(super) const METAL: Rgb565 = Rgb565::new(27, 54, 27);
 const GRAPHITE: Rgb565 = Rgb565::new(4, 9, 5);
 const CAP: Rgb565 = Rgb565::new(8, 17, 9);
@@ -247,7 +248,7 @@ impl Panel {
             }
             let slot = u16::try_from(i).expect("eight knobs");
             let (x, y, width): (u16, u16, u16) = if slot < 6 {
-                (CELL_WIDTH * slot, 209, CELL_WIDTH)
+                (CELL_WIDTH * slot, KNOB_ROW, CELL_WIDTH)
             } else {
                 (158 + 36 * (slot - 6), 0, 36)
             };
