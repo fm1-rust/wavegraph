@@ -17,6 +17,7 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-909`](instruments/wavegraph-909/) | Six-voice hybrid 909 with a mono mix and individual outputs | Unpublished | [Instrument guide](instruments/wavegraph-909/README.md) | [![Build status][909-build]][909-ci] |
 | [`wavegraph-adsr`](wavegraph-adsr/) | Sample-clocked ADSR shared by the monosynth and organ | Unpublished | [Envelope guide](wavegraph-adsr/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-arp`](wavegraph-arp/) | Frame-clocked MIDI arpeggiator | Unpublished | [Arpeggiator guide](wavegraph-arp/README.md) | [![Build status][arp-build]][arp-ci] |
+| [`wavegraph-audio`](wavegraph-audio/) | Routed audio I/O for macOS and the FM-1 | Unpublished | [Run the Mac synth](wavegraph-audio/README.md) | [![Build status][audio-build]][audio-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
@@ -26,7 +27,7 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-supersaw`](instruments/wavegraph-supersaw/) | JP-inspired seven-saw unison with detune and mix | Unpublished | [Instrument guide](instruments/wavegraph-supersaw/README.md) | [![Build status][supersaw-build]][supersaw-ci] |
 | [`wavegraph-wavetable`](instruments/wavegraph-wavetable/) | Four-voice wavetable scanning with resonant and vocal banks | Unpublished | [Instrument guide](instruments/wavegraph-wavetable/README.md) | [![Build status][wavetable-build]][wavetable-ci] |
 
-The libraries support Rust 1.88 and build without `std` or a heap allocator.
+The DSP libraries and the FM-1 audio backend support Rust 1.88 and build without `std` or a heap allocator.
 To browse their API documentation locally, run `cargo doc --workspace --no-deps --open`.
 
 ## Patch example
@@ -65,3 +66,6 @@ cargo +stable test -p wavegraph --test patch --locked
 [supersaw-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-supersaw.yml
 [wavetable-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-wavetable.yml/badge.svg?branch=main&event=push
 [wavetable-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-wavetable.yml
+
+[audio-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-audio.yml/badge.svg?branch=main&event=push
+[audio-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-audio.yml

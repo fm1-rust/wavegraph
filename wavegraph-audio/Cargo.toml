@@ -1,0 +1,31 @@
+[package]
+name = "wavegraph-audio"
+description = "Audio device routing and block I/O for WaveGraph"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+
+[features]
+coreaudio = ["dep:sdl3"]
+fm1 = ["dep:fm1-audio"]
+
+[dependencies]
+fm1-audio = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sdl3 = { version = "0.22.1", features = ["use-pkg-config"], optional = true }
+
+[dev-dependencies]
+wavegraph = { version = "0.1", path = "../wavegraph" }
+wavegraph-monosynth = { version = "0.1", path = "../instruments/wavegraph-monosynth" }
+wavegraph-sample.workspace = true
+
+[[example]]
+name = "play"
+required-features = ["coreaudio"]
+
+[lints]
+workspace = true

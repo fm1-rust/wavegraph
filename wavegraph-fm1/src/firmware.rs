@@ -231,6 +231,7 @@ mod app {
         control::{Controller, EditQueue, Host, Revision},
         mailbox,
     };
+    use wavegraph_audio::{Playback as _, fm1::Dac};
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
@@ -1032,7 +1033,7 @@ mod app {
             };
             let healthy = crate::peer::healthy();
             let mut dma_gap = false;
-            let result = output.render_with_interval(master, |out, interval| {
+            let Ok(result) = Dac(output, master).render(|out, interval| {
                 dma_gap = self.handoff.observe(interval);
                 if !healthy {
                     return;
@@ -1043,6 +1044,7 @@ mod app {
                     .or_else(|| playback.completed.try_recv());
                 current = self.handoff.fill(out, done.as_ref(), |b| &b.pcm);
             });
+            let result = result.into();
             let refill_ended = cycles();
             if result == Refill::WouldBlock {
                 return;

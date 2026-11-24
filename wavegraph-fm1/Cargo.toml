@@ -16,7 +16,7 @@ short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 qualified-usb = []
 
 [dependencies]
-fm1-audio = "0.2.0-rc.1"
+fm1-audio.workspace = true
 heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
@@ -33,6 +33,7 @@ wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
+wavegraph-audio = { version = "0.1", path = "../wavegraph-audio", features = ["fm1"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 embedded-graphics = "0.8.2"
 futures-util = { version = "0.3", default-features = false }
