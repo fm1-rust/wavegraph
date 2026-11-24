@@ -624,6 +624,9 @@ impl Screen {
                     focus: labels.channel,
                 }),
                 View::Channel => Some(Menu::Instruments(labels.focus)),
+                View::Fx => labels
+                    .insert_slot
+                    .map(|slot| Menu::Effects(labels.inserts[usize::from(slot)].kind())),
                 _ => None,
             }
         } else {
@@ -695,19 +698,13 @@ impl Screen {
         if labels.view == View::Fx {
             let page = Page::Fx(labels.channel, labels.focus);
             let entering = self.page.replace(page) != Some(page);
+            let style = self.selector.style(STYLE);
             if entering {
-                self.change_view(STYLE);
-                self.dot_background = mixer::BACKGROUND;
+                self.change_view(style);
+                self.dot_background = self.selector.shade(mixer::BACKGROUND);
             }
             self.channel_fx
-                .paint(
-                    lcd,
-                    clock,
-                    self.strip,
-                    &labels,
-                    entering,
-                    &mut self.selector.badge,
-                )
+                .paint(lcd, clock, self.strip, &labels, entering, self.selector)
                 .await?;
             let rows = channel_fx::SCOPE;
             let height = rows.end - rows.start;
@@ -721,7 +718,7 @@ impl Screen {
                     lcd,
                     clock,
                     Sweep { trace, head },
-                    STYLE,
+                    style,
                     Part::Mono,
                     (rows, center),
                 )

@@ -467,7 +467,7 @@ from the two inserts applied to the whole mix.
 | Device | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
 | --- | --- | --- | --- | --- |
 | Reverb return | Decay, 0–127 | Return level | — | — |
-| Delay return | Time, 5–1000 ms | Feedback, 0–95% | Return level | — |
+| Delay return | Time, 5–900 ms | Feedback, 0–95% | Return level | — |
 | Master EQ | Low, ±12 dB | Mid, ±12 dB | High, ±12 dB | — |
 | Master comp/limiter | Threshold, −36 to 0 dBFS | Ratio, 1:1–8:1 | Makeup, 0–12 dB | Ceiling, −12 to 0 dBFS |
 
@@ -644,8 +644,8 @@ One reverb and one mono digital delay run in parallel. The dry bus reserves
 three bits of headroom for four boosted tracks. The master node restores that
 gain and sums both returns and the startup cue in a widened accumulator. EQ,
 compression, makeup and limiting precede output trim and the physical MASTER.
-The delay borrows one second of PCM16 storage (88,236 bytes) and skips empty
-blocks once its line is silent.
+The delay borrows 900 ms of PCM16 storage (79,412 bytes) and skips empty
+blocks once its line is silent. The shorter line reserves SRAM for channel inserts.
 
 The hot 303 preset reserves 16-fold output headroom before converting to Q23.
 Its sidechain insert sits between the synth and the channel fader, so both

@@ -20,7 +20,7 @@ SECTIONS {
     __cpu1_mailbox = .;
     KEEP(*(.wavegraph.job))
     __cpu1_payload_end = .;
-    . = MAX(., __cpu1_mailbox + 4672);
+    . = MAX(., __cpu1_mailbox + 4864);
     . = ALIGN(32);
     __cpu1_mailbox_end = .;
     __cpu1_ustack_bottom = .;
@@ -34,6 +34,6 @@ SECTIONS {
 }
 __sstack_top = __stack_top - 16K;
 __sstack_bottom = __sstack_top - 20K;
-ASSERT(__cpu1_payload_end <= __cpu1_mailbox + 4672, "WaveGraph block exceeds its mailbox")
+ASSERT(__cpu1_payload_end <= __cpu1_mailbox + 4864, "WaveGraph block exceeds its mailbox")
 ASSERT(__fm1_statics_end <= __cpu1_mailbox, "CPU1 storage overlaps BSP statics")
 ASSERT(__cpu1_ustack_top + 1K <= __sstack_bottom, "WaveGraph needs a 1 KiB CPU0 stack margin")

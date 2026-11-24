@@ -8,10 +8,12 @@
 
 mod delay;
 mod ducker;
+mod insert;
 mod master;
 mod mixer;
 pub use delay::Delay;
 pub use ducker::SidechainDucker;
+pub use insert::{Phaser, PhaserControls, Saturator, SaturatorControls};
 pub use master::{Dynamics, MasterBus, MasterControls};
 pub use mixer::{ChannelMixer, MixerMessage};
 
@@ -47,6 +49,10 @@ pub enum Message {
     SidechainHz(u16),
     /// Wet return level, 0..=128; dry audio is never attenuated here.
     Wet(u8),
+    /// Saturator controls.
+    Saturator(SaturatorControls),
+    /// Phaser controls.
+    Phaser(PhaserControls),
     /// Enable the effect. Disabling mutes a return or bypasses an insert.
     Enabled(bool),
 }

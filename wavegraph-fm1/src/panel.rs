@@ -1,6 +1,10 @@
 //! Channel selection and page navigation for the FM-1 panel.
 
-use crate::{bass::Knob, fx::Device, instrument::Part};
+use crate::{
+    bass::Knob,
+    fx::{Device, INSERT_SLOTS, InsertKind},
+    instrument::Part,
+};
 
 pub(super) const CHANNELS: usize = 4;
 
@@ -110,7 +114,8 @@ pub(super) struct Navigation {
     pub(super) preset_since: Option<u32>,
     bass_slot: Option<u8>,
     fx_parent: View,
-    show_sends: bool,
+    insert_slot: Option<u8>,
+    pub(super) insert_kinds: [[InsertKind; INSERT_SLOTS]; CHANNELS],
     pub(super) assignments: [Assignment; CHANNELS],
 }
 
@@ -121,7 +126,13 @@ impl Navigation {
         preset_since: None,
         bass_slot: None,
         fx_parent: View::Mixer,
-        show_sends: false,
+        insert_slot: None,
+        insert_kinds: [
+            InsertKind::factory(Part::Bass),
+            InsertKind::factory(Part::Bass),
+            InsertKind::factory(Part::Tr808),
+            InsertKind::factory(Part::Tr909),
+        ],
         assignments: [
             Assignment::new(Part::Bass),
             Assignment::new(Part::Bass),
@@ -132,6 +143,12 @@ impl Navigation {
 
     #[cfg(test)]
     pub(super) const SYNTH_RACK: Self = Self {
+        insert_kinds: [
+            InsertKind::factory(Part::Mono),
+            InsertKind::factory(Part::Organ),
+            InsertKind::factory(Part::Bass),
+            InsertKind::factory(Part::Tr909),
+        ],
         assignments: [
             Assignment::new(Part::Mono),
             Assignment::new(Part::Organ),
@@ -145,8 +162,8 @@ impl Navigation {
         if matches!(button, PageButton::Home) && self.bass_slot.take().is_some() {
             return;
         }
-        if self.view != View::Fx && !matches!(self.view, View::MasterFx(_)) {
-            self.show_sends = false;
+        if matches!(button, PageButton::Home) && self.insert_slot.take().is_some() {
+            return;
         }
         let next = match button {
             PageButton::Home if matches!(self.view, View::MasterFx(Some(_))) => {
@@ -195,6 +212,7 @@ impl Navigation {
         };
         if self.view != next {
             self.bass_slot = None;
+            self.insert_slot = None;
         }
         self.view = next;
     }
@@ -203,8 +221,8 @@ impl Navigation {
         self.assignments[self.focus.index()].part
     }
 
-    pub(super) fn bass_insert(self) -> bool {
-        self.view == View::Fx && self.part() == Part::Bass && !self.show_sends
+    pub(super) fn insert_slot(self) -> Option<u8> {
+        self.insert_slot.filter(|_| self.view == View::Fx)
     }
 
     pub(super) fn bass_knob(self) -> Option<Knob> {
@@ -224,8 +242,12 @@ impl Navigation {
             let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
             self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
         }
-        if self.view == View::Fx && self.part() == Part::Bass && select.unsigned_abs() % 2 == 1 {
-            self.show_sends = !self.show_sends;
+        if self.view == View::Fx && select != 0 {
+            let start = self
+                .insert_slot
+                .map_or(if select > 0 { -1 } else { 0 }, i16::from);
+            let slot = start.saturating_add(i16::from(select)).rem_euclid(2);
+            self.insert_slot = Some(u8::try_from(slot).expect("two insert slots"));
         }
         if let View::MasterFx(row) = self.view {
             self.view = View::MasterFx(Device::select(row, select));
@@ -242,6 +264,11 @@ impl Navigation {
         if presets == 0 {
             return;
         }
+        if let Some(slot) = self.insert_slot() {
+            let kind = &mut self.insert_kinds[self.focus.index()][usize::from(slot)];
+            *kind = kind.turn(presets);
+            return;
+        }
         if self.view == View::Channel {
             let assignment = &mut self.assignments[self.focus.index()];
             let old = assignment.part;
@@ -255,7 +282,6 @@ impl Navigation {
             if self.focus != previous_channel || self.view == View::Envelope {
                 self.bass_slot = None;
             }
-            self.show_sends = false;
             if self.view == View::Envelope {
                 self.view = View::Scope;
             }
@@ -335,6 +361,7 @@ mod tests {
         nav.press(PageButton::Fx);
         nav.turn(1, 0);
         assert_eq!((nav.view, nav.bass_knob()), (View::Fx, None));
+        nav.press(PageButton::Home); // Deselect the insert first.
         nav.press(PageButton::Home);
         nav.turn(0, 1);
         nav.turn(1, 0);
@@ -412,21 +439,36 @@ mod tests {
     }
 
     #[test]
-    fn instrument_fx_shows_only_the_selected_channels_insert_and_sends() {
+    fn instrument_fx_selects_and_assigns_independent_channel_slots() {
         let mut nav = Navigation::INITIAL;
         nav.press(PageButton::Fx);
-        assert!(nav.bass_insert());
+        assert_eq!(nav.insert_slot(), None);
         nav.turn(1, 0);
-        assert!(!nav.bass_insert());
-        nav.turn(-1, 0);
-        assert!(nav.bass_insert());
+        assert_eq!(nav.insert_slot(), Some(0));
+        nav.turn(0, 1);
+        assert_eq!(
+            nav.insert_kinds[0],
+            [InsertKind::Saturator, InsertKind::None]
+        );
+        nav.turn(1, -1);
+        assert_eq!(nav.insert_slot(), Some(1));
+        assert_eq!(
+            nav.insert_kinds[0],
+            [InsertKind::Saturator, InsertKind::Phaser]
+        );
+        assert_eq!(nav.focus, Channel::One);
+        assert_eq!(nav.insert_kinds[1], InsertKind::factory(Part::Bass));
+        nav.press(PageButton::Home);
+        assert_eq!((nav.view, nav.insert_slot()), (View::Fx, None));
         nav.turn(0, 2);
         assert_eq!(nav.part(), Part::Tr808);
-        assert!(!nav.bass_insert());
-        for turn in [-1, 1] {
-            nav.turn(turn, 0);
-            assert!(!nav.bass_insert());
-        }
+        nav.turn(-1, 1);
+        assert_eq!(nav.insert_slot(), Some(1));
+        assert_eq!(
+            nav.insert_kinds[2],
+            [InsertKind::None, InsertKind::Compressor]
+        );
+        assert_eq!(nav.focus, Channel::Three);
     }
 
     #[test]

@@ -1,31 +1,61 @@
-//! Route the 303 sidechain by instrument type as channel assignments change.
+//! Two serial, independently assignable inserts per mixer strip.
 
 use crate::{
-    fx::{BassFx, KeySource},
+    fx::{BassFx, INSERT_SLOTS, Insert, InsertKind, KeySource},
     instrument::{Message, Part},
     panel::{CHANNELS, Channel},
 };
 use heapless::Vec;
 use wavegraph::{Event, Port, Process, ProcessContext};
-use wavegraph_fx::{Message as FxMessage, SidechainDucker};
+use wavegraph_fx::{Message as FxMessage, Phaser, Saturator, SidechainDucker};
 use wavegraph_sample::I24;
+
+#[derive(Clone, Copy)]
+enum Processor {
+    None,
+    Compressor(SidechainDucker),
+    Saturator(Saturator),
+    Phaser(Phaser),
+}
+
+impl Processor {
+    fn kind(self) -> InsertKind {
+        match self {
+            Self::None => InsertKind::None,
+            Self::Compressor(_) => InsertKind::Compressor,
+            Self::Saturator(_) => InsertKind::Saturator,
+            Self::Phaser(_) => InsertKind::Phaser,
+        }
+    }
+
+    fn new(kind: InsertKind, rate_hz: u32, factory: SidechainDucker) -> Self {
+        match kind {
+            InsertKind::None => Self::None,
+            InsertKind::Compressor => Self::Compressor(factory),
+            InsertKind::Saturator => Self::Saturator(Saturator::new()),
+            InsertKind::Phaser => Self::Phaser(Phaser::new(rate_hz).expect("audio sample rate")),
+        }
+    }
+}
 
 /// Each source supplies its full signal and isolated kick. The first four
 /// outputs feed the strip faders. The last is scratch for the external key mix.
-pub(super) struct BassInserts {
+pub(super) struct ChannelInserts {
     parts: [Part; CHANNELS],
-    controls: [BassFx; CHANNELS],
-    duckers: [SidechainDucker; CHANNELS],
+    controls: [[Insert; INSERT_SLOTS]; CHANNELS],
+    processors: [[Processor; INSERT_SLOTS]; CHANNELS],
+    rate_hz: u32,
     factory: SidechainDucker,
 }
 
-impl BassInserts {
+impl ChannelInserts {
     pub(super) fn new(rate_hz: u32) -> Self {
-        let factory = SidechainDucker::new(rate_hz, 32, 176).expect("valid 303 insert settings");
+        let factory = SidechainDucker::new(rate_hz, 32, 176).expect("valid insert settings");
         Self {
             parts: [Part::Mono; CHANNELS],
-            controls: [BassFx::INITIAL; CHANNELS],
-            duckers: [factory; CHANNELS],
+            controls: [[Insert::None; INSERT_SLOTS]; CHANNELS],
+            processors: [[Processor::None; INSERT_SLOTS]; CHANNELS],
+            rate_hz,
             factory,
         }
     }
@@ -60,7 +90,37 @@ impl BassInserts {
     }
 }
 
-impl Process<Message, I24> for BassInserts {
+fn configure_compressor(fx: &mut SidechainDucker, settings: BassFx) {
+    let events = [
+        FxMessage::SidechainDepth(settings.depth),
+        FxMessage::SidechainHz(settings.split_hz),
+        FxMessage::Enabled(settings.enabled),
+    ]
+    .map(|message| Event {
+        frame: 0,
+        port: 0,
+        message,
+    });
+    fx.process(&mut ProcessContext {
+        frames: 0,
+        inputs: &[&[], &[]],
+        outputs: &mut [&mut []],
+        events: &events,
+        emit: &mut Err,
+    });
+}
+
+fn compress(fx: &mut SidechainDucker, input: &[I24], key: &[I24], output: &mut [I24]) {
+    fx.process(&mut ProcessContext {
+        frames: input.len(),
+        inputs: &[input, key],
+        outputs: &mut [output],
+        events: &[],
+        emit: &mut Err,
+    });
+}
+
+impl Process<Message, I24> for ChannelInserts {
     fn inlets(&self) -> &[Port] {
         &[Port::Signal; 2 * CHANNELS]
     }
@@ -69,59 +129,140 @@ impl Process<Message, I24> for BassInserts {
         &[Port::Signal; CHANNELS + 1]
     }
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "Scratch ranges partition a valid block"
+    )]
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
-        let mut changed = [false; CHANNELS];
+        let mut changed = [[false; INSERT_SLOTS]; CHANNELS];
         for event in cx.events {
             match event.message {
                 Message::Insert(channel, part) => {
-                    self.parts[channel.index()] = part;
-                    self.duckers[channel.index()] = self.factory;
-                    changed[channel.index()] = true;
+                    let i = channel.index();
+                    self.parts[i] = part;
+                    self.processors[i] = [Processor::None; INSERT_SLOTS];
+                    changed[i] = [true; INSERT_SLOTS];
                 }
-                Message::BassInsert(channel, settings) => {
-                    self.controls[channel.index()] = settings;
-                    changed[channel.index()] = true;
+                Message::ChannelInserts(channel, settings) => {
+                    let i = channel.index();
+                    for (slot, setting) in settings.into_iter().enumerate() {
+                        changed[i][slot] |= self.controls[i][slot] != setting;
+                        self.controls[i][slot] = setting;
+                    }
                 }
                 _ => (),
             }
         }
         let (strips, detector) = cx.outputs.split_at_mut(CHANNELS);
         let mut last_key = None;
+        // Only the second compressor needs a copy of the preceding slot's
+        // output. A small reusable scratch span avoids a new graph bus.
+        let mut scratch = [I24::default(); 32];
         for channel in Channel::ALL {
             let i = channel.index();
             let source = cx.inputs[channel.source_bus()];
-            if self.parts[i] == Part::Bass {
-                let settings = self.controls[i];
-                let key = if settings.key == KeySource::Bass {
-                    source
-                } else {
-                    if last_key != Some(settings.key) {
-                        self.detector(settings.key, cx.inputs, detector[0]);
-                        last_key = Some(settings.key);
+            let strip = &mut *strips[i];
+            strip.copy_from_slice(source);
+            for slot in 0..INSERT_SLOTS {
+                let setting = self.controls[i][slot];
+                let key = if let Insert::Compressor(settings) = setting {
+                    if settings.key == KeySource::Bass {
+                        None // Self-key from this slot's input, not the raw source.
+                    } else {
+                        if last_key != Some(settings.key) {
+                            self.detector(settings.key, cx.inputs, detector[0]);
+                            last_key = Some(settings.key);
+                        }
+                        Some(&*detector[0])
                     }
-                    &*detector[0]
+                } else {
+                    None
                 };
-                let controls = [
-                    FxMessage::SidechainDepth(settings.depth),
-                    FxMessage::SidechainHz(settings.split_hz),
-                    FxMessage::Enabled(settings.enabled),
-                ]
-                .map(|message| Event {
-                    frame: 0,
-                    port: 0,
-                    message,
-                });
-                self.duckers[i].process(&mut ProcessContext {
-                    frames: cx.frames,
-                    inputs: &[source, key],
-                    outputs: &mut [strips[i]],
-                    events: if changed[i] { &controls } else { &[] },
-                    emit: &mut Err,
-                });
-            } else {
-                strips[i].copy_from_slice(source);
+                let processor = &mut self.processors[i][slot];
+                if processor.kind() != setting.kind() {
+                    *processor = Processor::new(setting.kind(), self.rate_hz, self.factory);
+                    changed[i][slot] = true;
+                }
+                match (processor, setting) {
+                    (Processor::Compressor(fx), Insert::Compressor(settings)) => {
+                        if changed[i][slot] {
+                            configure_compressor(fx, settings);
+                        }
+                        if slot == 0 {
+                            compress(fx, source, key.unwrap_or(source), strip);
+                        } else {
+                            for (chunk, out) in strip.chunks_mut(scratch.len()).enumerate() {
+                                let start = chunk * scratch.len();
+                                let input = &mut scratch[..out.len()];
+                                input.copy_from_slice(out);
+                                let key = key.map_or(&*input, |key| &key[start..start + out.len()]);
+                                compress(fx, input, key, out);
+                            }
+                        }
+                    }
+                    (Processor::Saturator(fx), Insert::Saturator(settings)) => {
+                        if changed[i][slot] {
+                            fx.set_controls(settings);
+                        }
+                        for sample in &mut *strip {
+                            *sample = fx.tick(*sample);
+                        }
+                    }
+                    (Processor::Phaser(fx), Insert::Phaser(settings)) => {
+                        if changed[i][slot] {
+                            fx.set_controls(settings);
+                        }
+                        for sample in &mut *strip {
+                            *sample = fx.tick(*sample);
+                        }
+                    }
+                    _ => (),
+                }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slots_are_serial_and_other_channels_are_dry() {
+        let mut rack = ChannelInserts::new(44_118);
+        let settings = [
+            InsertKind::Saturator.initial(),
+            InsertKind::Phaser.initial(),
+        ];
+        let event = [Event {
+            frame: 0,
+            port: 0,
+            message: Message::ChannelInserts(Channel::One, settings),
+        }];
+        let input = core::array::from_fn::<_, 128, _>(|i| {
+            I24::new_unchecked(if i % 32 < 16 { 1 << 20 } else { -(1 << 20) })
+        });
+        let silent = [I24::default(); 128];
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+        let mut saturator = Saturator::new();
+        let mut phaser = Phaser::new(44_118).expect("sample rate");
+        for block in 0..4 {
+            let mut out = outputs.each_mut().map(|slice| &mut slice[..]);
+            rack.process(&mut ProcessContext {
+                frames: 128,
+                inputs: &[
+                    &input, &silent, &input, &silent, &input, &silent, &input, &silent,
+                ],
+                outputs: &mut out,
+                events: if block == 0 { &event } else { &[] },
+                emit: &mut Err,
+            });
+            let expected = input.map(|sample| phaser.tick(saturator.tick(sample)));
+            assert_eq!(outputs[0], expected);
+            assert_eq!(outputs[1], input);
+            assert_eq!(outputs[2], input);
+            assert_eq!(outputs[3], input);
         }
     }
 }

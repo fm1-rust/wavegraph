@@ -4,7 +4,7 @@ use super::{
     BAND, WIDTH,
     mixer::{BACKGROUND, Band, LABEL, OUTLINE, POINTER, SELECTED, STRIP},
 };
-use crate::fx::{Device, Fx};
+use crate::fx::{Device, Fx, MAX_DELAY_MS};
 use core::fmt::Write;
 use embedded_graphics::{
     prelude::{Point, Size},
@@ -102,9 +102,9 @@ impl Row {
             Device::Delay => [
                 Dial::control(
                     "TIME",
-                    i16::try_from(fx.time_ms).expect("one second"),
+                    i16::try_from(fx.time_ms).expect("delay time"),
                     5,
-                    1000,
+                    i16::try_from(MAX_DELAY_MS).expect("delay range"),
                     Ms,
                 ),
                 Dial::control("FDBK", fx.feedback, 0, 95, Percent),
