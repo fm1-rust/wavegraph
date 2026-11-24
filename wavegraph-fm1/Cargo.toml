@@ -10,6 +10,8 @@ description = "Four assignable WaveGraph channels with synths, 808 and 909 kits,
 
 [features]
 late-block-probe = []
+# A/B the master compressor detector on the same board and factory patch.
+short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 # Requires the board and host qualifications documented in the firmware README.
 qualified-usb = []
 

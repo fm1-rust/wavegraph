@@ -137,6 +137,28 @@ pub struct Motion {
     pub(super) wave_frames: [u8; CHANNELS],
 }
 
+impl Motion {
+    /// Wake pages with discrete motion even when their audio trace is quiet.
+    fn display_changed(&self, old: &Self, nav: Navigation) -> bool {
+        let i = nav.focus.index();
+        match nav.view {
+            View::Mixer | View::Channel => self.peaks != old.peaks,
+            View::MasterFx(_) => self.reduction != old.reduction,
+            View::Arp => self.arp_notes[i] != old.arp_notes[i],
+            View::Sequencer => {
+                self.banks != old.banks
+                    || self.position.map(|p| p.step) != old.position.map(|p| p.step)
+            }
+            View::Scope | View::Envelope if nav.part().is_kit() => self.drums[i] != old.drums[i],
+            View::Scope if nav.part() == Part::Wavetable => {
+                self.wave_frames[i] != old.wave_frames[i]
+            }
+            View::Scope if nav.part() == Part::Bass => self.bass_automation != old.bass_automation,
+            _ => false,
+        }
+    }
+}
+
 /// Renderer and DMA service timings in 24 MHz TIMER4 ticks. Peaks cover this boot.
 #[derive(Clone, Copy, Default)]
 pub struct Timing {
@@ -148,6 +170,10 @@ pub struct Timing {
     pub(super) irq: u32,
     pub(super) overruns: u32,
     pub(super) worker: u32,
+    pub(super) ready: u32,
+    pub(super) margin: Option<i32>,
+    pub(super) scan_margin: Option<i32>,
+    pub(super) starving: bool,
     pub(super) worker_stack: Option<u32>,
     pub(super) silences: u32,
     pub(super) discards: u32,
@@ -169,7 +195,7 @@ mod app {
     use crate::{
         bumper::Bumper,
         capture::{Capture, FLAT, Scale, ScopeUpdates},
-        handoff::Handoff,
+        handoff::{Handoff, OutputHealth},
         inserts::BassInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
@@ -196,7 +222,7 @@ mod app {
             channel::{Receiver, Sender},
             make_channel,
         },
-        time::{Clock, ExtU32, Timebase, Timer5},
+        time::{Clock, DeadlineClock, ExtU32, Timebase, Timer5, TimerSlot},
     };
     use futures_util::future::{Either, select};
     use heapless::Vec;
@@ -248,6 +274,7 @@ mod app {
         timing: Timing,
         stream: Option<Playback>,
         motion: Motion,
+        desired_gain: bool,
         midi_epoch: u32,
         outbox: OutputQueue,
     }
@@ -340,7 +367,14 @@ mod app {
         // USB0 receive DMA contract, including reset, suspend and reconnect.
         #[cfg(feature = "qualified-usb")]
         let usb = Some(unsafe { port.assume_midi_dma() }.into_midi(identity));
-        let timer = Clock::start(board.timers.with_panel_scan_rate());
+        let mut timers = board.timers.with_panel_scan_rate();
+        // Draw and USB can each have a coarse timeout outstanding. The cold
+        // CPU1 handshake is the only high-resolution waiter.
+        static COARSE: ConstStaticCell<[TimerSlot; 4]> =
+            ConstStaticCell::new([const { TimerSlot::EMPTY }; 4]);
+        static STARTUP: ConstStaticCell<[TimerSlot; 1]> = ConstStaticCell::new([TimerSlot::EMPTY]);
+        DeadlineClock::start_with_slots::<2>(timers.take_alarm().expect("TIMER2"), STARTUP.take());
+        let timer = Clock::start_with_slots(timers, COARSE.take());
         let clock = timer.clock();
         // Keep the DMA-sized buses out of the task initializer and its stack.
         static BUSES: ConstStaticCell<[[I24; OUTPUT_FRAMES]; BUS_COUNT]> = ConstStaticCell::new(
@@ -389,6 +423,10 @@ mod app {
         static PIANO: ConstStaticCell<Piano<PIANO_KEYS>> = ConstStaticCell::new(Piano::new());
         static HELD: ConstStaticCell<Vec<Press, PIANO_KEYS>> = ConstStaticCell::new(Vec::new());
         let (tap, blocks) = make_channel!(ScopeBlock, 2);
+        let (edit_wake, edit_requests) = make_channel!((), 1);
+        // CPU0 tasks each own a sender. One pending wake covers every change
+        // until Draw reads the next snapshot. CPU1 only uses the mailboxes.
+        let (draw_wake, updates) = make_channel!((), 1);
         let mut leds = Leds::default();
         leds.set_play(PlayLedState::Red);
         leds.set(Button::Sel, Settings::INITIAL.sel_lamp());
@@ -412,19 +450,24 @@ mod app {
                 },
                 stream: None,
                 motion: Motion::default(),
+                desired_gain: false,
                 midi_epoch: 0,
                 outbox: OutputQueue::default(),
             },
             TaskInits {
                 start_audio: StartAudio {
+                    draw_wake: draw_wake.clone(),
                     port: Some(board.audio.into()),
                     completed: Some(done),
                     host: (boot == 1).then_some(host),
                 },
                 audio: Audio {
+                    draw_wake: draw_wake.clone(),
                     handoff,
                     jobs: issue,
                     missing_since: None,
+                    output_health: OutputHealth::default(),
+                    deadline: None,
                     release,
                     half_gain: false,
                     pending_edit: None,
@@ -437,6 +480,7 @@ mod app {
                     last_start: None,
                 },
                 panel: Panel {
+                    draw_wake: draw_wake.clone(),
                     timer,
                     controls: board.panel.into_touch_controls().into(),
                     piano: PIANO.take(),
@@ -453,11 +497,15 @@ mod app {
                     midi_epoch: 0,
                     keys: KEYS.take(),
                     held: HELD.take(),
-                    editor,
+                    edit_wake,
                     settings: Settings::INITIAL,
-                    half_gain: false,
+                },
+                edit: Edit {
+                    editor,
+                    requests: edit_requests,
                 },
                 observe: Observe {
+                    draw_wake,
                     blocks,
                     capture: Capture::new(),
                     previous: None,
@@ -469,6 +517,7 @@ mod app {
                     outbound,
                 },
                 draw: Draw {
+                    updates,
                     port: Some(board.display.into()),
                     clock,
                 },
@@ -479,6 +528,7 @@ mod app {
     #[post_init]
     fn start() {
         StartAudio::spawn(()).expect("one audio startup");
+        Edit::spawn(()).expect("one edit task");
         Input::spawn(()).expect("one input task");
         Observe::spawn(()).expect("one scope task");
         Draw::spawn(()).expect("one display task");
@@ -489,6 +539,7 @@ mod app {
     // 100 µs column slot on time even when the audio graph is rendering.
     #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing])]
     struct Panel {
+        draw_wake: Sender<'static, (), 1>,
         timer: Timer5,
         controls: Cpu0<TouchControls>,
         piano: &'static mut Piano<PIANO_KEYS>,
@@ -517,6 +568,7 @@ mod app {
                 self.shared()
                     .timing
                     .lock(|t| t.visible = scan.is_down(Button::Save));
+                let _ = self.draw_wake.try_send(());
             }
             if scan.pressed(Button::Play) {
                 self.seq.transport.toggle();
@@ -699,131 +751,183 @@ mod app {
         }
     }
 
-    #[async_task(priority = 2, shared = [settings, leds, midi_epoch])]
+    #[async_task(priority = 2, shared = [settings, leds, midi_epoch, desired_gain])]
     struct Input {
         input: Receiver<'static, PanelFrame, SCANS>,
         midi: Receiver<'static, MidiEvent, MIDI_EVENTS>,
         midi_epoch: u32,
         keys: &'static mut Keys<PIANO_KEYS>,
         held: &'static mut Vec<Press, PIANO_KEYS>,
-        editor: Controller<'static, bool>,
+        edit_wake: Sender<'static, (), 1>,
         settings: Settings,
-        half_gain: bool,
     }
 
     impl RticAsyncTask for Input {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
-            while let Ok(PanelFrame {
+            loop {
+                let (scan, first) = {
+                    let panel = pin!(self.input.recv());
+                    let midi = pin!(self.midi.recv());
+                    match select(panel, midi).await {
+                        Either::Left((Ok(scan), _)) => (Some(scan), None),
+                        Either::Right((Ok(event), _)) => (None, Some(event)),
+                        Either::Right((Err(_), pending_scan)) => {
+                            let Ok(scan) = pending_scan.await else {
+                                return;
+                            };
+                            (Some(scan), None)
+                        }
+                        Either::Left((Err(_), _)) => return,
+                    }
+                };
+                let old_lamp = self.settings.sel_lamp();
+                if let Some(scan) = scan {
+                    self.apply_panel(scan);
+                } else {
+                    self.apply_midi(first);
+                }
+                self.publish(old_lamp);
+            }
+        }
+    }
+
+    impl Input {
+        fn apply_panel(&mut self, frame: PanelFrame) {
+            let PanelFrame {
                 scan,
                 seq,
                 nav,
                 pads,
                 held,
-            }) = self.input.recv().await
-            {
-                let old_lamp = self.settings.sel_lamp();
-                let channel = nav.focus;
-                let view = nav.view;
-                self.settings.nav = nav;
-                self.settings.seq = seq;
-                let tracks = &mut self.settings.tracks;
-                for channel in Channel::ALL {
-                    let assignment = nav.assignments[channel.index()];
-                    if tracks[channel.index()].assignment != assignment {
-                        self.keys.clear(channel);
-                        tracks[channel.index()] = Track::factory(channel, assignment);
+            } = frame;
+            let channel = nav.focus;
+            let view = nav.view;
+            self.settings.nav = nav;
+            self.settings.seq = seq;
+            let tracks = &mut self.settings.tracks;
+            for channel in Channel::ALL {
+                let assignment = nav.assignments[channel.index()];
+                if tracks[channel.index()].assignment != assignment {
+                    self.keys.clear(channel);
+                    tracks[channel.index()] = Track::factory(channel, assignment);
+                }
+                pads[channel.index()].apply(&mut tracks[channel.index()]);
+            }
+            if *self.held != held {
+                self.keys.panel(self.held, &held, tracks);
+                *self.held = held;
+            }
+            self.apply_midi(None);
+            let knobs = [
+                Encoder::Knob1,
+                Encoder::Knob2,
+                Encoder::Knob3,
+                Encoder::Knob4,
+            ]
+            .map(|encoder| scan.encoder_delta(encoder));
+            let select = scan.encoder_delta(Encoder::Select);
+            let algorithm = scan.encoder_delta(Encoder::Algorithm);
+            let sel = scan.pressed(Button::Sel);
+            match view {
+                View::Mixer => self.settings.mixer.turn_faders(knobs),
+                View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
+                View::Arp => self.settings.tracks[channel.index()]
+                    .arp
+                    .edit(select, knobs, sel),
+                View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
+                View::Fx => {
+                    if nav.bass_insert() {
+                        self.settings.tracks[channel.index()]
+                            .bass_fx
+                            .edit(knobs, sel);
+                    } else {
+                        self.settings
+                            .mixer
+                            .turn_knobs(channel, [0, knobs[1], knobs[2], 0]);
                     }
-                    pads[channel.index()].apply(&mut tracks[channel.index()]);
                 }
-                if *self.held != held {
-                    self.keys.panel(self.held, &held, tracks);
-                    *self.held = held;
-                }
-                let epoch = self.shared().midi_epoch.lock(|epoch| *epoch);
-                if epoch != self.midi_epoch {
-                    self.keys.clear_midi();
-                    for track in &mut self.settings.tracks {
-                        track.bass.slide = false;
-                    }
-                    self.midi_epoch = epoch;
-                }
-                while let Ok(event) = self.midi.try_recv() {
-                    let track = &mut self.settings.tracks[event.channel.index()];
-                    if event.epoch == epoch && event.generation == track.assignment.generation {
-                        self.keys.midi(event.channel, event.action, track);
-                    }
-                }
-                let knobs = [
-                    Encoder::Knob1,
-                    Encoder::Knob2,
-                    Encoder::Knob3,
-                    Encoder::Knob4,
-                ]
-                .map(|encoder| scan.encoder_delta(encoder));
-                let select = scan.encoder_delta(Encoder::Select);
-                let algorithm = scan.encoder_delta(Encoder::Algorithm);
-                let sel = scan.pressed(Button::Sel);
-                match view {
-                    View::Mixer => self.settings.mixer.turn_faders(knobs),
-                    View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
-                    View::Arp => self.settings.tracks[channel.index()]
-                        .arp
-                        .edit(select, knobs, sel),
-                    View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
-                    View::Fx => {
-                        if nav.bass_insert() {
-                            self.settings.tracks[channel.index()]
-                                .bass_fx
-                                .edit(knobs, sel);
-                        } else {
-                            self.settings
-                                .mixer
-                                .turn_knobs(channel, [0, knobs[1], knobs[2], 0]);
-                        }
-                    }
-                    View::Scope | View::Envelope => {
-                        let track = &mut self.settings.tracks[channel.index()];
-                        track.turn_algorithm(nav.bass_knob(), algorithm);
-                        track.edit_panel(view, select, knobs, sel);
-                    }
-                    View::MasterFx(None) | View::Sequencer => (),
-                }
-                if let Some(master) = scan.master() {
-                    self.settings.master = master;
-                }
-                for channel in Channel::ALL {
+                View::Scope | View::Envelope => {
                     let track = &mut self.settings.tracks[channel.index()];
-                    self.keys
-                        .set_latch(channel, track.arp.enabled && track.arp.config.latch);
-                    self.keys.snapshot(channel, track);
+                    track.turn_algorithm(nav.bass_knob(), algorithm);
+                    track.edit_panel(view, select, knobs, sel);
                 }
-                let settings = &self.settings;
-                self.shared().settings.lock(|current| {
-                    if *settings != current.settings {
-                        for channel in Channel::ALL {
-                            let i = channel.index();
-                            if settings.tracks[i]
-                                .arp_chord_changed(Some(&current.settings.tracks[i]))
-                            {
-                                current.chords[i].clone_from(self.keys.chord(channel));
-                            }
+                View::MasterFx(None) | View::Sequencer => (),
+            }
+            if let Some(master) = scan.master() {
+                self.settings.master = master;
+            }
+            if matches!(view, View::Fx | View::MasterFx(_)) && algorithm != 0 {
+                self.shared().desired_gain.lock(|gain| *gain = !*gain);
+                let _ = self.edit_wake.try_send(());
+            }
+        }
+
+        fn apply_midi(&mut self, first: Option<MidiEvent>) {
+            let epoch = self.shared().midi_epoch.lock(|epoch| *epoch);
+            if epoch != self.midi_epoch {
+                self.keys.clear_midi();
+                for track in &mut self.settings.tracks {
+                    track.bass.slide = false;
+                }
+                self.midi_epoch = epoch;
+            }
+            for event in first
+                .into_iter()
+                .chain(core::iter::from_fn(|| self.midi.try_recv().ok()))
+            {
+                let track = &mut self.settings.tracks[event.channel.index()];
+                if event.epoch == epoch && event.generation == track.assignment.generation {
+                    self.keys.midi(event.channel, event.action, track);
+                }
+            }
+        }
+
+        fn publish(&mut self, old_lamp: bool) {
+            for channel in Channel::ALL {
+                let track = &mut self.settings.tracks[channel.index()];
+                self.keys
+                    .set_latch(channel, track.arp.enabled && track.arp.config.latch);
+                self.keys.snapshot(channel, track);
+            }
+            let settings = &self.settings;
+            self.shared().settings.lock(|current| {
+                if *settings != current.settings {
+                    for channel in Channel::ALL {
+                        let i = channel.index();
+                        if settings.tracks[i].arp_chord_changed(Some(&current.settings.tracks[i])) {
+                            current.chords[i].clone_from(self.keys.chord(channel));
                         }
-                        current.settings = *settings;
-                        current.revision = current.revision.wrapping_add(1);
                     }
-                });
-                let sel_lamp = settings.sel_lamp();
-                if old_lamp != sel_lamp {
-                    self.shared()
-                        .leds
-                        .lock(|leds| leds.set(Button::Sel, sel_lamp));
+                    current.settings = *settings;
+                    current.revision = current.revision.wrapping_add(1);
                 }
-                if matches!(view, View::Fx | View::MasterFx(_))
-                    && algorithm != 0
-                    && self.editor.commit(!self.half_gain).await.is_ok()
-                {
-                    self.half_gain = !self.half_gain;
+            });
+            let sel_lamp = settings.sel_lamp();
+            if old_lamp != sel_lamp {
+                self.shared()
+                    .leds
+                    .lock(|leds| leds.set(Button::Sel, sel_lamp));
+            }
+        }
+    }
+
+    #[async_task(priority = 2, shared = [desired_gain])]
+    struct Edit {
+        editor: Controller<'static, bool>,
+        requests: Receiver<'static, (), 1>,
+    }
+    impl RticAsyncTask for Edit {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            let mut applied = false;
+            while self.requests.recv().await.is_ok() {
+                let desired = self.shared().desired_gain.lock(|gain| *gain);
+                if desired != applied {
+                    if self.editor.commit(desired).await.is_err() {
+                        return;
+                    }
+                    applied = desired;
                 }
             }
         }
@@ -839,6 +943,7 @@ mod app {
     // Give the cold graph its first full render before starting the DMA clock.
     #[async_task(priority = 2, shared = [stream, timing])]
     struct StartAudio {
+        draw_wake: Sender<'static, (), 1>,
         port: Option<Cpu0<fm1_audio::AudioPort>>,
         completed: Option<mailbox::Receiver<'static, BlockJob>>,
         host: Option<Host<'static, bool>>,
@@ -861,12 +966,13 @@ mod app {
                 if let Some(code) = fault {
                     crate::peer::stop();
                     self.shared().timing.lock(|t| t.boot = code);
+                    let _ = self.draw_wake.try_send(());
                     return;
                 }
                 if let Some(first) = completed.try_recv() {
                     break first;
                 }
-                Clock::delay(1.millis()).await;
+                DeadlineClock::delay(250.micros()).await;
             };
             static OUTPUT: StaticCell<Output> = StaticCell::new();
             let port = self.port.take().expect("start once").into_inner();
@@ -886,8 +992,11 @@ mod app {
 
     #[task(binds = ALNK0, priority = 4, shared = [settings, overloads, timing, motion, bumper, outbox, stream])]
     struct Audio {
+        draw_wake: Sender<'static, (), 1>,
         playback: Option<Playback>,
         missing_since: Option<u32>,
+        output_health: OutputHealth,
+        deadline: Option<u32>,
         handoff: Handoff<&'static mut RenderBlock>,
         jobs: mailbox::Sender<'static, BlockJob>,
         release: mailbox::Sender<'static, ()>,
@@ -953,27 +1062,49 @@ mod app {
                     crate::peer::stop();
                     playback.host = None;
                     shared.timing.lock(|t| t.boot = code);
+                    if shared.outbox.lock(|q| q.silence())
+                        && let Some(wake) = &mut self.wake_usb
+                    {
+                        let _ = wake.try_send(());
+                    }
+                    let _ = self.draw_wake.try_send(());
                     return;
                 }
             }
             let written = result == Refill::Written;
             let silence = written && !current;
+            let accepted = written && current;
+            let (first_gap, starving) =
+                self.output_health
+                    .update(started, accepted, Timers::CRYSTAL_HZ);
+            if first_gap
+                && shared.outbox.lock(|q| q.silence())
+                && let Some(wake) = &mut self.wake_usb
+            {
+                let _ = wake.try_send(());
+            }
             if cfg!(feature = "late-block-probe") && silence && self.gated {
                 self.release.try_send(()).expect("one gated job");
                 self.gated = false;
             }
             let mut stack_free = None;
             let mut work = 0;
+            let mut ready = 0;
+            let mut margin = None;
             let mut discarded = None;
             let mut edit_sequence = None;
             if let Some(job) = &done {
                 let block = &*job.slot;
                 work = block.work;
+                if let Some(at) = self.deadline.take() {
+                    ready = block.ready_at.wrapping_sub(block.issued_at);
+                    margin = Some(at.wrapping_sub(block.ready_at).cast_signed());
+                }
                 stack_free = block.stack_free;
                 discarded = (!current).then(|| job.sequence());
-                // Deliver note-offs even if the corresponding PCM expired. A
-                // disconnect or queue reset retires the captured USB session.
-                if let Some(session) = block.usb_session
+                // The first gap releases external notes and retires pending packets.
+                if accepted
+                    && let Some(session) = block.usb_session
                     && shared
                         .outbox
                         .lock(|q| q.session() == Some(session) && q.append(&block.midi))
@@ -986,8 +1117,15 @@ mod app {
                         edit_sequence = Some(job.sequence());
                         self.pending_edit = None;
                     }
-                    shared.motion.lock(|m| *m = block.motion);
                     let settings = &block.settings;
+                    let motion_changed = shared.motion.lock(|old| {
+                        let changed = block.motion.display_changed(old, settings.nav);
+                        *old = block.motion;
+                        changed
+                    });
+                    if motion_changed && !shared.timing.lock(|t| t.visible) {
+                        let _ = self.draw_wake.try_send(());
+                    }
                     let visible = settings.nav.view.shows_trace(settings.nav.part());
                     self.scope_updates.publish(
                         (block.settings_revision, block.half_gain),
@@ -1042,26 +1180,34 @@ mod app {
                 revision
             });
             if let Some(job) = job {
+                self.deadline = Some(started.wrapping_add(fm1_audio::BLOCK_TICKS));
+                job.slot.issued_at = cycles();
                 self.jobs
                     .try_send(job)
                     .ok()
                     .expect("free slot implies empty job queue");
             }
             let previous = self.last_start.replace(started);
-            if self.stats.record_with_refill(started, refill_ended, result) {
+            let service_miss = self.stats.record_with_refill(started, refill_ended, result);
+            if service_miss || silence {
+                use crate::overload::Cause;
                 let elapsed = cycles().wrapping_sub(started);
                 let gap = previous.map_or(0, |prev| started.wrapping_sub(prev));
-                shared.overloads.lock(|log| {
-                    log.record(
-                        self.stats.overruns,
-                        ticks(),
-                        elapsed,
-                        gap,
-                        result == Refill::Late,
-                    )
-                });
+                let cause = if result == Refill::Late {
+                    Cause::Dma
+                } else if silence {
+                    Cause::Worker
+                } else {
+                    Cause::Service
+                };
+                shared
+                    .overloads
+                    .lock(|log| log.record(ticks(), elapsed, gap, cause));
+                if first_gap || service_miss {
+                    let _ = self.draw_wake.try_send(());
+                }
             }
-            shared.timing.lock(|t| {
+            let health_changed = shared.timing.lock(|t| {
                 let refill = refill_ended.wrapping_sub(started);
                 t.refill = t.refill.max(refill);
                 if playing {
@@ -1071,6 +1217,17 @@ mod app {
                 t.irq = self.stats.peak_ticks;
                 t.overruns = self.stats.overruns;
                 t.worker = t.worker.max(work);
+                t.ready = t.ready.max(ready);
+                let changed = t.starving != starving;
+                t.starving = starving;
+                if let Some(margin) = margin {
+                    let min = if stack_free.is_some() {
+                        &mut t.scan_margin
+                    } else {
+                        &mut t.margin
+                    };
+                    *min = Some(min.map_or(margin, |old| old.min(margin)));
+                }
                 if stack_free.is_some() {
                     t.worker_stack = stack_free;
                 }
@@ -1082,12 +1239,17 @@ mod app {
                 if let Some(sequence) = edit_sequence {
                     t.last_edit = sequence;
                 }
+                changed
             });
+            if health_changed {
+                let _ = self.draw_wake.try_send(());
+            }
         }
     }
 
-    #[async_task(priority = 2, shared = [frame])]
+    #[async_task(priority = 2, shared = [frame, timing])]
     struct Observe {
+        draw_wake: Sender<'static, (), 1>,
         blocks: Receiver<'static, ScopeBlock, 2>,
         capture: Capture,
         previous: Option<Labels>,
@@ -1107,11 +1269,8 @@ mod app {
                 });
                 let voice_scope = labels.view == View::Scope && labels.voice_tap;
                 let bass_scope = voice_scope && labels.focus == Part::Bass;
-                // Keep the 303 trigger and the post-insert FX trace continuous through knob edits.
-                if block.gap
-                    || source_changed
-                    || (changed && !bass_scope && labels.view != View::Fx)
-                {
+                // A label or knob edit does not break a contiguous stream from the same tap.
+                if block.gap || source_changed {
                     self.capture.reset();
                 }
                 let trace = block.samples.as_ref().and_then(|samples| {
@@ -1127,15 +1286,20 @@ mod app {
                     }
                 });
                 if changed || trace.is_some() {
-                    self.shared().frame.lock(|frame| {
-                        // Publish the new page even while waiting for its first trigger.
-                        if let Some(trace) = trace {
-                            frame.trace = trace;
-                        } else if source_changed {
-                            frame.trace = FLAT;
+                    let dirty = self.shared().frame.lock(|frame| {
+                        let next = trace.or_else(|| source_changed.then_some(FLAT));
+                        let new_trace = next.is_some_and(|t| t != frame.trace);
+                        if let Some(t) = next {
+                            frame.trace = t;
                         }
-                        frame.labels = labels;
+                        if changed {
+                            frame.labels = labels;
+                        }
+                        changed || new_trace
                     });
+                    if dirty && !self.shared().timing.lock(|t| t.visible) {
+                        let _ = self.draw_wake.try_send(());
+                    }
                 }
             }
         }
@@ -1262,6 +1426,7 @@ mod app {
 
     #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing])]
     struct Draw {
+        updates: Receiver<'static, (), 1>,
         port: Option<Cpu0<DisplayPort>>,
         clock: Clock,
     }
@@ -1277,16 +1442,17 @@ mod app {
             let splash = screen
                 .splash(&mut lcd, &mut self.clock, || bumper.lock(Bumper::start))
                 .await;
-            bumper.lock(Bumper::stop);
             if splash.is_err() {
                 return;
             }
             // A failed display transfer ends only this task. Audio and panel IRQs keep running.
             loop {
-                // Count paint time toward the frame period and sample the latest frame on a miss.
-                let next_frame = Clock::now() + 30.millis();
+                // Drain before taking the snapshot. A change during painting leaves a wake
+                // pending for the next pass, even if the final SPI transfer is still in flight.
+                let _ = self.updates.try_recv();
+                let at = Clock::now();
                 let timing = self.shared().timing.lock(|t| *t);
-                if timing.visible || timing.boot != 1 {
+                let interval = if timing.visible || timing.starving || timing.boot != 1 {
                     if screen
                         .timing(&mut lcd, &mut self.clock, timing)
                         .await
@@ -1294,20 +1460,35 @@ mod app {
                     {
                         return;
                     }
-                    Clock::delay_until(next_frame).await;
-                    continue;
-                }
-                let frame = self.shared().frame.lock(|f| *f);
-                let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
-                let motion = self.shared().motion.lock(|motion| *motion);
-                if screen
-                    .paint(&mut lcd, &mut self.clock, &frame, severity, motion)
-                    .await
-                    .is_err()
-                {
+                    Some(100u32)
+                } else {
+                    let frame = self.shared().frame.lock(|f| *f);
+                    let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
+                    let motion = self.shared().motion.lock(|m| *m);
+                    if screen
+                        .paint(&mut lcd, &mut self.clock, &frame, severity, motion)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let labels = frame.labels;
+                    // The pulse moves continuously between fresh sweeps. Other
+                    // motion is driven by changes to the visible display values.
+                    let animated = labels.seq.transport.playing()
+                        && labels.view.shows_trace(labels.focus)
+                        || labels.preset_since.is_some()
+                        || severity.is_some();
+                    animated.then_some(20)
+                };
+                if let Some(ms) = interval {
+                    let deadline = pin!(Clock::delay_until(at + ms.millis()));
+                    let update = pin!(self.updates.recv());
+                    let _ = select(update, deadline).await;
+                } else if self.updates.recv().await.is_err() {
                     return;
                 }
-                Clock::delay_until(next_frame).await;
+                fm1_rticx::rticx::asynchronous::yield_now::yield_now().await;
             }
         }
     }

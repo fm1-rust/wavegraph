@@ -104,7 +104,6 @@ impl Screen {
             })
             .await?;
         draw_version(lcd, clock, self.strip, &trace).await?;
-        Clock::delay(500.millis()).await;
         Ok(())
     }
 }

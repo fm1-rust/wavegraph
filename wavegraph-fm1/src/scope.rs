@@ -1,6 +1,7 @@
 //! Incremental rasterization of the live trace and its beat pulse.
 #![allow(
     clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
     reason = "Coordinates and extents are bounded by the 240-pixel display."
 )]
 
@@ -9,8 +10,16 @@ use core::ops::Range;
 
 pub(super) const GRID: u8 = 24;
 pub(super) const TRAIL: usize = 32;
-const STRIPE: usize = 12;
-const _: () = assert!(WIDTH.is_multiple_of(STRIPE));
+const MIN_STRIPE: usize = 6;
+const _: () = assert!(WIDTH.is_multiple_of(24));
+
+/// Narrow stripes track steep harmonic traces; drum hits favor fewer LCD windows.
+#[derive(Clone, Copy)]
+pub(super) enum Stripes {
+    Fine = 6,
+    Normal = 12,
+    Wide = 24,
+}
 
 type Pixel = [u8; 2];
 
@@ -24,7 +33,7 @@ pub(super) struct Palette {
     pens: [Pen; TRAIL + 1],
     grid: Pixel,
     center: Pixel,
-    row: [Pixel; WIDTH],
+    background: Pixel,
 }
 
 impl Palette {
@@ -34,15 +43,11 @@ impl Palette {
         center: Pixel,
         pens: [Pen; TRAIL + 1],
     ) -> Self {
-        let mut row = [background; WIDTH];
-        for pixel in row.iter_mut().step_by(usize::from(GRID)) {
-            *pixel = grid;
-        }
         Self {
             pens,
             grid,
             center,
-            row,
+            background,
         }
     }
 }
@@ -76,12 +81,15 @@ impl Window {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Span {
-    top: usize,
-    end: usize,
+    top: u8,
+    end: u8,
 }
 
 impl Span {
-    const EMPTY: Self = Self { top: WIDTH, end: 0 };
+    const EMPTY: Self = Self {
+        top: WIDTH as u8,
+        end: 0,
+    };
 
     fn union(self, other: Self) -> Self {
         Self {
@@ -91,53 +99,68 @@ impl Span {
     }
 
     fn with_halo(self, pen: Pen) -> Self {
-        let margin = usize::from(pen.halo.is_some());
+        let margin = u8::from(pen.halo.is_some());
         Self {
             top: self.top.saturating_sub(margin),
-            end: (self.end + margin).min(WIDTH),
+            end: (self.end + margin).min(WIDTH as u8),
         }
     }
 }
 
 /// Two independent spans per stripe let a note jump without sending the grid between traces.
-pub(super) struct Damage([[Span; 2]; WIDTH / STRIPE]);
+pub(super) struct Damage {
+    spans: [[Span; 2]; WIDTH / MIN_STRIPE],
+    stripe: usize,
+}
 
 impl Damage {
+    fn new(stripes: Stripes) -> Self {
+        Self {
+            spans: [[Span::EMPTY; 2]; WIDTH / MIN_STRIPE],
+            stripe: stripes as usize,
+        }
+    }
+
     pub(super) fn full(rows: Range<usize>, overlay: Option<Window>) -> Self {
-        Self(core::array::from_fn(|i| {
+        let mut damage = Self::new(Stripes::Normal);
+        let stripe = damage.stripe;
+        for (i, pair) in damage.spans[..WIDTH / stripe].iter_mut().enumerate() {
             let mut span = Span {
-                top: rows.start,
-                end: rows.end,
+                top: rows.start as u8,
+                end: rows.end as u8,
             };
             if let Some(list) = overlay
-                && i * STRIPE < list.x + list.width
-                && (i + 1) * STRIPE > list.x
+                && i * stripe < list.x + list.width
+                && (i + 1) * stripe > list.x
             {
                 span = span.union(Span {
-                    top: list.y,
-                    end: list.y + list.height,
+                    top: list.y as u8,
+                    end: (list.y + list.height) as u8,
                 });
             }
-            [span, Span::EMPTY]
-        }))
+            pair[0] = span;
+        }
+        damage
     }
 
     pub(super) fn windows(&self) -> impl Iterator<Item = Window> + '_ {
         let mut x = 0;
-        self.0.chunk_by(|a, b| a == b).flat_map(move |group| {
-            let left = x;
-            let width = group.len() * STRIPE;
-            x += width;
-            group[0]
-                .into_iter()
-                .filter(|s| s.top < s.end)
-                .map(move |s| Window {
-                    x: left,
-                    y: s.top,
-                    width,
-                    height: s.end - s.top,
-                })
-        })
+        self.spans[..WIDTH / self.stripe]
+            .chunk_by(|a, b| a == b)
+            .flat_map(move |group| {
+                let left = x;
+                let width = group.len() * self.stripe;
+                x += width;
+                group[0]
+                    .into_iter()
+                    .filter(|s| s.top < s.end)
+                    .map(move |s| Window {
+                        x: left,
+                        y: usize::from(s.top),
+                        width,
+                        height: usize::from(s.end - s.top),
+                    })
+            })
     }
 }
 
@@ -155,18 +178,20 @@ impl Sweep {
             .map_or(TRAIL, |h| ((h + WIDTH - x) % WIDTH).min(TRAIL));
         (
             Span {
-                top,
-                end: bottom + 1,
+                top: top as u8,
+                end: (bottom + 1) as u8,
             },
             palette.pens[age],
         )
     }
 
-    pub(super) fn damage(&self, previous: &Self, palette: &Palette) -> Damage {
-        Damage(core::array::from_fn(|i| {
+    pub(super) fn damage(&self, previous: &Self, palette: &Palette, stripes: Stripes) -> Damage {
+        let mut damage = Damage::new(stripes);
+        let stripe = damage.stripe;
+        for (i, pair) in damage.spans[..WIDTH / stripe].iter_mut().enumerate() {
             let mut old = Span::EMPTY;
             let mut new = Span::EMPTY;
-            for x in i * STRIPE..(i + 1) * STRIPE {
+            for x in i * stripe..(i + 1) * stripe {
                 let before = previous.column(x, palette);
                 let after = self.column(x, palette);
                 if before != after {
@@ -178,16 +203,18 @@ impl Sweep {
                 core::mem::swap(&mut old, &mut new);
             }
             // Bridge gaps of up to two rows to avoid opening another LCD window.
-            if new.top <= old.end + 2 {
+            *pair = if new.top <= old.end + 2 {
                 [old.union(new), Span::EMPTY]
             } else {
                 [old, new]
-            }
-        }))
+            };
+        }
+        damage
     }
 
     pub(super) fn render(&self, w: Window, palette: &Palette, center: usize, pixels: &mut [Pixel]) {
-        let grid_row = &palette.row[w.x..w.x + w.width];
+        let grid = usize::from(GRID);
+        let first_grid = (grid - w.x % grid) % grid;
         for (dy, row) in pixels.chunks_exact_mut(w.width).enumerate() {
             let y = w.y + dy;
             if y == center {
@@ -195,19 +222,25 @@ impl Sweep {
             } else if y.is_multiple_of(usize::from(GRID)) {
                 row.fill(palette.grid);
             } else {
-                row.copy_from_slice(grid_row);
+                row.fill(palette.background);
+                for pixel in row.iter_mut().skip(first_grid).step_by(grid) {
+                    *pixel = palette.grid;
+                }
             }
         }
         let end = w.y + w.height;
         for dx in 0..w.width {
             let (span, pen) = self.column(w.x + dx, palette);
-            for y in span.top.max(w.y)..span.end.min(end) {
+            for y in usize::from(span.top).max(w.y)..usize::from(span.end).min(end) {
                 pixels[(y - w.y) * w.width + dx] = pen.ink;
             }
             if let Some(halo) = pen.halo {
-                for y in [span.top.checked_sub(1), Some(span.end)]
-                    .into_iter()
-                    .flatten()
+                for y in [
+                    usize::from(span.top).checked_sub(1),
+                    Some(usize::from(span.end)),
+                ]
+                .into_iter()
+                .flatten()
                 {
                     if (w.y..end).contains(&y) {
                         pixels[(y - w.y) * w.width + dx] = halo;
@@ -252,64 +285,66 @@ mod tests {
 
     #[test]
     fn dirty_windows_match_a_full_repaint_across_wrap_stop_and_silence() {
-        let palette = palette();
-        let flat = [120; WIDTH];
-        let saw = core::array::from_fn(|x| 34 + u8::try_from(x % 171).expect("bounded ramp"));
-        let square = core::array::from_fn(|x| if (x / 24) % 2 == 0 { 205 } else { 34 });
-        let mut lcd = vec![OUTSIDE; WIDTH * WIDTH];
-        let mut previous = None;
-        for (trace, head) in [
-            (flat, None),
-            (saw, Some(239)),
-            (square, Some(0)),
-            (square, Some(1)),
-            (saw, Some(16)),
-            (saw, None),
-            (flat, None),
-            (flat, None),
-        ] {
-            let sweep = Sweep { trace, head };
-            let damage = previous.as_ref().map_or_else(
-                || Damage::full(32..208, None),
-                |old| sweep.damage(old, &palette),
-            );
-            let mut touched = vec![false; lcd.len()];
-            for w in damage.windows().flat_map(|w| w.strips(CAPACITY)) {
-                assert!(w.width * w.height <= CAPACITY);
-                let mut strip = vec![OUTSIDE; w.width * w.height];
-                sweep.render(w, &palette, WIDTH / 2, &mut strip);
-                for (dy, row) in strip.chunks_exact(w.width).enumerate() {
-                    let i = (w.y + dy) * WIDTH + w.x;
-                    assert!(touched[i..i + w.width].iter().all(|&p| !p));
-                    touched[i..i + w.width].fill(true);
-                    lcd[i..i + w.width].copy_from_slice(row);
+        for stripes in [Stripes::Fine, Stripes::Normal, Stripes::Wide] {
+            let palette = palette();
+            let flat = [120; WIDTH];
+            let saw = core::array::from_fn(|x| 34 + u8::try_from(x % 171).expect("bounded ramp"));
+            let square = core::array::from_fn(|x| if (x / 24) % 2 == 0 { 205 } else { 34 });
+            let mut lcd = vec![OUTSIDE; WIDTH * WIDTH];
+            let mut previous = None;
+            for (trace, head) in [
+                (flat, None),
+                (saw, Some(239)),
+                (square, Some(0)),
+                (square, Some(1)),
+                (saw, Some(16)),
+                (saw, None),
+                (flat, None),
+                (flat, None),
+            ] {
+                let sweep = Sweep { trace, head };
+                let damage = previous.as_ref().map_or_else(
+                    || Damage::full(32..208, None),
+                    |old| sweep.damage(old, &palette, stripes),
+                );
+                let mut touched = vec![false; lcd.len()];
+                for w in damage.windows().flat_map(|w| w.strips(CAPACITY)) {
+                    assert!(w.width * w.height <= CAPACITY);
+                    let mut strip = vec![OUTSIDE; w.width * w.height];
+                    sweep.render(w, &palette, WIDTH / 2, &mut strip);
+                    for (dy, row) in strip.chunks_exact(w.width).enumerate() {
+                        let i = (w.y + dy) * WIDTH + w.x;
+                        assert!(touched[i..i + w.width].iter().all(|&p| !p));
+                        touched[i..i + w.width].fill(true);
+                        lcd[i..i + w.width].copy_from_slice(row);
+                    }
                 }
+                for (i, pixel) in lcd.iter().enumerate() {
+                    let (x, y) = (i % WIDTH, i / WIDTH);
+                    let a = usize::from(trace[x.saturating_sub(1)]);
+                    let b = usize::from(trace[x]);
+                    let age = head.map_or(TRAIL, |head| (head + WIDTH - x) % WIDTH);
+                    let pen = palette.pens[age.min(TRAIL)];
+                    let paper = if !(32..208).contains(&y) {
+                        OUTSIDE
+                    } else if y == 120 {
+                        CENTER
+                    } else if x % 24 == 0 || y % 24 == 0 {
+                        LINE
+                    } else {
+                        BG
+                    };
+                    let expected = if (a.min(b)..=a.max(b)).contains(&y) {
+                        pen.ink
+                    } else if y + 1 == a.min(b) || y == a.max(b) + 1 {
+                        pen.halo.unwrap_or(paper)
+                    } else {
+                        paper
+                    };
+                    assert_eq!(*pixel, expected, "x={x}, y={y}, head={head:?}");
+                }
+                previous = Some(sweep);
             }
-            for (i, pixel) in lcd.iter().enumerate() {
-                let (x, y) = (i % WIDTH, i / WIDTH);
-                let a = usize::from(trace[x.saturating_sub(1)]);
-                let b = usize::from(trace[x]);
-                let age = head.map_or(TRAIL, |head| (head + WIDTH - x) % WIDTH);
-                let pen = palette.pens[age.min(TRAIL)];
-                let paper = if !(32..208).contains(&y) {
-                    OUTSIDE
-                } else if y == 120 {
-                    CENTER
-                } else if x % 24 == 0 || y % 24 == 0 {
-                    LINE
-                } else {
-                    BG
-                };
-                let expected = if (a.min(b)..=a.max(b)).contains(&y) {
-                    pen.ink
-                } else if y + 1 == a.min(b) || y == a.max(b) + 1 {
-                    pen.halo.unwrap_or(paper)
-                } else {
-                    paper
-                };
-                assert_eq!(*pixel, expected, "x={x}, y={y}, head={head:?}");
-            }
-            previous = Some(sweep);
         }
     }
 
@@ -343,11 +378,16 @@ mod tests {
         };
         let palette = palette();
         let windows: Vec<_> = new
-            .damage(&old, &palette)
+            .damage(&old, &palette, Stripes::Normal)
             .windows()
             .map(|w| (w.x, w.y, w.width, w.height))
             .collect();
         assert_eq!(windows, [(0, 40, WIDTH, 1), (0, 200, WIDTH, 1)]);
-        assert_eq!(new.damage(&new, &palette).windows().count(), 0);
+        assert_eq!(
+            new.damage(&new, &palette, Stripes::Normal)
+                .windows()
+                .count(),
+            0
+        );
     }
 }

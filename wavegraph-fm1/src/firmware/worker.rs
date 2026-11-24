@@ -60,7 +60,7 @@ extern "C" fn wavegraph_dsp_main() -> ! {
             continue;
         };
         let started = cycles();
-        worker.renderer.render(job.slot);
+        worker.renderer.render(job.first_frame(), job.slot);
         job.slot.work = cycles().wrapping_sub(started);
         job.slot.stack_free =
             if measured.is_none_or(|at| started.wrapping_sub(at) >= Timers::CRYSTAL_HZ) {
@@ -74,6 +74,7 @@ extern "C" fn wavegraph_dsp_main() -> ! {
                 core::hint::spin_loop();
             }
         }
+        job.slot.ready_at = cycles();
         worker
             .completed
             .try_send(job)

@@ -9,6 +9,10 @@ pub(super) struct Job<S> {
 }
 
 impl<S> Job<S> {
+    pub(super) fn first_frame(&self) -> u64 {
+        self.first_frame
+    }
+
     /// Low 32 bits of the block number, for the diagnostics display.
     #[allow(
         clippy::cast_possible_truncation,
@@ -21,6 +25,32 @@ impl<S> Job<S> {
 
     pub(super) fn revision(&self) -> Revision {
         self.revision
+    }
+}
+
+/// Time since CPU0 last wrote current PCM, independent of worker activity.
+#[derive(Default)]
+pub(super) enum OutputHealth {
+    #[default]
+    Current,
+    Gap(u32),
+    Starved,
+}
+
+impl OutputHealth {
+    pub(super) fn update(&mut self, now: u32, accepted: bool, timeout: u32) -> (bool, bool) {
+        if accepted {
+            *self = Self::Current;
+            return (false, false);
+        }
+        let first = matches!(self, Self::Current);
+        if first {
+            *self = Self::Gap(now);
+        }
+        if matches!(self, Self::Gap(start) if now.wrapping_sub(*start) >= timeout) {
+            *self = Self::Starved;
+        }
+        (first, matches!(self, Self::Starved))
     }
 }
 
@@ -97,6 +127,53 @@ mod tests {
     use wavegraph::control::EditQueue;
 
     #[test]
+    fn continuously_late_worker_alarms_then_acknowledges_the_first_usable_block() {
+        let mut queue = EditQueue::new();
+        let (mut editor, mut host) = queue.split();
+        let mut receipt = pin!(editor.commit(true));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(receipt.as_mut().poll(&mut cx).is_pending());
+        let mut handoff = Handoff::new([1; OUTPUT_FRAMES]);
+        let mut health = OutputHealth::default();
+        let mut job = None;
+        let mut out = [[0; 2]; OUTPUT_FRAMES];
+        let mut expired = 0;
+        // TIMER4 wraps during a run with one stale completion every two deadlines.
+        let start = u32::MAX - 500;
+        for n in 0u32..2000 {
+            if job.is_none() {
+                job = handoff.issue(|_| host.begin_block(|_| Ok(())));
+            }
+            let mut done = if n % 2 == 1 { job.take() } else { None };
+            expired += u32::from(done.is_some());
+            let accepted = handoff.fill(&mut out, done.as_ref(), |s| s);
+            assert!(!accepted);
+            assert_eq!(
+                health.update(start.wrapping_add(n), accepted, 345),
+                (n == 0, n >= 345)
+            );
+            handoff.finish(&mut host, Refill::Written, &mut done);
+            assert!(receipt.as_mut().poll(&mut cx).is_pending());
+        }
+        assert_eq!(expired, 1000);
+        assert_eq!(health.update(start, false, 345), (false, true)); // full counter wrap
+        assert_eq!(out, [[0; 2]; OUTPUT_FRAMES]);
+        let mut done = handoff.issue(|_| host.begin_block(|_| unreachable!()));
+        let accepted = handoff.fill(&mut out, done.as_ref(), |s| s);
+        assert!(accepted);
+        assert_eq!(
+            health.update(start.wrapping_add(2000), accepted, 345),
+            (false, false)
+        );
+        assert_eq!(out, [[1; 2]; OUTPUT_FRAMES]);
+        handoff.finish(&mut host, Refill::Written, &mut done);
+        assert!(
+            matches!(receipt.as_mut().poll(&mut cx), Poll::Ready(Ok(applied))
+            if applied.first_frame == 2000 * OUTPUT_FRAMES as u64)
+        );
+    }
+
+    #[test]
     fn missed_deadline_keeps_slot_and_receipt_until_fresh_pcm_is_written() {
         let mut queue = EditQueue::new();
         let (mut editor, mut host) = queue.split();
@@ -134,7 +211,7 @@ mod tests {
                 .expect("slot returned");
             assert!(h.fill(&mut out, Some(&job), |s| s));
             assert_eq!(out, [[333; 2]; OUTPUT_FRAMES]);
-            let first_frame = job.first_frame;
+            let first_frame = job.first_frame();
             let mut completed = Some(job);
             h.finish(&mut host, Refill::WouldBlock, &mut completed);
             assert!(completed.is_some());

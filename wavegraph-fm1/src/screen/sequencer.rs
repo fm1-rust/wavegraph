@@ -22,7 +22,7 @@ use embedded_graphics::{
 };
 use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
 use fm1_rticx::{
-    bsp::display::{Display, Error},
+    bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
 };
 use wavegraph::midi::MidiMessage;
@@ -325,8 +325,8 @@ impl Grid {
         self.head = None;
     }
 
-    fn labels(
-        lcd: &mut Display,
+    async fn labels(
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         part: Part,
         clip: &Clip,
@@ -363,7 +363,8 @@ impl Grid {
                 LEFT as u16,
                 16,
                 band.pixels.as_flattened(),
-            )?;
+            )
+            .await?;
         }
         if part.is_kit() {
             let h = if part == Part::Tr808 { 32 } else { 22 };
@@ -376,15 +377,16 @@ impl Grid {
                     LEFT as u16,
                     12,
                     band.pixels.as_flattened(),
-                )?;
+                )
+                .await?;
             }
         }
         Ok(())
     }
 
-    fn buttons(
+    async fn buttons(
         &mut self,
-        lcd: &mut Display,
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         part: Part,
         active: Slot,
@@ -433,7 +435,8 @@ impl Grid {
                 WIDTH,
                 16,
                 button.pixels.as_flattened(),
-            )?;
+            )
+            .await?;
             self.buttons[i] = Some(state);
         }
         Ok(())
@@ -462,7 +465,9 @@ impl Grid {
         let enabled = seq.enabled[seq.channel.index()];
         let key = (slot, bar, enabled);
         let changed = self.previous != Some(key);
-        self.buttons(lcd, strip, part, slot, next, seq.pressed_key_dark)?;
+        let mut lcd = lcd.as_async(clock)?;
+        self.buttons(&mut lcd, strip, part, slot, next, seq.pressed_key_dark)
+            .await?;
         text.number(16, 0, 1, u32::from(bar) + 1, ink(part));
         text.text(17, 0, [b'/', b'0' + clip.bars], ink(part));
         if let Some(head) = head {
@@ -477,15 +482,14 @@ impl Grid {
             text.text(0, 14, b"WHITE KEYS  / SELECT", ink(part));
         }
         if !changed && head == self.head {
-            return Ok(());
+            return lcd.flush().await;
         }
         if changed {
             if self.previous.is_none_or(|p| p.0 != slot) {
-                Self::labels(lcd, strip, part, clip)?;
+                Self::labels(&mut lcd, strip, part, clip).await?;
             }
             self.roll.read(clip, part, bar);
         }
-        let mut lcd = lcd.as_async(clock)?;
         let rows = Roll::rows(part, clip);
         for step in 0..16u8 {
             if !changed && self.head != Some(step) && head != Some(step) {

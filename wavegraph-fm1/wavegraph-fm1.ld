@@ -3,7 +3,9 @@
 /* The panel ISR, 303 renderer and CPU1 worker run in SRAM. Their direct calls
    reach only the lower part of XIP as firmware grows. */
 SECTIONS {
-  .wavegraph_near : { *(.text .text.memcpy .text.wavegraph_boot .text.wavegraph_stack .text.*decay_exp*) }
+  .wavegraph_near : { *(.text .text.memcpy .text.wavegraph_boot .text.wavegraph_stack .text.*decay_exp* .text.*rticx_pi32v2*Restore*Drop4drop
+      .text.*fm1*panel*select .text.*TouchControls*start_column
+      .text.*option*expect_failed .text.*panicking*panic_bounds_check) }
 } INSERT BEFORE .text;
 INCLUDE fm1.ld
 /* Physical flash 0x93000..0xE0000, before Felucca's update staging area.

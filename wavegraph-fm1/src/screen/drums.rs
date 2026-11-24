@@ -8,7 +8,7 @@ use embedded_graphics::{
     framebuffer::Framebuffer,
     mono_font::MonoTextStyle,
     pixelcolor::{
-        BinaryColor, IntoStorage,
+        BinaryColor,
         raw::{BigEndian, RawU1, ToBytes},
     },
     prelude::{Point, Primitive, Size},
@@ -17,7 +17,7 @@ use embedded_graphics::{
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
-    bsp::display::{Display, Error, SIZE},
+    bsp::display::{AsyncDisplay, Error},
     time::Clock,
 };
 use wavegraph_909::Voice;
@@ -70,8 +70,8 @@ pub(super) struct Panel {
 }
 
 impl Panel {
-    fn title(
-        lcd: &mut Display,
+    async fn title(
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         part: Part,
@@ -110,7 +110,8 @@ impl Panel {
             }
             let y = 1 + 8 * band;
             selector.badge.compose(10, y, 112, pixels);
-            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels.as_flattened())?;
+            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels.as_flattened())
+                .await?;
         }
         Ok(())
     }
@@ -161,24 +162,24 @@ impl Panel {
         .expect("infallible framebuffer");
     }
 
-    pub(super) fn status808(
+    pub(super) async fn status808(
         &mut self,
-        lcd: &mut Display,
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         selector: &Selector,
         status: (Channel, bool, &'static str),
         entering: bool,
     ) -> Result<(), Error> {
         if entering || self.status808 != Some(status) {
-            tr808::status(lcd, strip, selector, status)?;
+            tr808::status(lcd, strip, selector, status).await?;
             self.status808 = Some(status);
         }
         Ok(())
     }
 
-    pub(super) fn controls(
+    pub(super) async fn controls(
         &mut self,
-        lcd: &mut Display,
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         selector: &Selector,
         c: wavegraph_808::Controls,
@@ -188,15 +189,14 @@ impl Panel {
         if previous == Some(c) {
             return Ok(());
         }
-        tr808::controls(lcd, strip, selector, c, previous)?;
+        tr808::controls(lcd, strip, selector, c, previous).await?;
         self.controls = Some(c);
         Ok(())
     }
 
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut Display,
-        clock: &mut Clock,
+        lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         entering: bool,
@@ -207,15 +207,15 @@ impl Panel {
             return Ok(());
         }
         if entering {
-            Self::title(lcd, strip, selector, part)?;
-            let rule = selector.shade(ORANGE).into_storage();
-            lcd.fill_rect(0, 52, SIZE, 2, rule)?;
-            lcd.fill_rect(0, 185, SIZE, 2, rule)?;
+            Self::title(lcd, strip, selector, part).await?;
+            let rule = selector.shade(ORANGE);
+            for y in [52, 185] {
+                super::fill_rows(lcd, strip, 0, y..y + 2, rule).await?;
+            }
         }
-        let mut lcd = lcd.as_async(clock)?;
         if part == Part::Tr808 {
             tr808::switches(
-                &mut lcd,
+                lcd,
                 strip,
                 selector,
                 lamps,
@@ -276,7 +276,6 @@ impl Panel {
             )
             .await?;
         }
-        lcd.flush().await?;
         self.previous = Some(lamps);
         Ok(())
     }
