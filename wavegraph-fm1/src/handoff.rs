@@ -1,5 +1,5 @@
 //! One owned DSP slot. ALNK0 is the sole owner of the deadline and the edit host.
-use fm1_audio::{OUTPUT_FRAMES, OutputBlock, Refill};
+use fm1_audio::{OUTPUT_FRAMES, OutputBlock, Refill, RefillInterval};
 use wavegraph::control::{Host, Revision};
 
 pub(super) struct Job<S> {
@@ -57,6 +57,7 @@ impl OutputHealth {
 pub(super) struct Handoff<S> {
     free: Option<S>,
     frame: u64,
+    uncertain: bool,
 }
 
 impl<S> Handoff<S> {
@@ -64,6 +65,7 @@ impl<S> Handoff<S> {
         Self {
             free: Some(slot),
             frame: 0,
+            uncertain: false,
         }
     }
 
@@ -79,6 +81,30 @@ impl<S> Handoff<S> {
         })
     }
 
+    /// Account for releases coalesced before this callback. finish() counts the
+    /// serviced half for both Written and Late. An ambiguous interval reanchors
+    /// the logical clock without claiming a count for unobserved releases.
+    pub(super) fn observe(&mut self, interval: RefillInterval) -> bool {
+        self.uncertain = interval == RefillInterval::Uncertain;
+        match interval {
+            RefillInterval::Elapsed(n) => {
+                #[allow(
+                    clippy::arithmetic_side_effects,
+                    reason = "Nonzero u32 minus one, times 128 frames, fits u64."
+                )]
+                let skipped = u64::from(n.get() - 1) * OUTPUT_FRAMES as u64;
+                self.frame = self.frame.wrapping_add(skipped);
+                skipped != 0
+            }
+            RefillInterval::First => false,
+            RefillInterval::Uncertain => true,
+        }
+    }
+
+    fn current(&self, job: &Job<S>) -> bool {
+        !self.uncertain && job.first_frame == self.frame
+    }
+
     /// Output::render supplies a cleared half. A missing or expired job leaves it silent.
     pub(super) fn fill(
         &self,
@@ -86,7 +112,7 @@ impl<S> Handoff<S> {
         done: Option<&Job<S>>,
         pcm: impl FnOnce(&S) -> &[i32; OUTPUT_FRAMES],
     ) -> bool {
-        if let Some(job) = done.filter(|j| j.first_frame == self.frame) {
+        if let Some(job) = done.filter(|j| self.current(j)) {
             for (frame, &sample) in out.iter_mut().zip(pcm(&job.slot)) {
                 *frame = [sample; 2];
             }
@@ -107,7 +133,7 @@ impl<S> Handoff<S> {
             return;
         }
         if let Some(job) = done.take() {
-            if result == Refill::Written && job.first_frame == self.frame {
+            if result == Refill::Written && self.current(&job) {
                 host.submitted(job.revision, job.first_frame);
             }
             self.free = Some(job.slot);
@@ -125,6 +151,47 @@ mod tests {
         task::{Context, Poll, Waker},
     };
     use wavegraph::control::EditQueue;
+
+    #[test]
+    fn coalesced_or_ambiguous_release_rejects_ready_pcm_and_defers_its_edit() {
+        for (interval, next_block) in [
+            (
+                RefillInterval::Elapsed(2.try_into().expect("two halves")),
+                2,
+            ),
+            (
+                RefillInterval::Elapsed(3.try_into().expect("three halves")),
+                3,
+            ),
+            (RefillInterval::Uncertain, 1),
+        ] {
+            let mut queue = EditQueue::new();
+            let (mut editor, mut host) = queue.split();
+            let mut receipt = pin!(editor.commit(true));
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(receipt.as_mut().poll(&mut cx).is_pending());
+
+            let mut h = Handoff::new([7; OUTPUT_FRAMES]);
+            assert!(!h.observe(RefillInterval::First));
+            let mut done = h.issue(|_| host.begin_block(|_| Ok(())));
+            let mut out = [[0; 2]; OUTPUT_FRAMES];
+            assert!(h.observe(interval));
+            assert!(!h.fill(&mut out, done.as_ref(), |pcm| pcm));
+            assert_eq!(out, [[0; 2]; OUTPUT_FRAMES]);
+            h.finish(&mut host, Refill::Written, &mut done);
+            assert!(receipt.as_mut().poll(&mut cx).is_pending());
+
+            let mut fresh = h.issue(|_| host.begin_block(|_| unreachable!()));
+            assert!(!h.observe(RefillInterval::Elapsed(core::num::NonZeroU32::MIN)));
+            assert!(h.fill(&mut out, fresh.as_ref(), |pcm| pcm));
+            assert_eq!(out, [[7; 2]; OUTPUT_FRAMES]);
+            h.finish(&mut host, Refill::Written, &mut fresh);
+            assert!(
+                matches!(receipt.as_mut().poll(&mut cx), Poll::Ready(Ok(applied))
+                if applied.first_frame == next_block * OUTPUT_FRAMES as u64)
+            );
+        }
+    }
 
     #[test]
     fn continuously_late_worker_alarms_then_acknowledges_the_first_usable_block() {

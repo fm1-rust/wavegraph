@@ -24,6 +24,10 @@ wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
 
 [patch.crates-io]
+# Elapsed DAC intervals (fm1-rust #93), pending the next crates.io release.
+fm1 = { git = "https://github.com/fm1-rust/fm1-rust", rev = "3605e599f420153c1e78fea78996ab45a0a16528" }
+fm1-audio = { git = "https://github.com/fm1-rust/fm1-rust", rev = "3605e599f420153c1e78fea78996ab45a0a16528" }
+
 # Share the workspace PCM type with the FM-1 audio mixer.
 wavegraph-sample = { path = "wavegraph-sample" }
 

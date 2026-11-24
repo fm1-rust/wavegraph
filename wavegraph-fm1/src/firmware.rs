@@ -979,7 +979,7 @@ mod app {
             self.shared().stream.lock(|stream| {
                 let output = OUTPUT.init_with(|| Output::start(port).expect("audio clock"));
                 // Clear the muted half left pending by the BSP's 5 ms DAC startup.
-                output.render(fm1_audio::MasterLevel::MIN, |_| {});
+                output.render_with_interval(fm1_audio::MasterLevel::MIN, |_, _| {});
                 *stream = Some(Playback {
                     output,
                     completed,
@@ -1031,7 +1031,9 @@ mod app {
                 return;
             };
             let healthy = crate::peer::healthy();
-            let result = output.render(master, |out| {
+            let mut dma_gap = false;
+            let result = output.render_with_interval(master, |out, interval| {
+                dma_gap = self.handoff.observe(interval);
                 if !healthy {
                     return;
                 }
@@ -1189,11 +1191,11 @@ mod app {
             }
             let previous = self.last_start.replace(started);
             let service_miss = self.stats.record_with_refill(started, refill_ended, result);
-            if service_miss || silence {
+            if service_miss || silence || dma_gap {
                 use crate::overload::Cause;
                 let elapsed = cycles().wrapping_sub(started);
                 let gap = previous.map_or(0, |prev| started.wrapping_sub(prev));
-                let cause = if result == Refill::Late {
+                let cause = if dma_gap || result == Refill::Late {
                     Cause::Dma
                 } else if silence {
                     Cause::Worker
