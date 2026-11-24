@@ -24,8 +24,6 @@ wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
 
 [patch.crates-io]
-# PR #90 adds the safe USB-MIDI constructor after 0.2.0-rc.0.
-fm1 = { git = "https://github.com/fm1-rust/fm1-rust.git", rev = "2d524a766422f849a7ef0d50df7f59396910e4b4" }
 # Share the workspace PCM type with the FM-1 audio mixer.
 wavegraph-sample = { path = "wavegraph-sample" }
 
