@@ -23,25 +23,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --locked
 
-  arm-linux:
-    name: Test on 32-bit Arm Linux
+  test-cross:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-unknown-linux-gnueabihf
-      - name: Install the Arm linker and QEMU
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross qemu-user
-      - name: Run workspace tests
-        env:
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUNNER: qemu-arm -L /usr/arm-linux-gnueabihf
-        run: cargo test --workspace --all-features --locked --target armv7-unknown-linux-gnueabihf
+      - uses: taiki-e/install-action@cross
+      - run: cross test --workspace --all-features --locked --target armv7-unknown-linux-gnueabihf
 
   msrv:
     runs-on: ubuntu-latest
