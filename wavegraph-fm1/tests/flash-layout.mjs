@@ -1,7 +1,8 @@
 // Exercise the actual installer against a simulated FM-1 with pre-existing flash data.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [flasher, image] = process.argv.slice(2);
@@ -40,11 +41,17 @@ for (const file of files) {
 // Catch accidental copies left in code, including references to a library's stock banks.
 const code = raw.subarray(0, app.len);
 const upper = raw.subarray(assets.addr - app.addr);
+function checkAsset(name, bytes) {
+    const at = upper.indexOf(bytes);
+    assert.ok(at >= 0, `${name} missing from assets.bin`);
+    assert.equal(upper.indexOf(bytes, at + 1), -1, `${name} repeated in assets.bin`);
+    assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
+}
+
 for (const [path, extension] of [
     ["../../instruments/wavegraph-909/samples/", ".s16le"],
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
     ["../assets/", ".2bpp"],
-    ["../assets/fonts/", ".raw"],
     ["../assets/panel-type/", ".raw"],
     ["../assets/panel-type/", ".txt"],
     ["../patterns/", ".txt"],
@@ -53,10 +60,20 @@ for (const [path, extension] of [
     const names = readdirSync(dir).filter(name => name.endsWith(extension));
     assert.ok(names.length, path);
     for (const name of names) {
-        const bytes = readFileSync(new URL(name, dir));
-        const at = upper.indexOf(bytes);
-        assert.ok(at >= 0, `${name} missing from assets.bin`);
-        assert.equal(upper.indexOf(bytes, at + 1), -1, `${name} repeated in assets.bin`);
-        assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
+        checkAsset(name, readFileSync(new URL(name, dir)));
     }
+}
+
+// The build generates these three atlases. Use the locked crate's originals
+// as independent references when checking the packaged firmware.
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--format-version=1"], {
+    cwd: new URL("../", import.meta.url),
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+}));
+const graphics = metadata.packages.filter(pkg => pkg.name === "embedded-graphics");
+assert.equal(graphics.length, 1, "expected one locked embedded-graphics version");
+const ascii = resolve(dirname(graphics[0].manifest_path), "fonts/raw/ascii");
+for (const name of ["font_6x10.raw", "font_7x13_bold.raw", "font_9x15_bold.raw"]) {
+    checkAsset(name, readFileSync(resolve(ascii, name)));
 }

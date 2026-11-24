@@ -17,7 +17,7 @@ use crate::{
         pattern::{BAR, Clip, SLOTS, Slot},
     },
 };
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     pixelcolor::raw::ToBytes,
     prelude::{Point, Size},
     text::Alignment,

@@ -1,7 +1,7 @@
 //! Native-size two-bit coverage masks. Four pixels per byte, most significant first.
 use crate::{assets::flash_asset, instrument::Part};
-use embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
 use fm1_graphics::Rgb565;
+use fm1_graphics::embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
 
 pub(super) fn panel_type(part: Part) -> bool {
     matches!(

@@ -239,10 +239,11 @@ dependencies = [
 
 [[package]]
 name = "fm1-graphics"
-version = "0.2.0-rc.0"
+version = "0.2.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d81875d713a581e1dee55a937ed9d5812e03691a3ce7d637dad9a7f3a7687bb"
+checksum = "cd3fbdf47c34e5fd8da83170c5ce692b9a8147c5357f797d5868afa9ba855a1f"
 dependencies = [
+ "embedded-graphics",
  "embedded-graphics-core",
  "fm1",
 ]
@@ -919,7 +920,6 @@ name = "wavegraph-fm1"
 version = "0.0.0"
 dependencies = [
  "critical-section",
- "embedded-graphics",
  "fm1-audio",
  "fm1-controls",
  "fm1-graphics",

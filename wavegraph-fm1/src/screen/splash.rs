@@ -9,7 +9,7 @@ use crate::{
     capture::{Trace, WIDTH},
     scope::segment,
 };
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     Drawable,
     draw_target::DrawTarget,
     framebuffer::{Framebuffer, buffer_size},

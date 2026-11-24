@@ -9,7 +9,7 @@ use crate::{
     fx::{INSERT_SLOTS, Insert, KeySource},
 };
 use core::{ops::Range, str};
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };

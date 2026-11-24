@@ -3,7 +3,7 @@
 use super::{BAND, WIDTH, drums, jp8080, microwave, mixer::Band};
 use crate::{arp::Controls, firmware::Labels, instrument::Part};
 use core::fmt::Write;
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };

@@ -27,7 +27,7 @@ static PATTERN_NOTICE: [u8; include_bytes!("../patterns/NOTICE.txt").len()] =
 
 #[cfg(target_os = "none")]
 pub(crate) mod fonts {
-    use embedded_graphics::{
+    use fm1_graphics::embedded_graphics::{
         image::ImageRaw,
         mono_font::{MonoFont, ascii},
     };
@@ -35,10 +35,13 @@ pub(crate) mod fonts {
     // The ASCII atlases have 16 glyphs per row. Reuse the upstream font metrics
     // and glyph mapping with the bitmap stored in the FM-1 asset partition.
     macro_rules! font {
-        ($name:ident, $file:literal) => {
+        ($name:ident) => {
             pub(crate) const $name: MonoFont<'static> = MonoFont {
                 image: ImageRaw::new(
-                    super::flash_asset!(u8, include_bytes!(concat!("../assets/fonts/", $file))),
+                    super::flash_asset!(
+                        u8,
+                        include_bytes!(concat!(env!("OUT_DIR"), "/", stringify!($name), ".raw"))
+                    ),
                     16 * ascii::$name.character_size.width,
                 ),
                 ..ascii::$name
@@ -46,9 +49,9 @@ pub(crate) mod fonts {
         };
     }
 
-    font!(FONT_6X10, "font_6x10.raw");
-    font!(FONT_7X13_BOLD, "font_7x13_bold.raw");
-    font!(FONT_9X15_BOLD, "font_9x15_bold.raw");
+    font!(FONT_6X10);
+    font!(FONT_7X13_BOLD);
+    font!(FONT_9X15_BOLD);
 }
 
 pub(crate) const CYMBALS: Samples<'static> = Samples {

@@ -9,13 +9,13 @@ use crate::{
     sequencer::pattern::Automation,
 };
 use core::{fmt::Write, str};
-use embedded_graphics::{
+use fm1_graphics::Rgb565;
+use fm1_graphics::embedded_graphics::{
     Drawable,
     prelude::{Point, Primitive, RgbColor, Size},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Alignment,
 };
-use fm1_graphics::Rgb565;
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Error},
     time::Clock,

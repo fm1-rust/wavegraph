@@ -5,7 +5,7 @@ use crate::{
     envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
 };
 use core::fmt::Write;
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };

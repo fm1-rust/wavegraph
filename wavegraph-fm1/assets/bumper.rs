@@ -1,6 +1,7 @@
 //! Render the boot cue on the build host so it costs no synth voices during startup.
 
 mod boot_timing;
+mod fonts;
 mod patterns;
 
 use boot_timing::{ACCENT_A, FIRST_KNOCK, HIGH_D, SLIDE_C};
@@ -99,12 +100,14 @@ fn knocks(mix: &mut [f32]) {
 )]
 fn main() {
     println!("cargo:rerun-if-changed=assets/bumper.rs");
+    println!("cargo:rerun-if-changed=assets/fonts.rs");
     println!("cargo:rerun-if-changed=assets/boot_timing.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
         println!("cargo:rerun-if-env-changed=PI32V2_BIN");
         println!("cargo:rerun-if-changed=runtime");
         let clang = PathBuf::from(env::var_os("PI32V2_BIN").expect("pi32v2 LLVM")).join("clang");
         let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build directory"));
+        fonts::write_atlases(&out);
         println!(
             "cargo:rustc-link-arg=-Map={}",
             out.join("wavegraph-fm1.map").display()

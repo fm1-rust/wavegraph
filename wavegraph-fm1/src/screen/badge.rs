@@ -3,7 +3,7 @@
 use super::TextGrid;
 use crate::panel::Channel;
 use core::ops::Range;
-use embedded_graphics::pixelcolor::{IntoStorage, RgbColor, raw::ToBytes};
+use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, RgbColor, raw::ToBytes};
 use fm1_graphics::{Rgb565, palette};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error, SIZE},
