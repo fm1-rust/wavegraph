@@ -1170,7 +1170,11 @@ impl Instrument<'_> {
     /// Advance the clip and arp clocks without rendering inaudible DSP blocks.
     /// Parking the clip lanes releases their old gates; re-enabling them in
     /// the next render chases the controllers at the new playhead.
-    pub(super) fn skip_frames(&mut self, frames: usize) -> Result<(), Error> {
+    pub(super) fn skip_frames(
+        &mut self,
+        frames: usize,
+        mut remember_cc: impl FnMut(Channel, u8, u8),
+    ) -> Result<(), Error> {
         let Some(tracks) = &self.previous else {
             return Ok(());
         };
@@ -1195,7 +1199,13 @@ impl Instrument<'_> {
                 }
                 Ok(())
             },
-            |_, _| {},
+            |c, event| {
+                // Parking a lane releases slide and restores its panel controls.
+                // Preserve those values even if STOP or mute prevents a later chase.
+                if let MidiMessage::Control(cc, value) = event.message {
+                    remember_cc(c, cc, value);
+                }
+            },
         )?;
         for (i, arp) in self.arps.iter_mut().enumerate() {
             let track = &tracks[i];
@@ -1468,15 +1478,17 @@ mod tests {
         Note { number, velocity }
     }
 
-    #[test]
-    fn skipped_factory_slide_off_reaches_the_midi_receiver() -> Result<(), Error> {
+    fn check_factory_slide_recovery(
+        blocks: usize,
+        change: impl Fn(&mut Instrument<'_>),
+        expected: u8,
+    ) -> Result<(), Error> {
         use crate::{
             bass::CC_SLIDE,
             midi_out::{Batch, OutputQueue},
         };
         use fm1_audio::OUTPUT_FRAMES;
 
-        const SKIPPED_BLOCKS: usize = 6;
         for gap in [false, true] {
             with_instrument(44_118, |engine| {
                 let tracks = Track::rack(Navigation::INITIAL.assignments);
@@ -1486,49 +1498,78 @@ mod tests {
                 let session = out.session().expect("connected");
                 let mut batch = Batch::default();
                 let mut slide = None;
-                let mut render = |engine: &mut Instrument<'_>, out: &mut OutputQueue| {
-                    batch.begin(session);
-                    engine.render_with_midi(&tracks, &mut buses, |c, e| batch.push(c, e))?;
-                    out.append(&batch);
-                    let mut packets = [[0; 4]; 16];
-                    loop {
-                        let (revision, count) = out.peek(&mut packets);
-                        if count == 0 {
-                            break;
-                        }
-                        for &[_, status, cc, value] in &packets[..count] {
-                            if (status, cc) == (0xb0, CC_SLIDE) {
-                                slide = Some(value);
+                let mut render =
+                    |engine: &mut Instrument<'_>, out: &mut OutputQueue, batch: &mut Batch| {
+                        batch.begin(session);
+                        engine.render_with_midi(&tracks, &mut buses, |c, e| batch.push(c, e))?;
+                        out.append(batch);
+                        let mut packets = [[0; 4]; 16];
+                        loop {
+                            let (revision, count) = out.peek(&mut packets);
+                            if count == 0 {
+                                break;
                             }
+                            for &[_, status, cc, value] in &packets[..count] {
+                                if (status, cc) == (0xb0, CC_SLIDE) {
+                                    slide = Some(value);
+                                }
+                            }
+                            out.sent(revision, count);
                         }
-                        out.sent(revision, count);
-                    }
-                    Ok::<_, Error>(slide)
-                };
+                        Ok::<_, Error>(slide)
+                    };
                 engine.transport.toggle();
                 let mut receiver = None;
                 for _ in 0..1000 {
-                    receiver = render(engine, &mut out)?;
+                    receiver = render(engine, &mut out, &mut batch)?;
                     if receiver == Some(127) {
                         break;
                     }
                 }
                 assert_eq!(receiver, Some(127), "first factory slide on channel 1");
 
-                // The clip releases slide during these six blocks at the factory tempo.
                 if gap {
                     out.silence();
-                    engine.skip_frames(SKIPPED_BLOCKS * OUTPUT_FRAMES)?;
+                    let frames = blocks.checked_mul(OUTPUT_FRAMES).expect("test frame count");
+                    engine.skip_frames(frames, |c, cc, value| {
+                        batch.remember_cc(c, cc, value);
+                    })?;
                 } else {
-                    for _ in 0..SKIPPED_BLOCKS {
-                        render(engine, &mut out)?;
+                    for _ in 0..blocks {
+                        render(engine, &mut out, &mut batch)?;
                     }
                 }
-                assert_eq!(render(engine, &mut out)?, Some(0), "gap = {gap}");
+                change(engine);
+                assert_eq!(
+                    render(engine, &mut out, &mut batch)?,
+                    Some(expected),
+                    "blocks = {blocks}, gap = {gap}"
+                );
                 Ok(())
             })?;
         }
         Ok(())
+    }
+
+    #[test]
+    fn skipped_factory_slide_off_reaches_the_midi_receiver() -> Result<(), Error> {
+        // The slide is still on after one block and releases within six.
+        check_factory_slide_recovery(1, |_| {}, 127)?;
+        check_factory_slide_recovery(6, |_| {}, 0)
+    }
+
+    #[test]
+    fn stopping_during_a_gap_leaves_slide_off() -> Result<(), Error> {
+        check_factory_slide_recovery(6, |engine| engine.transport.toggle(), 0)
+    }
+
+    #[test]
+    fn muting_during_a_gap_leaves_slide_off() -> Result<(), Error> {
+        check_factory_slide_recovery(
+            6,
+            |engine| engine.sequences[Channel::One.index()] = false,
+            0,
+        )
     }
 
     #[test]
@@ -1549,7 +1590,7 @@ mod tests {
                 // output and compare the following bar to uninterrupted playback.
                 const BLOCKS: usize = 350;
                 if gap {
-                    engine.skip_frames(BLOCKS * 128)?;
+                    engine.skip_frames(BLOCKS * 128, |_, _, _| {})?;
                     assert!(
                         engine
                             .events

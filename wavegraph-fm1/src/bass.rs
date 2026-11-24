@@ -9,6 +9,13 @@ pub(super) const CC_SLIDE: u8 = 102;
 pub(super) const CC_WAVE: u8 = 70;
 /// In Knob order, followed by the waveform switch. Attack and waveform are WaveGraph extensions.
 pub(super) const CONTROLLERS: [u8; 9] = [74, 71, 12, 75, 104, 73, 16, 17, CC_WAVE];
+// TB-03 delay time and feedback are sent only to the external instrument.
+const DELAY_CCS: [u8; 2] = [18, 19];
+pub(super) const AUTOMATION_COUNT: usize = CONTROLLERS.len() + DELAY_CCS.len();
+
+pub(super) fn automation_ccs() -> impl Iterator<Item = u8> {
+    CONTROLLERS.into_iter().chain(DELAY_CCS)
+}
 
 /// MIDI cutoff follows the same seven octaves as the panel, at seven-bit resolution.
 const MIDI_CUTOFF: [u16; 128] = [

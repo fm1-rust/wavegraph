@@ -100,7 +100,13 @@ impl Renderer {
         if skipped != 0 {
             // CPU0 stops an unresponsive worker after one second.
             let frames = usize::try_from(skipped).expect("one outstanding render slot");
-            graph.skip_frames(frames).expect("bounded recovery events");
+            graph
+                .skip_frames(frames, |c, cc, value| {
+                    if block.usb_session.is_some() {
+                        block.midi.remember_cc(c, cc, value);
+                    }
+                })
+                .expect("bounded recovery events");
         }
         self.next_frame = first_frame.wrapping_add(OUTPUT_FRAMES as u64);
         if graph.half_gain != block.half_gain {

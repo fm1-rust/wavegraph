@@ -68,26 +68,26 @@ include!(concat!(env!("OUT_DIR"), "/patterns.rs"));
 
 /// Last value actually written by each 303 automation lane (255 means untouched).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Automation([u8; bass::CONTROLLERS.len()]);
+pub(crate) struct Automation([u8; bass::AUTOMATION_COUNT]);
 
 impl Automation {
-    pub(crate) const EMPTY: Self = Self([255; bass::CONTROLLERS.len()]);
+    pub(crate) const EMPTY: Self = Self([255; bass::AUTOMATION_COUNT]);
 
     pub(crate) fn set(&mut self, cc: u8, value: u8) {
-        if let Some(i) = bass::CONTROLLERS.iter().position(|&n| n == cc) {
+        if cc == 121 {
+            // Reset All Controllers also retires the receiver's external delay state.
+            self.0[bass::CONTROLLERS.len()..].fill(255);
+        } else if let Some(i) = bass::automation_ccs().position(|n| n == cc) {
             self.0[i] = value;
         }
     }
 
     pub(crate) fn get(self, cc: u8) -> Option<u8> {
-        let i = bass::CONTROLLERS.iter().position(|&n| n == cc)?;
+        let i = bass::automation_ccs().position(|n| n == cc)?;
         (self.0[i] < 128).then_some(self.0[i])
     }
 
     pub(crate) fn values(self) -> impl Iterator<Item = (u8, u8)> {
-        bass::CONTROLLERS
-            .into_iter()
-            .zip(self.0)
-            .filter(|&(_, v)| v < 128)
+        bass::automation_ccs().zip(self.0).filter(|&(_, v)| v < 128)
     }
 }
