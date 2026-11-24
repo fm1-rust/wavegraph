@@ -16,6 +16,11 @@ pub(super) struct ScopeUpdates {
 }
 
 impl ScopeUpdates {
+    #[cfg(target_os = "none")]
+    pub(super) fn missed(&mut self) {
+        self.gap = true;
+    }
+
     /// A visible trace needs every contiguous block. Other pages only need
     /// settings and graph gain changes. Retry until the observer accepts one.
     pub(super) fn publish(

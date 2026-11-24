@@ -5,7 +5,7 @@ use crate::{
     bass::{Controls, Knob, envelope as bass_env},
     capture::{HEIGHT, WIDTH},
     envelope::{EnvelopeControls, EnvelopeTarget},
-    firmware::{Frame, Labels, Motion},
+    firmware::{Frame, Labels, Motion, Timing},
     instrument::Part,
     panel::{CHANNELS, Channel, View, preset_age},
     scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
@@ -17,7 +17,7 @@ use core::{
     task::{Context, Poll},
 };
 use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
-use fm1_graphics::{Rgb565, TextGrid, Waveform, WaveformStyle, palette};
+use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
         display::{Display, Error, SIZE},
@@ -31,6 +31,7 @@ mod arp;
 mod badge;
 mod channel_fx;
 mod drums;
+mod envelope_plot;
 mod jp8080;
 mod master_fx;
 mod microwave;
@@ -41,6 +42,7 @@ mod splash;
 mod tb303;
 mod tr808;
 
+use envelope_plot::Plot;
 use selector::{Menu, Selector};
 
 const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
@@ -81,7 +83,7 @@ const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
 const BASS_MUTED: Rgb565 = Rgb565::new(7, 15, 8);
 const LANE_INKS: [Rgb565; 3] = [SILVER.trace, OXIDE_RED, Rgb565::new(1, 18, 15)];
 const LANE_X: u16 = 42;
-type Lane = Waveform<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
+type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
 
@@ -104,6 +106,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
+    Timing,
     Scope(Channel, Part),
     Arp(Channel, Part),
     Fx(Channel, Part),
@@ -115,8 +118,8 @@ enum Page {
 }
 
 pub(super) struct Screen {
-    plot: &'static mut Waveform<WIDTH, WIDTH>,
-    lanes: [&'static mut Lane; 3],
+    plot: &'static mut Plot<WIDTH, WIDTH>,
+    lanes: &'static mut [Lane; 3],
     text: &'static mut TextGrid,
     strip: &'static mut [[u8; 2]; BAND * WIDTH],
     selector: &'static mut Selector,
@@ -138,28 +141,16 @@ pub(super) struct Screen {
 
 impl Screen {
     pub(super) fn new() -> Self {
-        static PLOT: StaticCell<Waveform<WIDTH, WIDTH>> = StaticCell::new();
-        static LANES: [StaticCell<Lane>; 3] = [const { StaticCell::new() }; 3];
+        static PLOT: ConstStaticCell<Plot<WIDTH, WIDTH>> = ConstStaticCell::new(Plot::new());
+        static LANES: ConstStaticCell<[Lane; 3]> = ConstStaticCell::new([const { Plot::new() }; 3]);
         // Initialize the overlay buffers in SRAM instead of storing empty pixels in flash.
         static SELECTOR: StaticCell<Selector> = StaticCell::new();
         static TEXT: StaticCell<TextGrid> = StaticCell::new();
         static STRIP: ConstStaticCell<[[u8; 2]; BAND * WIDTH]> =
             ConstStaticCell::new([[0; 2]; BAND * WIDTH]);
         Self {
-            plot: PLOT.init_with(|| Waveform::new(0, 0).expect("panel-sized scope")),
-            lanes: core::array::from_fn(|i| {
-                LANES[i].init_with(|| {
-                    let mut lane =
-                        Waveform::new(LANE_X, [64, 112, 160][i]).expect("303 envelope lane");
-                    lane.set_style(WaveformStyle {
-                        trace: LANE_INKS[i],
-                        grid_y: 0,
-                        center: SILVER.grid,
-                        ..SILVER
-                    });
-                    lane
-                })
-            }),
+            plot: PLOT.take(),
+            lanes: LANES.take(),
             text: TEXT.init_with(|| TextGrid::with_background(STYLE.background)),
             strip: STRIP.take(),
             selector: SELECTOR.init_with(Selector::new),
@@ -184,7 +175,6 @@ impl Screen {
         self.selector.badge.change_view(style.background);
         self.dot = None;
         self.dot_background = style.background;
-        self.plot.set_style(style);
         // A new page can reuse the same colors over different artwork.
         self.plot.invalidate();
         *self.text = TextGrid::with_background(style.background);
@@ -256,7 +246,9 @@ impl Screen {
                     *self.text = TextGrid::with_background(face);
                 }
             }
-            self.plot.paint_async(lcd, &controls.trace(), clock).await?;
+            self.plot
+                .paint(lcd, clock, self.strip, (0, 0), style, &controls.trace())
+                .await?;
             if entering {
                 // The curve's dirty tiles stay between the two label bands.
                 let background = face.into_storage();
@@ -329,10 +321,8 @@ impl Screen {
         if previous != Some(page) {
             if !matches!(previous, Some(Page::BassEnvelope(..))) {
                 self.change_view(SILVER);
-                // The three lane plots occupy part of the full-size scope's pixel area.
-                self.plot.invalidate();
                 lcd.fill_rect(0, 0, SIZE, SIZE, SILVER.background.into_storage())?;
-                for lane in &mut self.lanes {
+                for lane in &mut *self.lanes {
                     lane.invalidate();
                 }
                 self.text.text(12, 0, b"ENV", OXIDE_RED);
@@ -347,8 +337,27 @@ impl Screen {
                 self.text.text(0, 14, b"PREVIEW    96 MS/DIV", BASS_MUTED);
             }
             if !matches!(previous, Some(Page::BassEnvelope(old, _)) if old == controls) {
-                for (lane, trace) in self.lanes.iter_mut().zip(&bass_env::traces(controls)) {
-                    lane.paint_async(lcd, trace, clock).await?;
+                for (i, (lane, trace)) in self
+                    .lanes
+                    .iter_mut()
+                    .zip(&bass_env::traces(controls))
+                    .enumerate()
+                {
+                    let style = WaveformStyle {
+                        trace: LANE_INKS[i],
+                        grid_y: 0,
+                        center: SILVER.grid,
+                        ..SILVER
+                    };
+                    lane.paint(
+                        lcd,
+                        clock,
+                        self.strip,
+                        (LANE_X, [64, 112, 160][i]),
+                        style,
+                        trace,
+                    )
+                    .await?;
                 }
             }
             self.bass_envelope_labels(controls, selected);
@@ -447,6 +456,46 @@ impl Screen {
                     bank,
                 )
                 .await?;
+        }
+        self.text.paint_async(lcd, clock).await
+    }
+
+    pub(super) async fn timing(
+        &mut self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        t: Timing,
+    ) -> Result<(), Error> {
+        // These leaf routines only read the linker-bounded, painted CPU0 stacks.
+        unsafe extern "C" {
+            safe fn wavegraph_usp_free() -> u32;
+            safe fn wavegraph_ssp_free() -> u32;
+        }
+        if self.page.replace(Page::Timing) != Some(Page::Timing) {
+            self.selector.select(None);
+            self.change_view(STYLE);
+            lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
+            self.text.text(0, 0, b"CPU0 / CPU1 HELD", palette::GREEN);
+        }
+        for (i, (label, value)) in [
+            ("USP FREE B", wavegraph_usp_free()),
+            ("SSP FREE B", wavegraph_ssp_free()),
+            ("REFILL US", t.refill.div_ceil(24)),
+            ("PLAY US", t.playing_refill.div_ceil(24)),
+            ("WRITE US", t.commit.div_ceil(24)),
+            ("ALNK US", t.irq.div_ceil(24)),
+            ("WORKER US", t.worker.div_ceil(24)),
+            ("OVERRUNS", t.overruns),
+            ("SILENCES", t.silences),
+            ("DISCARDS", t.discards),
+            ("DROP BLOCK", t.last_discard),
+            ("EDIT BLOCK", t.last_edit),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.text.text(0, 2 + i, label, palette::MUTED);
+            self.text.number(10, 2 + i, 10, value, palette::GREEN);
         }
         self.text.paint_async(lcd, clock).await
     }

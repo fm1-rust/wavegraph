@@ -508,6 +508,50 @@ it picks the instrument for the highlighted slot. The picker highlights the
 active row, applies each detent immediately and closes one second after the
 last turn.
 
+## CPU0 measurements
+
+Hold **SAVE** to read measurements since boot. Release it to return to the page
+you were using. Press PLAY, switch between the instrument, SEQ, GLO, FX and ENV
+pages, change a pattern and turn a knob before reading the display.
+
+- **USP FREE B** and **SSP FREE B** are contiguous untouched bytes at the bottom
+  of the 16 KiB user and 26 KiB supervisor stacks. The reset prefix paints both
+  before Rust starts. The display scans the paint with interrupts enabled.
+- **REFILL US** is the maximum time from ALNK0 entry through a serviced refill,
+  including a late return. **PLAY US** tracks the same peak while the transport
+  is running. **WRITE US** shows the peak for successful DMA writes and **ALNK US** also
+  includes the subsequent interrupt work. Times round up from the 24 MHz clock.
+  Compare them with the 69,632-tick (2,901.3 µs) half-buffer period.
+  **OVERRUNS** counts the BSP's late DMA, interrupt duration and service gap checks.
+
+The startup prefix holds CPU1 before the CRT touches RAM. The linker reserves a
+32-byte-aligned 4,672-byte mailbox, an 8 KiB CPU1 user stack, a 1 KiB CPU1
+supervisor stack and at least 1 KiB of spare SRAM below the CPU0 stacks. The
+CPU1 sizes are provisional until that core runs the real renderer on hardware.
+Envelope plots retain their previous traces and share the display's pixel strip.
+The selector stores its white ink and reuses one backing mask for every highlighted row.
+
+### CPU0 render worker
+
+ALNK0 pulls completed PCM from one CPU0 render task, one 128-frame period
+ahead. The renderer owns its graph and scratch buses. Its job carries the
+settings, changed chords, cue and USB session snapshot. The result includes
+mono Q23 PCM, a first-frame tag and the WaveGraph edit revision. CPU0 owns
+MASTER gain, DMA, USB, the display and both edit-queue endpoints. The RTICX
+channels transfer an exclusive slot reference between CPU0 tasks. A future
+CPU1 transport will need its own publication protocol on the reserved lines.
+
+The default build applies FX gain edits at the next available block. To exercise
+the late-block fallback on the board, build with
+`./wavegraph-fm1/build.sh --features late-block-probe`. In that build, press
+PLAY, enter **FX**, hold **SAVE**, and turn **ALGORITHM** one detent. This holds
+the edited job until ALNK0 writes a silent half. The worker then
+returns the expired slot. On the next refill CPU0 discards it and issues a
+fresh job. In an otherwise clean run **SILENCES** rises by two, **DISCARDS**
+by one, and **EDIT BLOCK** is two greater than **DROP BLOCK**. Both block
+numbers show the low 32 bits. **WORKER US** measures the longest render, excluding the
+test gate. A DMA miss or a written fallback leaves the edit receipt pending.
+
 ## Audio and display
 
 Every 128-frame ALNK0 block merges frame-stamped factory pattern events with

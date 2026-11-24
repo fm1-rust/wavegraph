@@ -18,7 +18,7 @@ fn play<const N: usize>(
         );
     }
     let mut out = Output::new();
-    rack.render_with_midi(keys.tracks, buses, |channel, event| {
+    rack.render_with_midi(&keys.tracks, buses, |channel, event| {
         out.push((channel, event))
     })?;
     Ok(out)

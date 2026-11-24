@@ -4,6 +4,8 @@
     reason = "RTICX generates public task traits and initializers."
 )]
 
+mod render;
+
 use crate::{
     bass::{Controls, Knob},
     capture::Trace,
@@ -48,7 +50,7 @@ impl Settings {
         master: MasterLevel::MIN,
     };
 
-    fn labels(self, half_gain: bool) -> Labels {
+    fn labels(&self, half_gain: bool) -> Labels {
         let channel = self.nav.focus;
         let track = self.tracks[channel.index()];
         Labels {
@@ -78,7 +80,7 @@ impl Settings {
         }
     }
 
-    fn sel_lamp(self) -> bool {
+    fn sel_lamp(&self) -> bool {
         match self.nav.view {
             View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
             View::Fx => {
@@ -134,31 +136,45 @@ pub struct Motion {
     pub(super) wave_frames: [u8; CHANNELS],
 }
 
+/// CPU0 service timings in 24 MHz TIMER4 ticks. Peaks cover this whole boot.
+#[derive(Clone, Copy, Default)]
+pub struct Timing {
+    pub(super) visible: bool,
+    pub(super) refill: u32,
+    pub(super) playing_refill: u32,
+    pub(super) commit: u32,
+    pub(super) irq: u32,
+    pub(super) overruns: u32,
+    pub(super) worker: u32,
+    pub(super) silences: u32,
+    pub(super) discards: u32,
+    pub(super) last_discard: u32,
+    pub(super) last_edit: u32,
+}
+
 #[derive(Clone, Copy)]
 pub struct Frame {
     pub(super) trace: Trace,
     pub(super) labels: Labels,
 }
 
-#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
+#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1, SOFT2])]
 mod app {
-    use super::{Frame, Labels, Motion, Performance, Settings};
+    use super::render::{RenderBlock, Renderer};
+    use super::{Frame, Labels, Motion, Performance, Settings, Timing};
     use crate::{
         bumper::Bumper,
         capture::{Capture, FLAT, Scale, ScopeUpdates},
+        handoff::{Handoff, Job},
         inserts::BassInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
-            Part, Programs, RoutedEvents, STRIP_BUS, Track,
+            Part, Programs, RoutedEvents, Track,
         },
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
-        midi_out::{Batch, OutputQueue},
-        mixer::Meter,
+        midi_out::OutputQueue,
         overload::Overloads,
-        panel::{
-            Assignment, CHANNELS, Channel, Navigation, PageButton, View, pattern_press_lamp,
-            preset_age,
-        },
+        panel::{CHANNELS, Channel, Navigation, PageButton, View, pattern_press_lamp, preset_age},
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer, pattern::Slot},
     };
@@ -182,7 +198,7 @@ mod app {
     use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
-    use wavegraph::control::{Controller, EditQueue, Host};
+    use wavegraph::control::{Controller, EditQueue, Host, Revision};
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
@@ -223,6 +239,8 @@ mod app {
         leds: Leds,
         frame: Frame,
         overloads: Overloads,
+        timing: Timing,
+        stream: Option<&'static mut Output>,
         motion: Motion,
         midi_epoch: u32,
         outbox: OutputQueue,
@@ -282,11 +300,17 @@ mod app {
         let nodes =
             NODES.init_with(|| [one, two, three, four, mixer, reverb, delay, inserts, master]);
         static INSTRUMENT: StaticCell<Instrument<'static>> = StaticCell::new();
-        INSTRUMENT.init_with(|| {
+        let instrument = INSTRUMENT.init_with(|| {
             programs
                 .bind(nodes, EVENTS.take(), FRAME_RATE)
                 .expect("instrument ports")
-        })
+        });
+        for half in [true, false] {
+            instrument
+                .set_half_gain(half)
+                .expect("both fixed routes fit");
+        }
+        instrument
     }
 
     #[init]
@@ -309,9 +333,23 @@ mod app {
             [[wavegraph_sample::types::i24::EQUILIBRIUM; OUTPUT_FRAMES]; BUS_COUNT],
         );
         let instrument = initialize_graph();
+        // SAFETY: the reset prefix clears this linker-reserved SRAM, including
+        // the StaticCell flag, before main. The unique slot moves between tasks.
+        #[unsafe(link_section = ".wavegraph.job")]
+        static SLOT: StaticCell<RenderBlock> = StaticCell::new();
+        let slot = SLOT.init_with(RenderBlock::new);
+        let (mut issue, jobs) = make_channel!(BlockJob, 1);
+        let (completed, done) = make_channel!(BlockJob, 1);
+        let (release, gate) = make_channel!((), 1);
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
-        let (editor, host) = EDITS.take().split();
+        let (editor, mut host) = EDITS.take().split();
+        let mut handoff = Handoff::new(slot);
+        // Render the initial, muted settings before starting the DMA clock.
+        let first = handoff
+            .issue(|_| host.begin_block(|_| Ok(())))
+            .expect("initial slot");
+        issue.try_send(first).ok().expect("empty render queue");
         let (scans, input) = make_channel!(PanelFrame, SCANS);
         let (wake_usb, outbound) = make_channel!((), 1);
         let (midi_out, midi_in) = make_channel!(MidiEvent, MIDI_EVENTS);
@@ -340,25 +378,38 @@ mod app {
                     labels: Settings::INITIAL.labels(false),
                 },
                 overloads: Overloads::default(),
+                timing: Timing::default(),
+                stream: None,
                 motion: Motion::default(),
                 midi_epoch: 0,
                 outbox: OutputQueue::default(),
             },
             TaskInits {
+                start_audio: StartAudio {
+                    port: Some(board.audio.into()),
+                },
+                render: Render {
+                    first: true,
+                    worker: Renderer::new(instrument, BUSES.take()),
+                    jobs,
+                    completed,
+                    release: gate,
+                },
                 audio: Audio {
-                    wire: Batch::default(),
+                    handoff,
+                    jobs: issue,
+                    completed: done,
+                    release,
+                    half_gain: false,
+                    pending_edit: None,
+                    gated: false,
                     wake_usb: usb.as_ref().map(|_| wake_usb),
-                    output: Output::start(board.audio).expect("audio clock"),
-                    instrument,
+                    output: None,
                     host,
-                    buses: BUSES.take(),
-                    first_frame: 0,
                     tap,
                     scope_updates: ScopeUpdates::default(),
                     stats: Stats::default(),
                     last_start: None,
-                    meter: Meter::default(),
-                    assignments: Navigation::INITIAL.assignments,
                 },
                 panel: Panel {
                     timer,
@@ -402,6 +453,7 @@ mod app {
 
     #[post_init]
     fn start() {
+        Render::spawn(()).expect("one render worker");
         Input::spawn(()).expect("one input task");
         Observe::spawn(()).expect("one scope task");
         Draw::spawn(()).expect("one display task");
@@ -410,7 +462,7 @@ mod app {
 
     // The upper seven keys share an LED line with the velocity probe. End its
     // 100 µs column slot on time even when the audio graph is rendering.
-    #[task(binds = TIMER5, priority = 4, shared = [leds, motion])]
+    #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing])]
     struct Panel {
         timer: Timer5,
         controls: Cpu0<TouchControls>,
@@ -436,6 +488,11 @@ mod app {
             };
             // Start with the UI button lamps each sweep, then add the physical key lamps.
             self.leds = self.shared().leds.lock(|leds| *leds);
+            if scan.pressed(Button::Save) || scan.released(Button::Save) {
+                self.shared()
+                    .timing
+                    .lock(|t| t.visible = scan.is_down(Button::Save));
+            }
             if scan.pressed(Button::Play) {
                 self.seq.transport.toggle();
             }
@@ -640,7 +697,7 @@ mod app {
                 held,
             }) = self.input.recv().await
             {
-                let before = self.settings;
+                let old_lamp = self.settings.sel_lamp();
                 let channel = nav.focus;
                 let view = nav.view;
                 self.settings.nav = nav;
@@ -716,22 +773,23 @@ mod app {
                         .set_latch(channel, track.arp.enabled && track.arp.config.latch);
                     self.keys.snapshot(channel, track);
                 }
-                if before != self.settings {
-                    let settings = self.settings;
-                    self.shared().settings.lock(|current| {
+                let settings = &self.settings;
+                self.shared().settings.lock(|current| {
+                    if *settings != current.settings {
                         for channel in Channel::ALL {
                             let i = channel.index();
-                            let track = &settings.tracks[i];
-                            if track.arp_chord_changed(Some(&before.tracks[i])) {
+                            if settings.tracks[i]
+                                .arp_chord_changed(Some(&current.settings.tracks[i]))
+                            {
                                 current.chords[i].clone_from(self.keys.chord(channel));
                             }
                         }
-                        current.settings = settings;
+                        current.settings = *settings;
                         current.revision = current.revision.wrapping_add(1);
-                    });
-                }
-                let sel_lamp = self.settings.sel_lamp();
-                if before.sel_lamp() != sel_lamp {
+                    }
+                });
+                let sel_lamp = settings.sel_lamp();
+                if old_lamp != sel_lamp {
                     self.shared()
                         .leds
                         .lock(|leds| leds.set(Button::Sel, sel_lamp));
@@ -746,145 +804,227 @@ mod app {
         }
     }
 
-    #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, motion, bumper, outbox])]
+    type BlockJob = Job<&'static mut RenderBlock>;
+
+    // Start the DMA clock on CPU0 only after the cold graph has filled its
+    // first slot. ALNK0 takes exclusive ownership at the first interrupt.
+    #[async_task(priority = 2, shared = [stream])]
+    struct StartAudio {
+        port: Option<Cpu0<fm1_audio::AudioPort>>,
+    }
+
+    impl RticAsyncTask for StartAudio {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            static OUTPUT: StaticCell<Output> = StaticCell::new();
+            let port = self.port.take().expect("start once").into_inner();
+            self.shared().stream.lock(|stream| {
+                let output = OUTPUT.init_with(|| Output::start(port).expect("audio clock"));
+                // The BSP waits 5 ms after starting the 2.90 ms DMA clock.
+                // Clear its pending muted half before handing ALNK0 the
+                // primed job. The next refill then has a full period to render ahead.
+                output.render(fm1_audio::MasterLevel::MIN, |_| {});
+                *stream = Some(output);
+            });
+        }
+    }
+
+    #[async_task(priority = 3)]
+    struct Render {
+        first: bool,
+        worker: Renderer,
+        jobs: Receiver<'static, BlockJob, 1>,
+        completed: Sender<'static, BlockJob, 1>,
+        release: Receiver<'static, (), 1>,
+    }
+
+    impl RticAsyncTask for Render {
+        type SpawnInput = ();
+        async fn exec(&mut self, (): ()) {
+            while let Ok(job) = self.jobs.recv().await {
+                let started = cycles();
+                self.worker.render(job.slot);
+                job.slot.work = cycles().wrapping_sub(started);
+                if cfg!(feature = "late-block-probe") && job.slot.hold {
+                    // The diagnostic edit retains the actual PCM slot across
+                    // its deadline. Only ALNK0 writing silence opens this gate.
+                    self.release.recv().await.expect("audio task owns release");
+                }
+                self.completed
+                    .try_send(job)
+                    .ok()
+                    .expect("one outstanding block");
+                if self.first {
+                    self.first = false;
+                    StartAudio::spawn(()).expect("start after first completion");
+                }
+            }
+        }
+    }
+
+    #[task(binds = ALNK0, priority = 4, shared = [settings, overloads, timing, motion, bumper, outbox, stream])]
     struct Audio {
-        wire: Batch,
-        wake_usb: Option<Sender<'static, (), 1>>,
-        output: Output,
-        instrument: &'static mut Instrument<'static>,
-        buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
+        output: Option<&'static mut Output>,
         host: Host<'static, bool>,
-        first_frame: u64,
+        handoff: Handoff<&'static mut RenderBlock>,
+        jobs: Sender<'static, BlockJob, 1>,
+        completed: Receiver<'static, BlockJob, 1>,
+        release: Sender<'static, (), 1>,
+        gated: bool,
+        half_gain: bool,
+        pending_edit: Option<Revision>,
+        wake_usb: Option<Sender<'static, (), 1>>,
         tap: Sender<'static, ScopeBlock, 2>,
         scope_updates: ScopeUpdates,
         stats: Stats,
         last_start: Option<u32>,
-        meter: Meter,
-        assignments: [Assignment; CHANNELS],
     }
 
     impl RticTask for Audio {
         fn exec(&mut self) {
             let started = cycles();
-            let (settings, settings_revision) = self.shared().settings.lock(|s| {
-                for channel in Channel::ALL {
-                    let i = channel.index();
-                    self.instrument
-                        .sync_chord(channel, &s.settings.tracks[i], &s.chords[i]);
-                }
-                (s.settings, s.revision)
+            let mut shared = self.shared();
+            let (master, playing) = shared
+                .settings
+                .lock(|s| (s.settings.master, s.settings.seq.transport.playing()));
+            let mut done = None;
+            let mut current = false;
+            let output = self.output.get_or_insert_with(|| {
+                shared
+                    .stream
+                    .lock(Option::take)
+                    .expect("DMA started with a primed block")
             });
-            let mut bumper = self.shared().bumper;
-            let mut revision = None;
-            let mut outbox = self.shared().outbox;
-            // The lower-priority USB task cannot change sessions during this interrupt.
-            let usb = self
-                .wake_usb
-                .as_mut()
-                .filter(|_| outbox.lock(|q| q.active()));
-            if usb.is_some() {
-                self.wire.clear();
-            }
-            let result = self.output.render(settings.master, |out| {
-                revision = Some(
-                    self.host
-                        .begin_block(|half| self.instrument.set_half_gain(half)),
-                );
-                self.instrument.set_mixer(settings.mixer);
-                self.instrument.set_fx(settings.fx);
-                self.instrument.transport = settings.seq.transport;
-                self.instrument.sequences = settings.seq.enabled;
-                self.instrument.select_patterns(Channel::ALL.map(|c| {
-                    settings
-                        .seq
-                        .slot(c, settings.tracks[c.index()].assignment.part)
-                }));
-                self.instrument.cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
-                let mono = self
-                    .instrument
-                    .render_with_midi(settings.tracks, self.buses, |channel, event| {
-                        if usb.is_some() {
-                            self.wire.push(channel, event);
-                        }
-                    })
-                    .expect("fixed patch");
-                for (frame, sample) in out.iter_mut().zip(mono) {
-                    *frame = [sample.inner(); 2];
-                }
+            let result = output.render(master, |out| {
+                done = self.completed.try_recv().ok();
+                current = self.handoff.fill(out, done.as_ref(), |b| &b.pcm);
             });
-            let Some(revision) = revision else { return };
-            if let Some(wake) = usb
-                && outbox.lock(|queue| queue.append(&self.wire))
-            {
-                let _ = wake.try_send(());
+            let refill_ended = cycles();
+            if result == Refill::WouldBlock {
+                return;
             }
-            if result == Refill::Written {
-                self.host.submitted(revision, self.first_frame);
-                // Keep metering and the visual clock current even when scope capture drops a block.
-                for i in 0..CHANNELS {
-                    if self.assignments[i] != settings.nav.assignments[i] {
-                        self.meter.clear(i);
+            let written = result == Refill::Written;
+            let silence = written && !current;
+            if cfg!(feature = "late-block-probe") && silence && self.gated {
+                self.release.try_send(()).expect("one gated job");
+                self.gated = false;
+            }
+            let mut work = 0;
+            let mut discarded = None;
+            let mut edit_sequence = None;
+            if let Some(job) = &done {
+                let block = &*job.slot;
+                work = block.work;
+                discarded = (!current).then(|| job.sequence());
+                // Deliver note-offs even if the corresponding PCM expired. A
+                // disconnect or queue reset retires the captured USB session.
+                if let Some(session) = block.usb_session
+                    && shared
+                        .outbox
+                        .lock(|q| q.session() == Some(session) && q.append(&block.midi))
+                    && let Some(wake) = &mut self.wake_usb
+                {
+                    let _ = wake.try_send(());
+                }
+                if written && current {
+                    if self.pending_edit == Some(job.revision()) {
+                        edit_sequence = Some(job.sequence());
+                        self.pending_edit = None;
                     }
+                    shared.motion.lock(|m| *m = block.motion);
+                    let settings = &block.settings;
+                    let visible = settings.nav.view.shows_trace(settings.nav.part());
+                    self.scope_updates.publish(
+                        (block.settings_revision, block.half_gain),
+                        visible,
+                        |gap| {
+                            if self.tap.is_full()
+                                || (visible && settings.source_tap() && !block.capture_source)
+                            {
+                                return false;
+                            }
+                            self.tap
+                                .try_send(ScopeBlock {
+                                    samples: visible.then(|| {
+                                        if settings.source_tap() {
+                                            block.source
+                                        } else {
+                                            core::array::from_fn(|i| output.block()[i][0])
+                                        }
+                                    }),
+                                    labels: settings.labels(block.half_gain),
+                                    bass_cycle: block.bass_cycle,
+                                    gap,
+                                })
+                                .is_ok()
+                        },
+                    );
                 }
-                self.assignments = settings.nav.assignments;
-                let peaks = if settings.nav.view.is_mixer() {
-                    self.meter
-                        .update(settings.mixer, &self.buses[STRIP_BUS..][..CHANNELS])
-                } else {
-                    self.meter = Meter::default();
-                    [0; CHANNELS]
-                };
-                let position = self.instrument.position;
-                let bass_automation = self.instrument.bass_automation(settings.nav.focus);
-                let drums = self.instrument.drums;
-                let wave_frames = self.instrument.wave_frames;
-                let reduction = self.instrument.reduction;
-                self.shared().motion.lock(|motion| {
-                    *motion = Motion {
-                        position,
-                        banks: self.instrument.banks(),
-                        bass_automation,
-                        peaks,
-                        reduction,
-                        drums,
-                        wave_frames,
-                        arp_notes: Channel::ALL.map(|channel| self.instrument.arp_note(channel)),
-                    };
+            }
+            if !(written && current) {
+                self.scope_updates.missed();
+            }
+            self.handoff.finish(&mut self.host, result, &mut done);
+            let job = self.handoff.issue(|block| {
+                shared.settings.lock(|s| block.snapshot(s));
+                block.cue = shared.bumper.lock(|b| b.take(OUTPUT_FRAMES, master.raw()));
+                block.usb_session = shared.outbox.lock(|q| q.session());
+                block.capture_source = block.settings.source_tap() && !self.tap.is_full();
+                block.hold = false;
+                let mut edited = false;
+                let revision = self.host.begin_block(|half| {
+                    self.half_gain = half;
+                    edited = true;
+                    Ok(()) // Both fixed programs were validated against these nodes at boot.
+                });
+                block.half_gain = self.half_gain;
+                if edited {
+                    self.pending_edit = Some(revision);
+                    block.hold =
+                        cfg!(feature = "late-block-probe") && shared.timing.lock(|t| t.visible);
+                    self.gated = block.hold;
+                }
+                revision
+            });
+            if let Some(job) = job {
+                self.jobs
+                    .try_send(job)
+                    .ok()
+                    .expect("free slot implies empty job queue");
+            }
+            let previous = self.last_start.replace(started);
+            if self.stats.record_with_refill(started, refill_ended, result) {
+                let elapsed = cycles().wrapping_sub(started);
+                let gap = previous.map_or(0, |prev| started.wrapping_sub(prev));
+                shared.overloads.lock(|log| {
+                    log.record(
+                        self.stats.overruns,
+                        ticks(),
+                        elapsed,
+                        gap,
+                        result == Refill::Late,
+                    )
                 });
             }
-            self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
-            let visible = settings.nav.view.shows_trace(settings.nav.part());
-            let labels_revision = (settings_revision, self.instrument.half_gain);
-            self.scope_updates.publish(labels_revision, visible, |gap| {
-                if result != Refill::Written || self.tap.is_full() {
-                    return false;
+            shared.timing.lock(|t| {
+                let refill = refill_ended.wrapping_sub(started);
+                t.refill = t.refill.max(refill);
+                if playing {
+                    t.playing_refill = t.playing_refill.max(refill);
                 }
-                let labels = settings.labels(self.instrument.half_gain);
-                let block = ScopeBlock {
-                    samples: visible.then(|| match (labels.view, labels.voice_tap) {
-                        (View::Fx, _) | (View::Scope, true) => {
-                            labels
-                                .channel
-                                .scope_samples(labels.focus, labels.view, self.buses)
-                        }
-                        _ => core::array::from_fn(|i| self.output.block()[i][0]),
-                    }),
-                    bass_cycle: self.instrument.bass_cycles[labels.channel.index()],
-                    labels,
-                    gap,
-                };
-                self.tap.try_send(block).is_ok()
+                t.commit = self.stats.peak_commit_ticks;
+                t.irq = self.stats.peak_ticks;
+                t.overruns = self.stats.overruns;
+                t.worker = t.worker.max(work);
+                t.silences = t.silences.saturating_add(u32::from(silence));
+                if let Some(sequence) = discarded {
+                    t.discards = t.discards.saturating_add(1);
+                    t.last_discard = sequence;
+                }
+                if let Some(sequence) = edit_sequence {
+                    t.last_edit = sequence;
+                }
             });
-            let previous = self.last_start.replace(started);
-            if self.stats.record(started, result) {
-                let work = cycles().wrapping_sub(started);
-                let gap = previous.map_or(0, |prev| started.wrapping_sub(prev));
-                let count = self.stats.overruns;
-                let at = ticks();
-                self.shared()
-                    .overloads
-                    .lock(|log| log.record(count, at, work, gap, result == Refill::Late));
-            }
         }
     }
 
@@ -1047,7 +1187,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper])]
+    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing])]
     struct Draw {
         port: Option<Cpu0<DisplayPort>>,
         clock: Clock,
@@ -1072,6 +1212,18 @@ mod app {
             loop {
                 // Count paint time toward the frame period and sample the latest frame on a miss.
                 let next_frame = Clock::now() + 30.millis();
+                let timing = self.shared().timing.lock(|t| *t);
+                if timing.visible {
+                    if screen
+                        .timing(&mut lcd, &mut self.clock, timing)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    Clock::delay_until(next_frame).await;
+                    continue;
+                }
                 let frame = self.shared().frame.lock(|f| *f);
                 let severity = self.shared().overloads.lock(|log| log.severity(ticks()));
                 let motion = self.shared().motion.lock(|motion| *motion);

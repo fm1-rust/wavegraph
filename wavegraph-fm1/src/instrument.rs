@@ -986,12 +986,13 @@ impl Channel {
         clippy::arithmetic_side_effects,
         reason = "Three times signed Q23 fits in i32."
     )]
-    pub(super) fn scope_samples<const N: usize>(
+    pub(super) fn copy_scope<const N: usize>(
         self,
         part: Part,
         view: View,
         buses: &[[I24; N]; BUS_COUNT],
-    ) -> [i32; N] {
+        out: &mut [i32; N],
+    ) {
         // Give drum transients and the detuned saws headroom on the display.
         // Apply this gain only to the selected strip's scope tap.
         let bus = if view == View::Fx {
@@ -999,16 +1000,28 @@ impl Channel {
         } else {
             self.source_bus()
         };
-        let source = &buses[bus];
-        match part {
-            Part::Tr909 => source.map(|s| s.inner() >> 4),
-            Part::Tr808 => source.map(|s| s.inner() >> 3),
-            // The instrument scope auto-ranges these voices. Leave room for loud
-            // accents and chords at the FX scope's fixed gain.
-            Part::Bass | Part::Wavetable if view == View::Fx => source.map(|s| s.inner() >> 3),
-            Part::Supersaw => source.map(|s| (s.inner() * 3) >> 3),
-            _ => source.map(I24::inner),
+        let scale = |s: I24| match part {
+            Part::Tr909 => s.inner() >> 4,
+            Part::Tr808 => s.inner() >> 3,
+            Part::Bass | Part::Wavetable if view == View::Fx => s.inner() >> 3,
+            Part::Supersaw => (s.inner() * 3) >> 3,
+            _ => s.inner(),
+        };
+        for (dst, &sample) in out.iter_mut().zip(&buses[bus]) {
+            *dst = scale(sample);
         }
+    }
+
+    #[cfg(test)]
+    fn scope_samples<const N: usize>(
+        self,
+        part: Part,
+        view: View,
+        buses: &[[I24; N]; BUS_COUNT],
+    ) -> [i32; N] {
+        let mut samples = [0; N];
+        self.copy_scope(part, view, buses, &mut samples);
+        samples
     }
 }
 
@@ -1146,12 +1159,12 @@ impl Instrument<'_> {
         tracks: [Track; CHANNELS],
         buses: &'b mut [[I24; N]; BUS_COUNT],
     ) -> Result<&'b [I24; N], Error> {
-        self.render_with_midi(tracks, buses, |_, _| ())
+        self.render_with_midi(&tracks, buses, |_, _| ())
     }
 
     pub(super) fn render_with_midi<'b, const N: usize>(
         &mut self,
-        tracks: [Track; CHANNELS],
+        tracks: &[Track; CHANNELS],
         buses: &'b mut [[I24; N]; BUS_COUNT],
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
@@ -1228,7 +1241,7 @@ impl Instrument<'_> {
         player.render(
             N,
             self.transport,
-            &tracks,
+            tracks,
             enabled,
             |channel, event| {
                 self.events[channel.index()]
@@ -1303,7 +1316,7 @@ impl Instrument<'_> {
         self.wave_frames = wave_frames;
         self.bass_cycles = bass_cycles;
         self.reduction = reduction;
-        self.previous = Some(tracks);
+        self.previous = Some(*tracks);
         self.previous_mixer = Some(self.mixer);
         self.previous_fx = Some(self.fx);
         self.cue = Cue::EMPTY;

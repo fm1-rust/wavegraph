@@ -97,6 +97,32 @@ fn knocks(mix: &mut [f32]) {
 fn main() {
     println!("cargo:rerun-if-changed=assets/bumper.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
+        println!("cargo:rerun-if-env-changed=PI32V2_BIN");
+        println!("cargo:rerun-if-changed=runtime");
+        let clang = PathBuf::from(env::var_os("PI32V2_BIN").expect("pi32v2 LLVM")).join("clang");
+        let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build directory"));
+        println!(
+            "cargo:rustc-link-arg=-Map={}",
+            out.join("wavegraph-fm1.map").display()
+        );
+        for source in ["start.S", "hold.c"] {
+            let object = out.join(source).with_extension("o");
+            let status = std::process::Command::new(&clang)
+                .args([
+                    "--target=pi32v2",
+                    "-mcpu=ac791n",
+                    "-O2",
+                    "-ffreestanding",
+                    "-c",
+                ])
+                .arg(PathBuf::from("runtime").join(source))
+                .arg("-o")
+                .arg(&object)
+                .status()
+                .expect("pi32v2 clang");
+            assert!(status.success(), "compiling {source}");
+            println!("cargo:rustc-link-arg={}", object.display());
+        }
         println!("cargo:rerun-if-changed=wavegraph-fm1.ld");
         println!("cargo:rustc-link-search={}", env!("CARGO_MANIFEST_DIR"));
     }

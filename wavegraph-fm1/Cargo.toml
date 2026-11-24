@@ -8,7 +8,11 @@ publish = false
 build = "assets/bumper.rs"
 description = "Four assignable WaveGraph channels with synths, 808 and 909 kits, and an oscilloscope for FM-1"
 
+[features]
+late-block-probe = []
+
 [dependencies]
+fm1-audio = "0.2.0-rc.0"
 heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }
@@ -28,11 +32,13 @@ wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 embedded-graphics = "0.8.2"
 futures-util = { version = "0.3", default-features = false }
-fm1-audio = "0.2.0-rc.0"
 fm1-controls = "0.2.0-rc.0"
 fm1-graphics = { version = "0.2.0-rc.0", features = ["async-display"] }
 fm1-rticx = { version = "0.2.0-rc.1", features = ["audio", "async-display", "async-usb", "usb-log"] }
 static_cell = "2.1.1"
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
 
 [build-dependencies]
 midly = { version = "0.5.3", default-features = false, features = ["std", "strict"] }
