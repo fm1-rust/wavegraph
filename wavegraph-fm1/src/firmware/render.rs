@@ -122,8 +122,8 @@ impl Renderer {
                 .slot(c, settings.tracks[c.index()].assignment.part)
         }));
         graph.cue = block.cue;
-        if block.usb_session.is_some() {
-            block.midi.clear();
+        if let Some(session) = block.usb_session {
+            block.midi.begin(session);
         }
         let mono = graph
             .render_with_midi(&settings.tracks, self.buses, |channel, event| {

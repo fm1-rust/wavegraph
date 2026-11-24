@@ -205,8 +205,9 @@ dependencies = [
 
 [[package]]
 name = "fm1"
-version = "0.2.0-rc.1"
-source = "git+https://github.com/fm1-rust/fm1-rust?rev=3605e599f420153c1e78fea78996ab45a0a16528#3605e599f420153c1e78fea78996ab45a0a16528"
+version = "0.2.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5595f5f1b0baaf634b3542c6fabcf03fda7c1cc23eccfcfb332e1920f21339c"
 dependencies = [
  "critical-section",
  "embedded-hal",
@@ -216,8 +217,9 @@ dependencies = [
 
 [[package]]
 name = "fm1-audio"
-version = "0.2.0-rc.0"
-source = "git+https://github.com/fm1-rust/fm1-rust?rev=3605e599f420153c1e78fea78996ab45a0a16528#3605e599f420153c1e78fea78996ab45a0a16528"
+version = "0.2.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4709a84cb1475c958ad8cce88ff7f26d914abfe4b0334fcca31ef194a46b917d"
 dependencies = [
  "fm1",
  "wavegraph-sample",

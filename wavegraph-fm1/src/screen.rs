@@ -17,11 +17,11 @@ use core::{
     pin::{Pin, pin},
     task::{Context, Poll},
 };
-use embedded_graphics::pixelcolor::raw::ToBytes;
+use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
-        display::{AsyncDisplay, Display, Error, SIZE},
+        display::{Display, Error, SIZE},
         time::ticks,
     },
     time::Clock,
@@ -90,27 +90,6 @@ const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
-
-// Reuse the raster strip for the whole fill. Each buffered write copies its
-// pixels into the BSP's DMA staging area before the strip can be reused.
-async fn fill_rows(
-    lcd: &mut AsyncDisplay<'_, Clock>,
-    strip: &mut [[u8; 2]],
-    left: u16,
-    rows: Range<u16>,
-    color: Rgb565,
-) -> Result<(), Error> {
-    let width = SIZE - left;
-    let pixels = &mut strip[..usize::from(width) * rows.len().min(BAND)];
-    pixels.fill(color.to_be_bytes());
-    for y in rows.clone().step_by(BAND) {
-        let height = (rows.end - y).min(BAND as u16);
-        let count = usize::from(width) * usize::from(height);
-        lcd.write_rect_buffered(left, y, width, height, pixels[..count].as_flattened())
-            .await?;
-    }
-    lcd.flush().await
-}
 
 // Keep the envelope DMA state machine out of paint_page's poll function.
 // The combined function exceeds the pi32v2 conditional branch range.
@@ -277,8 +256,10 @@ impl Screen {
             if entering {
                 // The curve's dirty tiles stay between the two label bands.
                 let mut lcd = lcd.as_async(clock)?;
-                fill_rows(&mut lcd, self.strip, 0, 0..header, face).await?;
-                fill_rows(&mut lcd, self.strip, 0, 192..SIZE, face).await?;
+                lcd.fill_rect(0, 0, SIZE, header, face.into_storage())
+                    .await?;
+                lcd.fill_rect(0, 192, SIZE, SIZE - 192, face.into_storage())
+                    .await?;
             }
             if entering
                 || !matches!(previous, Some(Page::Envelope(_, old, _, hint)) if old == target && hint == show_mode_hint)
@@ -346,14 +327,9 @@ impl Screen {
         if previous != Some(page) {
             if !matches!(previous, Some(Page::BassEnvelope(..))) {
                 self.change_view(SILVER);
-                fill_rows(
-                    &mut lcd.as_async(clock)?,
-                    self.strip,
-                    0,
-                    0..SIZE,
-                    SILVER.background,
-                )
-                .await?;
+                lcd.as_async(clock)?
+                    .fill_rect(0, 0, SIZE, SIZE, SILVER.background.into_storage())
+                    .await?;
                 for lane in &mut *self.lanes {
                     lane.invalidate();
                 }
@@ -424,12 +400,7 @@ impl Screen {
             self.change_view(style);
             self.selector
                 .badge
-                .fill_rows(
-                    &mut lcd.as_async(clock)?,
-                    self.strip,
-                    0..SIZE,
-                    style.background,
-                )
+                .fill_rows(&mut lcd.as_async(clock)?, 0..SIZE, style.background)
                 .await?;
             self.text.text(
                 12,
@@ -512,14 +483,9 @@ impl Screen {
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
             self.selector.select(None);
             self.change_view(STYLE);
-            fill_rows(
-                &mut lcd.as_async(clock)?,
-                self.strip,
-                0,
-                0..SIZE,
-                STYLE.background,
-            )
-            .await?;
+            lcd.as_async(clock)?
+                .fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())
+                .await?;
         }
         let title = match t.boot {
             0 => "CPU1 BOOT TIMEOUT   ",
@@ -877,14 +843,14 @@ impl Screen {
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 self.selector
                     .badge
-                    .fill_rows(&mut lcd, self.strip, y..y + height, self.dot_background)
+                    .fill_rows(&mut lcd, y..y + height, self.dot_background)
                     .await?;
             }
             if bass {
                 for y in [header - 1, SIZE - footer] {
                     self.selector
                         .badge
-                        .fill_rows(&mut lcd, self.strip, y..y + 1, muted)
+                        .fill_rows(&mut lcd, y..y + 1, muted)
                         .await?;
                 }
             }

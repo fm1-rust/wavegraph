@@ -1104,12 +1104,9 @@ mod app {
                 }
                 stack_free = block.stack_free;
                 discarded = (!current).then(|| job.sequence());
-                // The first gap releases external notes and retires pending packets.
                 if accepted
-                    && let Some(session) = block.usb_session
-                    && shared
-                        .outbox
-                        .lock(|q| q.session() == Some(session) && q.append(&block.midi))
+                    && block.usb_session.is_some()
+                    && shared.outbox.lock(|q| q.append(&block.midi))
                     && let Some(wake) = &mut self.wake_usb
                 {
                     let _ = wake.try_send(());
