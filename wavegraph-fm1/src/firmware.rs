@@ -5,6 +5,7 @@
 )]
 
 mod render;
+mod worker;
 
 use crate::{
     bass::{Controls, Knob},
@@ -136,9 +137,10 @@ pub struct Motion {
     pub(super) wave_frames: [u8; CHANNELS],
 }
 
-/// CPU0 service timings in 24 MHz TIMER4 ticks. Peaks cover this whole boot.
+/// Renderer and DMA service timings in 24 MHz TIMER4 ticks. Peaks cover this boot.
 #[derive(Clone, Copy, Default)]
 pub struct Timing {
+    pub(super) boot: u32,
     pub(super) visible: bool,
     pub(super) refill: u32,
     pub(super) playing_refill: u32,
@@ -146,6 +148,7 @@ pub struct Timing {
     pub(super) irq: u32,
     pub(super) overruns: u32,
     pub(super) worker: u32,
+    pub(super) worker_stack: Option<u32>,
     pub(super) silences: u32,
     pub(super) discards: u32,
     pub(super) last_discard: u32,
@@ -158,14 +161,15 @@ pub struct Frame {
     pub(super) labels: Labels,
 }
 
-#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1, SOFT2])]
+#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
 mod app {
     use super::render::{RenderBlock, Renderer};
+    use super::worker::{self, BlockJob, Worker};
     use super::{Frame, Labels, Motion, Performance, Settings, Timing};
     use crate::{
         bumper::Bumper,
         capture::{Capture, FLAT, Scale, ScopeUpdates},
-        handoff::{Handoff, Job},
+        handoff::Handoff,
         inserts::BassInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
@@ -185,7 +189,6 @@ mod app {
         bsp::{
             Board, Cpu0,
             display::{DisplayPort, SpiClock, on_spi1_interrupt},
-            enter_download_mode,
             time::{Timers, cycles, ticks},
             usb_midi::{Identity, MidiDevice, PacketBuffer, UsbLog, on_usb0_interrupt},
         },
@@ -198,7 +201,10 @@ mod app {
     use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
-    use wavegraph::control::{Controller, EditQueue, Host, Revision};
+    use wavegraph::{
+        control::{Controller, EditQueue, Host, Revision},
+        mailbox,
+    };
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
@@ -240,7 +246,7 @@ mod app {
         frame: Frame,
         overloads: Overloads,
         timing: Timing,
-        stream: Option<&'static mut Output>,
+        stream: Option<Playback>,
         motion: Motion,
         midi_epoch: u32,
         outbox: OutputQueue,
@@ -315,17 +321,25 @@ mod app {
 
     #[init]
     fn init() -> (Shared, TaskInits) {
+        // SAFETY: RTICX init runs once on CPU0 with interrupts disabled.
+        // The reset prefix held CPU1 before CRT. Board::take starts TIMER4
+        // after the BSP bootstrap has finished using it for the ROM handshake.
+        let boot = unsafe { crate::peer::start() };
         let board = Board::take().expect("CPU0 board");
-        let usb = board
-            .take_usb()
-            .expect("one USB device")
-            .try_into_midi(Identity {
-                vendor_id: 0x1209,
-                product_id: 0x0001,
-                manufacturer: "fm1-rust",
-                product: "WaveGraph FM-1",
-            })
-            .ok();
+        let port = board.take_usb().expect("one USB device");
+        let identity = Identity {
+            vendor_id: 0x1209,
+            product_id: 0x0001,
+            manufacturer: "fm1-rust",
+            product: "WaveGraph FM-1",
+        };
+        #[cfg(not(feature = "qualified-usb"))]
+        let usb = port.try_into_midi(identity).ok();
+        // SAFETY: this opt-in image requires the bench operator to qualify the
+        // controller, host and physical connection for the BSP's complete
+        // USB0 receive DMA contract, including reset, suspend and reconnect.
+        #[cfg(feature = "qualified-usb")]
+        let usb = Some(unsafe { port.assume_midi_dma() }.into_midi(identity));
         let timer = Clock::start(board.timers.with_panel_scan_rate());
         let clock = timer.clock();
         // Keep the DMA-sized buses out of the task initializer and its stack.
@@ -338,9 +352,15 @@ mod app {
         #[unsafe(link_section = ".wavegraph.job")]
         static SLOT: StaticCell<RenderBlock> = StaticCell::new();
         let slot = SLOT.init_with(RenderBlock::new);
-        let (mut issue, jobs) = make_channel!(BlockJob, 1);
-        let (completed, done) = make_channel!(BlockJob, 1);
-        let (release, gate) = make_channel!((), 1);
+        static JOBS: ConstStaticCell<mailbox::Mailbox<BlockJob>> =
+            ConstStaticCell::new(mailbox::Mailbox::new());
+        static DONE: ConstStaticCell<mailbox::Mailbox<BlockJob>> =
+            ConstStaticCell::new(mailbox::Mailbox::new());
+        static GATE: ConstStaticCell<mailbox::Mailbox<()>> =
+            ConstStaticCell::new(mailbox::Mailbox::new());
+        let (mut issue, jobs) = JOBS.take().split();
+        let (completed, done) = DONE.take().split();
+        let (release, gate) = GATE.take().split();
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
         let (editor, mut host) = EDITS.take().split();
@@ -350,6 +370,14 @@ mod app {
             .issue(|_| host.begin_block(|_| Ok(())))
             .expect("initial slot");
         issue.try_send(first).ok().expect("empty render queue");
+        if boot == 1 {
+            worker::install(Worker {
+                renderer: Renderer::new(instrument, BUSES.take()),
+                jobs,
+                completed,
+                release: gate,
+            });
+        }
         let (scans, input) = make_channel!(PanelFrame, SCANS);
         let (wake_usb, outbound) = make_channel!((), 1);
         let (midi_out, midi_in) = make_channel!(MidiEvent, MIDI_EVENTS);
@@ -378,7 +406,10 @@ mod app {
                     labels: Settings::INITIAL.labels(false),
                 },
                 overloads: Overloads::default(),
-                timing: Timing::default(),
+                timing: Timing {
+                    boot,
+                    ..Timing::default()
+                },
                 stream: None,
                 motion: Motion::default(),
                 midi_epoch: 0,
@@ -387,25 +418,19 @@ mod app {
             TaskInits {
                 start_audio: StartAudio {
                     port: Some(board.audio.into()),
-                },
-                render: Render {
-                    first: true,
-                    worker: Renderer::new(instrument, BUSES.take()),
-                    jobs,
-                    completed,
-                    release: gate,
+                    completed: Some(done),
+                    host: (boot == 1).then_some(host),
                 },
                 audio: Audio {
                     handoff,
                     jobs: issue,
-                    completed: done,
+                    missing_since: None,
                     release,
                     half_gain: false,
                     pending_edit: None,
                     gated: false,
                     wake_usb: usb.as_ref().map(|_| wake_usb),
-                    output: None,
-                    host,
+                    playback: None,
                     tap,
                     scope_updates: ScopeUpdates::default(),
                     stats: Stats::default(),
@@ -453,7 +478,7 @@ mod app {
 
     #[post_init]
     fn start() {
-        Render::spawn(()).expect("one render worker");
+        StartAudio::spawn(()).expect("one audio startup");
         Input::spawn(()).expect("one input task");
         Observe::spawn(()).expect("one scope task");
         Draw::spawn(()).expect("one display task");
@@ -587,7 +612,7 @@ mod app {
                 self.piano.octave = 0;
                 if now.wrapping_sub(*self.octave_since.get_or_insert(now)) >= 2 * Timers::CRYSTAL_HZ
                 {
-                    enter_download_mode();
+                    crate::peer::download();
                 }
             } else {
                 self.octave_since = None;
@@ -804,72 +829,68 @@ mod app {
         }
     }
 
-    type BlockJob = Job<&'static mut RenderBlock>;
+    pub struct Playback {
+        output: &'static mut Output,
+        completed: mailbox::Receiver<'static, BlockJob>,
+        first: Option<BlockJob>,
+        host: Option<Host<'static, bool>>,
+    }
 
-    // Start the DMA clock on CPU0 only after the cold graph has filled its
-    // first slot. ALNK0 takes exclusive ownership at the first interrupt.
-    #[async_task(priority = 2, shared = [stream])]
+    // Give the cold graph its first full render before starting the DMA clock.
+    #[async_task(priority = 2, shared = [stream, timing])]
     struct StartAudio {
         port: Option<Cpu0<fm1_audio::AudioPort>>,
+        completed: Option<mailbox::Receiver<'static, BlockJob>>,
+        host: Option<Host<'static, bool>>,
     }
 
     impl RticAsyncTask for StartAudio {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
+            let Some(host) = self.host.take() else { return };
+            let mut completed = self.completed.take().expect("one DSP worker");
+            let started = cycles();
+            let first = loop {
+                let fault = if !crate::peer::healthy() {
+                    Some(4)
+                } else if cycles().wrapping_sub(started) >= Timers::CRYSTAL_HZ {
+                    Some(5)
+                } else {
+                    None
+                };
+                if let Some(code) = fault {
+                    crate::peer::stop();
+                    self.shared().timing.lock(|t| t.boot = code);
+                    return;
+                }
+                if let Some(first) = completed.try_recv() {
+                    break first;
+                }
+                Clock::delay(1.millis()).await;
+            };
             static OUTPUT: StaticCell<Output> = StaticCell::new();
             let port = self.port.take().expect("start once").into_inner();
             self.shared().stream.lock(|stream| {
                 let output = OUTPUT.init_with(|| Output::start(port).expect("audio clock"));
-                // The BSP waits 5 ms after starting the 2.90 ms DMA clock.
-                // Clear its pending muted half before handing ALNK0 the
-                // primed job. The next refill then has a full period to render ahead.
+                // Clear the muted half left pending by the BSP's 5 ms DAC startup.
                 output.render(fm1_audio::MasterLevel::MIN, |_| {});
-                *stream = Some(output);
+                *stream = Some(Playback {
+                    output,
+                    completed,
+                    first: Some(first),
+                    host: Some(host),
+                });
             });
-        }
-    }
-
-    #[async_task(priority = 3)]
-    struct Render {
-        first: bool,
-        worker: Renderer,
-        jobs: Receiver<'static, BlockJob, 1>,
-        completed: Sender<'static, BlockJob, 1>,
-        release: Receiver<'static, (), 1>,
-    }
-
-    impl RticAsyncTask for Render {
-        type SpawnInput = ();
-        async fn exec(&mut self, (): ()) {
-            while let Ok(job) = self.jobs.recv().await {
-                let started = cycles();
-                self.worker.render(job.slot);
-                job.slot.work = cycles().wrapping_sub(started);
-                if cfg!(feature = "late-block-probe") && job.slot.hold {
-                    // The diagnostic edit retains the actual PCM slot across
-                    // its deadline. Only ALNK0 writing silence opens this gate.
-                    self.release.recv().await.expect("audio task owns release");
-                }
-                self.completed
-                    .try_send(job)
-                    .ok()
-                    .expect("one outstanding block");
-                if self.first {
-                    self.first = false;
-                    StartAudio::spawn(()).expect("start after first completion");
-                }
-            }
         }
     }
 
     #[task(binds = ALNK0, priority = 4, shared = [settings, overloads, timing, motion, bumper, outbox, stream])]
     struct Audio {
-        output: Option<&'static mut Output>,
-        host: Host<'static, bool>,
+        playback: Option<Playback>,
+        missing_since: Option<u32>,
         handoff: Handoff<&'static mut RenderBlock>,
-        jobs: Sender<'static, BlockJob, 1>,
-        completed: Receiver<'static, BlockJob, 1>,
-        release: Sender<'static, (), 1>,
+        jobs: mailbox::Sender<'static, BlockJob>,
+        release: mailbox::Sender<'static, ()>,
         gated: bool,
         half_gain: bool,
         pending_edit: Option<Revision>,
@@ -889,19 +910,51 @@ mod app {
                 .lock(|s| (s.settings.master, s.settings.seq.transport.playing()));
             let mut done = None;
             let mut current = false;
-            let output = self.output.get_or_insert_with(|| {
+            let playback = self.playback.get_or_insert_with(|| {
                 shared
                     .stream
                     .lock(Option::take)
                     .expect("DMA started with a primed block")
             });
+            let output = &mut *playback.output;
+            let Some(host) = &mut playback.host else {
+                output.render(master, |_| {});
+                return;
+            };
+            let healthy = crate::peer::healthy();
             let result = output.render(master, |out| {
-                done = self.completed.try_recv().ok();
+                if !healthy {
+                    return;
+                }
+                done = playback
+                    .first
+                    .take()
+                    .or_else(|| playback.completed.try_recv());
                 current = self.handoff.fill(out, done.as_ref(), |b| &b.pcm);
             });
             let refill_ended = cycles();
             if result == Refill::WouldBlock {
                 return;
+            }
+            // A transient deadline miss leaves the slot with CPU1. Only a
+            // reported fault or a full second without a return stops the peer.
+            if done.is_some() {
+                self.missing_since = None;
+            } else {
+                let since = *self.missing_since.get_or_insert(started);
+                let code = if !healthy {
+                    Some(4)
+                } else if started.wrapping_sub(since) >= Timers::CRYSTAL_HZ {
+                    Some(5)
+                } else {
+                    None
+                };
+                if let Some(code) = code {
+                    crate::peer::stop();
+                    playback.host = None;
+                    shared.timing.lock(|t| t.boot = code);
+                    return;
+                }
             }
             let written = result == Refill::Written;
             let silence = written && !current;
@@ -909,12 +962,14 @@ mod app {
                 self.release.try_send(()).expect("one gated job");
                 self.gated = false;
             }
+            let mut stack_free = None;
             let mut work = 0;
             let mut discarded = None;
             let mut edit_sequence = None;
             if let Some(job) = &done {
                 let block = &*job.slot;
                 work = block.work;
+                stack_free = block.stack_free;
                 discarded = (!current).then(|| job.sequence());
                 // Deliver note-offs even if the corresponding PCM expired. A
                 // disconnect or queue reset retires the captured USB session.
@@ -964,7 +1019,7 @@ mod app {
             if !(written && current) {
                 self.scope_updates.missed();
             }
-            self.handoff.finish(&mut self.host, result, &mut done);
+            self.handoff.finish(host, result, &mut done);
             let job = self.handoff.issue(|block| {
                 shared.settings.lock(|s| block.snapshot(s));
                 block.cue = shared.bumper.lock(|b| b.take(OUTPUT_FRAMES, master.raw()));
@@ -972,7 +1027,7 @@ mod app {
                 block.capture_source = block.settings.source_tap() && !self.tap.is_full();
                 block.hold = false;
                 let mut edited = false;
-                let revision = self.host.begin_block(|half| {
+                let revision = host.begin_block(|half| {
                     self.half_gain = half;
                     edited = true;
                     Ok(()) // Both fixed programs were validated against these nodes at boot.
@@ -1016,6 +1071,9 @@ mod app {
                 t.irq = self.stats.peak_ticks;
                 t.overruns = self.stats.overruns;
                 t.worker = t.worker.max(work);
+                if stack_free.is_some() {
+                    t.worker_stack = stack_free;
+                }
                 t.silences = t.silences.saturating_add(u32::from(silence));
                 if let Some(sequence) = discarded {
                     t.discards = t.discards.saturating_add(1);
@@ -1099,7 +1157,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [overloads, settings, midi_epoch, outbox])]
+    #[async_task(priority = 1, shared = [overloads, settings, midi_epoch, outbox, timing])]
     struct Usb {
         device: Option<Cpu0<MidiDevice>>,
         clock: Clock,
@@ -1116,7 +1174,7 @@ mod app {
             let mut tx = PacketBuffer::default();
             let mut log = UsbLog::new();
             log.record("WaveGraph ready").expect("short ASCII line");
-            let mut logged = 0;
+            let mut logged = Some(0);
             let mut session = None;
             let mut epoch = 0_u32;
             loop {
@@ -1167,11 +1225,26 @@ mod app {
                     }
                 }
                 if packets.contains(&[0x07, 0xf0, 0x7d, 0xf7]) {
-                    let history = self.shared().overloads.lock(|history| *history);
-                    for event in history.events() {
-                        if event.number > logged {
-                            log.record(&event.line()).expect("bounded ASCII log line");
-                            logged = event.number;
+                    let t = self.shared().timing.lock(|t| *t);
+                    if t.visible || t.boot != 1 {
+                        let line = crate::overload::timing_line(
+                            t.boot, t.worker, t.refill, t.commit, t.overruns, t.silences,
+                        );
+                        log.record(&line).expect("one timing snapshot");
+                        logged = None;
+                    } else {
+                        // The full-width timing line evicts the log text. The
+                        // IRQ's event history survives, including disconnects.
+                        if logged.is_none() {
+                            log.record("WaveGraph ready").expect("short ASCII line");
+                        }
+                        let last = logged.get_or_insert(0);
+                        let history = self.shared().overloads.lock(|history| *history);
+                        for event in history.events() {
+                            if event.number > *last {
+                                log.record(&event.line()).expect("bounded ASCII log line");
+                                *last = event.number;
+                            }
                         }
                     }
                 }
@@ -1213,7 +1286,7 @@ mod app {
                 // Count paint time toward the frame period and sample the latest frame on a miss.
                 let next_frame = Clock::now() + 30.millis();
                 let timing = self.shared().timing.lock(|t| *t);
-                if timing.visible {
+                if timing.visible || timing.boot != 1 {
                     if screen
                         .timing(&mut lcd, &mut self.clock, timing)
                         .await

@@ -10,6 +10,8 @@ description = "Four assignable WaveGraph channels with synths, 808 and 909 kits,
 
 [features]
 late-block-probe = []
+# Requires the board and host qualifications documented in the firmware README.
+qualified-usb = []
 
 [dependencies]
 fm1-audio = "0.2.0-rc.0"
@@ -34,7 +36,7 @@ embedded-graphics = "0.8.2"
 futures-util = { version = "0.3", default-features = false }
 fm1-controls = "0.2.0-rc.0"
 fm1-graphics = { version = "0.2.0-rc.0", features = ["async-display"] }
-fm1-rticx = { version = "0.2.0-rc.1", features = ["audio", "async-display", "async-usb", "usb-log"] }
+fm1-rticx = { version = "0.2.0-rc.1", features = ["audio", "async-display", "async-usb", "cpu1-probe", "usb-log"] }
 static_cell = "2.1.1"
 
 [target.'cfg(not(target_os = "none"))'.dev-dependencies]

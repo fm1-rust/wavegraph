@@ -27,6 +27,7 @@ pub(super) struct RenderBlock {
     pub(super) bass_cycle: Option<usize>,
     pub(super) midi: Batch,
     pub(super) work: u32,
+    pub(super) stack_free: Option<u32>,
 }
 
 impl RenderBlock {
@@ -46,6 +47,7 @@ impl RenderBlock {
             bass_cycle: None,
             midi: Batch::default(),
             work: 0,
+            stack_free: None,
         }
     }
 

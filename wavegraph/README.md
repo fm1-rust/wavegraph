@@ -58,9 +58,18 @@ edit pending. Frame numbers come from the host's render timeline.
 
 The queue holds one edit in caller-owned storage. The render callback stays
 synchronous. Only the slot and waiter are accessed inside a critical section.
-Choose a backend and task waker that fit the audio deadline. The FM-1 supplies
-its own backend. For desktop tests, `critical-section/std` uses a process-wide mutex.
+Choose a backend and task waker that fit the audio deadline. On the FM-1 both
+endpoints run on CPU0, where the critical section masks interrupts. For desktop
+tests, `critical-section/std` uses a process-wide mutex.
 The [held-note test](tests/control.rs) exercises a route change during playback.
+
+A host can delegate rendering to another core through two
+`wavegraph::mailbox::Mailbox` instances in coherent memory. Send a tagged,
+exclusively borrowed buffer through one mailbox and receive it back through
+the other. The worker keeps its patch and scratch buffers between blocks.
+If a deadline passes, ownership stays with the worker until it returns the
+buffer. Only a current block accepted by the output earns an edit receipt.
+The [mailbox test](tests/mailbox.rs) exercises this exchange on two threads.
 
 ## Platform DSP
 

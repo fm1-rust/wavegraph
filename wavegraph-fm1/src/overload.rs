@@ -5,6 +5,30 @@ use heapless::String;
 
 const INDICATOR_TICKS: u32 = 100; // One second on the 100 Hz panel clock.
 
+/// One complete timing snapshot fills the BSP's 43 printable USB log bytes.
+/// Decimal microseconds match the LCD; hexadecimal counters keep all 32 bits.
+pub(super) fn timing_line(
+    boot: u32,
+    worker: u32,
+    refill: u32,
+    commit: u32,
+    overruns: u32,
+    silences: u32,
+) -> String<43> {
+    let us = |ticks: u32| ticks.div_ceil(24).min(99_999);
+    let boot = char::from_digit(boot, 16).unwrap_or('?');
+    let mut line = String::new();
+    write!(
+        line,
+        "B{boot} D{:05} F{:05} W{:05} O{overruns:08X} S{silences:08X}",
+        us(worker),
+        us(refill),
+        us(commit),
+    )
+    .expect("fixed-width timing snapshot");
+    line
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Severity {
     Amber,
@@ -83,6 +107,18 @@ impl Overloads {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn timing_snapshot_always_fits_one_reply_and_rounds_up_like_the_lcd() {
+        assert_eq!(
+            timing_line(1, 24, 25, 0, 15, 2),
+            "B1 D00001 F00002 W00000 O0000000F S00000002"
+        );
+        assert_eq!(
+            timing_line(u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX, u32::MAX),
+            "B? D99999 F99999 W99999 OFFFFFFFF SFFFFFFFF"
+        );
+    }
 
     #[test]
     fn dot_expires_and_repeated_misses_turn_it_red_across_tick_wrap() {
