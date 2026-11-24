@@ -46,7 +46,6 @@ pub(crate) mod fonts {
         };
     }
 
-    font!(FONT_6X9, "font_6x9.raw");
     font!(FONT_6X10, "font_6x10.raw");
     font!(FONT_7X13_BOLD, "font_7x13_bold.raw");
     font!(FONT_9X15_BOLD, "font_9x15_bold.raw");

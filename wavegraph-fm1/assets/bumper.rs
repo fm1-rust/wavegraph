@@ -1,6 +1,9 @@
 //! Render the boot cue on the build host so it costs no synth voices during startup.
 
+mod boot_timing;
 mod patterns;
+
+use boot_timing::{ACCENT_A, FIRST_KNOCK, HIGH_D, SLIDE_C};
 
 use std::{env, fs, path::PathBuf};
 use wavegraph_303::{Voice, VoiceParams};
@@ -45,13 +48,13 @@ fn acid(mix: &mut [f32]) {
         (75, Accent(38)),
         (109, Off),
         (168, Pluck(38)),
-        (195, Off),
-        (254, Accent(45)),
+        (ACCENT_A, Off),
+        (SLIDE_C, Accent(45)),
         (329, Slide(48, false)),
-        (363, Off),
+        (FIRST_KNOCK, Off),
         (426, Pluck(43)),
         (451, Off),
-        (516, Accent(45)),
+        (HIGH_D, Accent(45)),
         (680, Slide(50, true)),
         (750, Off),
     ] {
@@ -73,7 +76,7 @@ fn acid(mix: &mut [f32]) {
 
 fn knocks(mix: &mut [f32]) {
     // Two quiet shell knocks lead into the resolution. The hat marks the landing.
-    for (ms, speed, mut gain) in [(363, 3, 0.25), (451, 2, 0.42)] {
+    for (ms, speed, mut gain) in [(FIRST_KNOCK, 3, 0.25), (451, 2, 0.42)] {
         let mut snare = SnareDrum::new(u32::from(RATE), speed).expect("fixed snare clock");
         snare.trigger();
         for sample in &mut mix[frame(ms)..] {
@@ -84,7 +87,7 @@ fn knocks(mix: &mut [f32]) {
     // Just the first 12 ms of the closed hat puts a metallic edge on the arriving tonic.
     let hat = Samples::X0XPROC1.closed_hat.as_chunks::<2>().0;
     let mut gain = 0.16;
-    for (sample, &bytes) in mix[frame(516)..].iter_mut().zip(hat).take(frame(12)) {
+    for (sample, &bytes) in mix[frame(HIGH_D)..].iter_mut().zip(hat).take(frame(12)) {
         *sample += gain * f32::from(i16::from_le_bytes(bytes)) / 32768.0;
         gain *= 0.99;
     }
@@ -96,6 +99,7 @@ fn knocks(mix: &mut [f32]) {
 )]
 fn main() {
     println!("cargo:rerun-if-changed=assets/bumper.rs");
+    println!("cargo:rerun-if-changed=assets/boot_timing.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
         println!("cargo:rerun-if-env-changed=PI32V2_BIN");
         println!("cargo:rerun-if-changed=runtime");
