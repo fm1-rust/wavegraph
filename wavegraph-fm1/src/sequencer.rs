@@ -10,7 +10,9 @@ use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error, midi::Mid
 use wavegraph_909::{Tr909, Voice};
 use wavegraph_sample::I24;
 
+pub(super) mod edit;
 pub(super) mod pattern;
+use edit::{Address, EDITS, Edits, Step, Suppressed};
 
 const SUBSTEPS: usize = pattern::STEPS * 8;
 
@@ -41,6 +43,8 @@ impl Transport {
 pub(super) enum SeqPage {
     Pattern,
     Tempo,
+    Record,
+    Step,
 }
 
 /// The stock sequencer puts tempo on page two, knob three.
@@ -50,6 +54,9 @@ pub(super) struct Sequencer {
     pub(super) transport: Transport,
     pub(super) channel: Channel,
     pub(super) bar: u8,
+    pub(super) cursor: u8,
+    pub(super) edit_revision: u32,
+    pub(super) full: bool,
     pub(super) enabled: [bool; CHANNELS],
     /// The pressed bank key is in the dark half of its blink.
     pub(super) pressed_key_dark: bool,
@@ -62,6 +69,9 @@ impl Sequencer {
         transport: Transport::INITIAL,
         channel: Channel::One,
         bar: 0,
+        cursor: 0,
+        edit_revision: 0,
+        full: false,
         enabled: [true; CHANNELS],
         pressed_key_dark: false,
         selected: [[Slot::FIRST; Part::ALL.len()]; CHANNELS],
@@ -85,7 +95,10 @@ impl Sequencer {
     }
 
     pub(super) fn back(&mut self) -> bool {
-        if self.page == Some(SeqPage::Tempo) {
+        if matches!(
+            self.page,
+            Some(SeqPage::Tempo | SeqPage::Record | SeqPage::Step)
+        ) {
             self.page = Some(SeqPage::Pattern);
             true
         } else {
@@ -98,13 +111,65 @@ impl Sequencer {
         reason = "A bar index plus an i8 delta fits i16."
     )]
     pub(super) fn turn_bar(&mut self, part: Part, detents: i8) {
-        if !self.transport.playing() {
+        if !self.transport.playing() || self.page == Some(SeqPage::Step) {
             let bars = self.slot(self.channel, part).clip(part, self.channel).bars;
             self.bar = u8::try_from(
                 (i16::from(self.bar) + i16::from(detents)).rem_euclid(i16::from(bars)),
             )
             .expect("four bars");
         }
+    }
+
+    pub(super) fn record(&mut self) {
+        if self.page == Some(SeqPage::Record) {
+            self.page = Some(SeqPage::Pattern);
+        } else {
+            if !self.transport.playing() {
+                self.transport.toggle();
+            }
+            self.page = Some(SeqPage::Record);
+        }
+        self.full = false;
+    }
+
+    pub(super) fn step_edit(&mut self) {
+        self.page = if self.page == Some(SeqPage::Step) {
+            Some(SeqPage::Pattern)
+        } else {
+            Some(SeqPage::Step)
+        };
+        self.full = false;
+    }
+
+    pub(super) fn turn_cursor(&mut self, delta: i8) {
+        self.cursor = self.cursor.wrapping_add_signed(delta) & 15;
+    }
+
+    pub(super) fn edit_address(
+        &self,
+        part: Part,
+        playing: Option<(Position, BankPosition)>,
+    ) -> Option<Address> {
+        let selected = self.slot(self.channel, part);
+        let (slot, bar, step) = match self.page? {
+            SeqPage::Record => playing.map_or((selected, 0, 0), |(pos, bank)| {
+                (bank.slot, bank.bar, pos.step % 16)
+            }),
+            SeqPage::Step => (
+                selected,
+                self.bar
+                    .checked_rem(selected.clip(part, self.channel).bars)?,
+                self.cursor,
+            ),
+            _ => return None,
+        };
+        Some(Address {
+            channel: self.channel,
+            part,
+            slot,
+            bar,
+            step,
+        })
     }
 
     pub(super) fn toggle_track(&mut self) {
@@ -116,6 +181,9 @@ impl Sequencer {
         let Some(page) = self.page.as_mut() else {
             return;
         };
+        if matches!(page, SeqPage::Record | SeqPage::Step) {
+            return;
+        }
         if select > 0 {
             *page = SeqPage::Tempo;
         } else if select < 0 {
@@ -306,6 +374,8 @@ struct Lane {
     automation: Automation,
     slide: bool,
     waiting: bool,
+    edited: Step,
+    suppressed: Suppressed,
 }
 
 impl Lane {
@@ -320,6 +390,8 @@ impl Lane {
         automation: Automation::EMPTY,
         slide: false,
         waiting: false,
+        edited: Step::EMPTY,
+        suppressed: Suppressed::EMPTY,
     };
 
     fn start(slot: Slot) -> Self {
@@ -331,17 +403,23 @@ impl Lane {
 
     fn release(&mut self, route: &mut Route<'_>, cut_kit: bool) -> Result<(), Error> {
         let part = route.track.assignment.part;
-        for held in &mut self.held {
-            if let Some(n) = held.take() {
-                route.wire(MidiMessage::Off(n));
-                route.graph(part.note_off(n))?;
-            }
-        }
+        self.release_notes(route)?;
         if cut_kit && part.is_kit() {
             route.graph(Message::Drum(DrumMessage::Stop))?;
         }
         if self.slide {
             route.wire(MidiMessage::Control(CC_SLIDE, 0));
+        }
+        Ok(())
+    }
+
+    fn release_notes(&mut self, route: &mut Route<'_>) -> Result<(), Error> {
+        let part = route.track.assignment.part;
+        for held in &mut self.held {
+            if let Some(n) = held.take() {
+                route.wire(MidiMessage::Off(n));
+                route.graph(part.note_off(n))?;
+            }
         }
         Ok(())
     }
@@ -435,7 +513,13 @@ impl Lane {
             if e.tick() != self.tick {
                 break;
             }
-            self.dispatch(e.message(), enabled, route)?;
+            let msg = e.message();
+            if self
+                .suppressed
+                .factory(self.edited, route.track.assignment.part, msg, self.tick % 8)
+            {
+                self.dispatch(msg, enabled, route)?;
+            }
             self.cursor = self.cursor.saturating_add(1);
         }
         Ok(())
@@ -469,6 +553,7 @@ impl Route<'_> {
 /// One audio clock for all four independent clip cursors.
 #[derive(Clone, Copy)]
 pub(super) struct PatternPlayer {
+    edits: &'static Edits,
     clock: StepClock,
     transport: Transport,
     assignments: [Assignment; CHANNELS],
@@ -481,6 +566,7 @@ pub(super) struct PatternPlayer {
 impl PatternPlayer {
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
+            edits: &EDITS,
             clock: StepClock::new(rate.0, rate.1),
             transport: Transport::INITIAL,
             assignments: Navigation::INITIAL.assignments,
@@ -579,6 +665,7 @@ impl PatternPlayer {
                     let switch = downbeat && lane.position.slot != self.requested[i];
                     if wrap || switch || lane.waiting {
                         if wrap {
+                            lane.edited = Step::EMPTY;
                             lane.read(old, enabled[i], &mut route)?;
                         }
                         if enabled[i] && !lane.waiting {
@@ -605,7 +692,27 @@ impl PatternPlayer {
                     let clip = lane.position.slot.clip(part, channel);
                     lane.position.bar =
                         u8::try_from(lane.tick / BAR).map_err(|_| Error::Capacity)?;
+                    let phase = lane.tick % 8;
+                    if phase == 0 {
+                        lane.edited = self.edits.step(Address {
+                            channel,
+                            part,
+                            slot: lane.position.slot,
+                            bar: lane.position.bar,
+                            step: u8::try_from(lane.tick % BAR / 8).map_err(|_| Error::Capacity)?,
+                        });
+                        if enabled[i] && lane.edited.edited() && !part.is_kit() {
+                            for &n in lane.held.iter().flatten() {
+                                lane.suppressed.cut(n);
+                            }
+                            lane.release_notes(&mut route)?;
+                        }
+                    }
                     lane.read(clip, enabled[i], &mut route)?;
+                    let step = lane.edited;
+                    for msg in step.events(phase) {
+                        lane.dispatch(msg, enabled[i], &mut route)?;
+                    }
                     lane.tick = lane.tick.saturating_add(1);
                 }
             }
@@ -838,6 +945,140 @@ mod tests {
             )
             .expect("unbounded host event sink");
         events
+    }
+
+    #[test]
+    fn rec_targets_the_sounding_bank_and_step_mode_targets_the_cursor() {
+        let mut seq = Sequencer::INITIAL;
+        let next = Slot::KEYS[2].1;
+        seq.choose(Part::Bass, next);
+        seq.record();
+        assert!(seq.transport.playing());
+        let sounding = (
+            Position {
+                step: 51,
+                beat_phase: 0,
+            },
+            BankPosition {
+                slot: Slot::FIRST,
+                bar: 1,
+            },
+        );
+        let address = |slot, bar, step| Address {
+            channel: Channel::One,
+            part: Part::Bass,
+            slot,
+            bar,
+            step,
+        };
+        assert_eq!(
+            seq.edit_address(Part::Bass, Some(sounding)),
+            Some(address(Slot::FIRST, 1, 3))
+        );
+        assert_eq!(
+            seq.edit_address(Part::Bass, None),
+            Some(address(next, 0, 0))
+        );
+        seq.record();
+        assert!(seq.transport.playing());
+        assert_eq!(seq.edit_address(Part::Bass, Some(sounding)), None);
+        seq.step_edit();
+        seq.turn_cursor(-1);
+        assert_eq!(
+            seq.edit_address(Part::Bass, Some(sounding)),
+            Some(address(next, 0, 15))
+        );
+        seq.turn_cursor(1);
+        assert_eq!(seq.cursor, 0);
+        assert!(seq.back());
+        assert_eq!(seq.page, Some(SeqPage::Pattern));
+    }
+
+    #[test]
+    fn edited_notes_loop_with_velocity_and_releases_while_other_lanes_keep_playing() {
+        use alloc::boxed::Box;
+        use wavegraph::midi::Note;
+        let edits = Box::leak(Box::new(Edits::new()));
+        let slot = Slot::KEYS[2].1; // a single bar
+        let addr = |channel, part| Address {
+            channel,
+            part,
+            slot,
+            bar: 0,
+            step: 0,
+        };
+        let note = |number, velocity| Note { number, velocity };
+        let bass = addr(Channel::One, Part::Bass);
+        let kit = addr(Channel::Four, Part::Tr909);
+        assert!(edits.write(bass, note(91, 79), false));
+        assert!(edits.write(kit, note(51, 88), false));
+        assert!(edits.write(kit, note(36, 90), true));
+        let mut player = PatternPlayer::new((3200, 1));
+        player.requested = [slot; 4];
+        player.edits = edits;
+        let mut transport = playing();
+        transport.bpm = 150; // 40 frames/tick, 5120 frames/bar
+        let mut wire = Vec::new();
+        let mut graph = Vec::new();
+        let tracks = Track::rack(Navigation::INITIAL.assignments);
+        let mut block = |player: &mut PatternPlayer, frames, start| {
+            player
+                .render(
+                    frames,
+                    transport,
+                    &tracks,
+                    [true; 4],
+                    |c, mut e| {
+                        e.frame += start;
+                        graph.push((c, e));
+                        Ok(())
+                    },
+                    |c, mut e| {
+                        e.frame += start;
+                        wire.push((c, e));
+                    },
+                )
+                .expect("host sink")
+        };
+        block(&mut player, 1, 0);
+        assert!(edits.write(bass, note(92, 114), false));
+        block(&mut player, 5200, 1);
+        for (frame, message) in [
+            (0, MidiMessage::On(note(91, 79))),
+            (240, MidiMessage::Off(91)),
+            (5120, MidiMessage::On(note(92, 114))),
+        ] {
+            assert!(
+                wire.iter()
+                    .any(|(c, e)| *c == Channel::One && e.frame == frame && e.message == message)
+            );
+        }
+        assert!(graph.iter().any(|(c, e)| *c == Channel::Four
+            && e.frame == 5120
+            && e.message == Message::Drum(DrumMessage::Trigger(Voice::Ride, 88))));
+        assert!(!graph.iter().any(|(c, e)| *c == Channel::Four
+            && e.frame == 0
+            && matches!(
+                e.message,
+                Message::Drum(DrumMessage::Trigger(Voice::Kick, _))
+            )));
+        let factory = slot
+            .clip(Part::Tr909, Channel::Four)
+            .events
+            .iter()
+            .filter(|e| e.tick() == 0);
+        for n in factory.filter_map(|e| match e.message() {
+            MidiMessage::On(n) if !matches!(n.number, 35 | 36 | 51) => Some(n),
+            _ => None,
+        }) {
+            assert!(wire.iter().any(|(c, e)| *c == Channel::Four
+                && e.frame == 0
+                && e.message == MidiMessage::On(n)));
+        }
+        assert!(
+            wire.iter()
+                .any(|(c, e)| *c == Channel::Two && matches!(e.message, MidiMessage::On(_)))
+        );
     }
 
     #[test]

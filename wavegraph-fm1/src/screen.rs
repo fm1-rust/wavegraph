@@ -408,7 +408,7 @@ impl Screen {
                 [b"C1", b"C2", b"C3", b"C4"][seq.channel.index()],
                 ink,
             );
-            if view == SeqPage::Pattern {
+            if view != SeqPage::Tempo {
                 self.text.text(4, 2, b"1   2   3   4", muted);
                 self.text.text(15, 0, b"B", muted);
                 self.text.text(16, 1, b"S", muted);
@@ -434,12 +434,18 @@ impl Screen {
         self.selector.badge.header_text(
             self.text,
             1,
-            if seq.transport.playing() {
+            if view == SeqPage::Record {
+                b"REC "
+            } else if view == SeqPage::Step {
+                b"EDIT"
+            } else if seq.transport.playing() {
                 b"PLAY"
             } else {
                 b"STOP"
             },
-            if seq.transport.playing() {
+            if view == SeqPage::Record {
+                palette::RED
+            } else if seq.transport.playing() {
                 green
             } else {
                 palette::RED
@@ -453,7 +459,7 @@ impl Screen {
             if enabled { b"ON " } else { b"OFF" },
             if enabled { green } else { palette::MUTED },
         );
-        if view == SeqPage::Pattern {
+        if view != SeqPage::Tempo {
             self.sequence
                 .paint(
                     lcd,
