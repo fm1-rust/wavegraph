@@ -265,6 +265,7 @@ pub(super) struct SawControls {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Track {
+    pub(super) lfo: crate::lfo::Controls,
     pub(super) arp: arp::Controls,
     pub(super) arp_revision: u32,
     pub(super) assignment: Assignment,
@@ -286,6 +287,7 @@ pub(super) struct Track {
 impl Track {
     pub(super) const fn new(assignment: Assignment) -> Self {
         Self {
+            lfo: crate::lfo::Controls::INITIAL,
             arp: arp::Controls::INITIAL,
             arp_revision: 0,
             assignment,
@@ -1070,7 +1072,14 @@ impl Programs {
         events: &'a mut [RoutedEvents; CHANNELS],
         rate: (u32, u32),
     ) -> Result<Instrument<'a>, Error> {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "Single precision is sufficient for the modulation clock."
+        )]
+        let lfo =
+            wavegraph_lfo::Lfo::new(rate.0 as f32 / rate.1 as f32).expect("audio sample clock");
         Ok(Instrument {
+            lfos: [lfo; CHANNELS],
             programs: self,
             patch: self.0[0].bind_nodes(nodes)?,
             half_gain: false,
@@ -1107,6 +1116,7 @@ pub(super) struct Instrument<'a> {
     pub(super) transport: Transport,
     pub(super) sequences: [bool; CHANNELS],
     player: PatternPlayer,
+    lfos: [wavegraph_lfo::Lfo; CHANNELS],
     arps: [ChannelArp; CHANNELS],
     events: &'a mut [RoutedEvents; CHANNELS],
     pub(super) position: Option<Position>,
@@ -1210,6 +1220,9 @@ impl Instrument<'_> {
         )?;
         for (i, arp) in self.arps.iter_mut().enumerate() {
             let track = &tracks[i];
+            if track.assignment.part == Part::Bass && track.lfo.enabled {
+                self.lfos[i].advance(frames);
+            }
             if track.arp.enabled
                 && !arp.chord.is_empty()
                 && let Some(note) =
@@ -1247,6 +1260,7 @@ impl Instrument<'_> {
         buses: &'b mut [[I24; N]; BUS_COUNT],
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
+        let downbeat = self.transport.playing() && self.player.transport_changed(self.transport);
         let mut inserts = Vec::<_, 8>::new();
         let mut enabled = self.sequences;
         let mut live_counts = [0; CHANNELS];
@@ -1290,6 +1304,27 @@ impl Instrument<'_> {
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
+            if part == Part::Bass {
+                let c = track.lfo;
+                let clock = &mut self.lfos[i];
+                if c.enabled {
+                    if old.is_none_or(|t| !t.lfo.enabled) || (c.sync && downbeat) {
+                        clock.reset();
+                    }
+                    clock.set_frequency(c.frequency(self.transport.bpm));
+                    clock.shape = c.shape();
+                    if let Some(event) = clock.tick(N) {
+                        let amount = event.message * (f32::from(c.depth) / 127.0);
+                        events
+                            .push(at(BassMessage::Modulate(c.target(), amount)))
+                            .map_err(|_| Error::Capacity)?;
+                    }
+                } else if old.is_some_and(|t| t.lfo.enabled) {
+                    events
+                        .push(at(BassMessage::Modulate(c.target(), 0.0)))
+                        .map_err(|_| Error::Capacity)?;
+                }
+            }
             if let Some(last) = previous.filter(|t| t.arp.enabled)
                 && (!track.arp.enabled
                     || old.is_none()
@@ -1474,6 +1509,69 @@ mod tests {
         dynamics_enabled: false,
         ..Fx::INITIAL
     };
+
+    #[test]
+    fn lfo_page_and_mod_wheel_follow_the_assigned_bass_channel() -> Result<(), Error> {
+        use crate::panel::PageButton;
+        use wavegraph_303::Destination;
+        let mut nav = Navigation::INITIAL;
+        nav.press(PageButton::Lfo);
+        assert_eq!(nav.view, View::Lfo);
+        nav.turn(0, 1);
+        assert_eq!((nav.view, nav.focus), (View::Lfo, Channel::Two));
+        nav.press(PageButton::Lfo);
+        assert_eq!(nav.view, View::Scope);
+        nav.press(PageButton::Lfo);
+        nav.turn(0, 1);
+        nav.press(PageButton::Lfo);
+        assert_eq!((nav.view, nav.focus), (View::Scope, Channel::Three));
+
+        with_instrument(8192, |rack| {
+            let mut tracks = Track::rack(nav.assignments);
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let mut keys = Keys::<1>::new();
+            // Square -> cutoff on bass 2; the wheel must also work off-page.
+            tracks[1].lfo.edit(0, [3, 0, 0, 1], true);
+            for (status, value) in [(0xb1, 127), (0xb2, 0)] {
+                let (ch, cc) = decode_midi([11, status, 1, value]).expect("CC1");
+                keys.midi(ch, cc, &mut tracks[ch.index()]);
+            }
+            assert_eq!(tracks[0].lfo, crate::lfo::Controls::INITIAL);
+            assert_eq!(tracks[2].lfo, crate::lfo::Controls::INITIAL);
+            rack.render(tracks, &mut buses)?;
+            assert!(rack.events[1].contains(&at(BassMessage::Modulate(Destination::Cutoff, 1.0))));
+            tracks[1].lfo.edit(0, [0; 4], true);
+            rack.render(tracks, &mut buses)?;
+            assert!(rack.events[1].contains(&at(BassMessage::Modulate(Destination::Cutoff, 0.0))));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn synced_lfo_counts_missed_frames_and_restarts_on_play() -> Result<(), Error> {
+        with_instrument(8192, |rack| {
+            let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+            tracks[0].lfo.edit(1, [2, 0, 127, 0], true);
+            rack.transport.bpm = 120;
+            rack.sequences = [false; CHANNELS];
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let pitch = |amount| {
+                at(BassMessage::Modulate(
+                    wavegraph_303::Destination::Pitch,
+                    amount,
+                ))
+            };
+            rack.render(tracks, &mut buses)?;
+            assert!(rack.events[0].contains(&pitch(-1.0)));
+            rack.skip_frames(896, |_, _, _| {})?;
+            rack.render(tracks, &mut buses)?;
+            assert!(rack.events[0].contains(&pitch(-0.5)));
+            rack.transport.toggle();
+            rack.render(tracks, &mut buses)?;
+            assert!(rack.events[0].contains(&pitch(-1.0)));
+            Ok(())
+        })
+    }
 
     fn note(number: u8, velocity: u8) -> Note {
         Note { number, velocity }

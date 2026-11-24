@@ -1,0 +1,35 @@
+name: wavegraph-lfo
+
+on:
+  pull_request:
+    paths: &wavegraph-lfo-paths
+      - 'wavegraph-lfo/**'
+      - 'wavegraph-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/wavegraph-lfo.yml'
+  push:
+    branches: [main]
+    paths: *wavegraph-lfo-paths
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install stable --profile minimal --target thumbv7em-none-eabihf --no-self-update
+      - name: Host tests
+        run: cargo +stable test -p wavegraph-lfo --locked
+      - name: no_std build
+        run: cargo +stable build -p wavegraph-lfo --lib --release --no-default-features --target thumbv7em-none-eabihf --locked

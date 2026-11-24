@@ -4,6 +4,7 @@ members = [
     "instruments/wavegraph-*",
     "wavegraph-adsr",
     "wavegraph-arp",
+    "wavegraph-lfo",
     "wavegraph-audio",
     "wavegraph-core",
     "wavegraph-dsp",
@@ -22,6 +23,7 @@ fm1-audio = "0.2.0-rc.1"
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-adsr = { version = "0.1", path = "wavegraph-adsr" }
 wavegraph-arp = { version = "0.1", path = "wavegraph-arp" }
+wavegraph-lfo = { version = "0.1", path = "wavegraph-lfo" }
 wavegraph-core = { version = "0.1", path = "wavegraph-core" }
 wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
 wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }

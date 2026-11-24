@@ -26,6 +26,7 @@ wavegraph-808 = { path = "../instruments/wavegraph-808" }
 wavegraph-909 = { path = "../instruments/wavegraph-909" }
 wavegraph-adsr.workspace = true
 wavegraph-arp.workspace = true
+wavegraph-lfo.workspace = true
 wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
 wavegraph-organ = { path = "../instruments/wavegraph-organ" }

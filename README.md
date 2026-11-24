@@ -20,6 +20,7 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-dsp`](wavegraph-dsp/) | DSP and bytecode interpreter | Unpublished | [Patch guide](wavegraph-dsp/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
+| [`wavegraph-lfo`](wavegraph-lfo/) | Frame-clocked modulation source with a float message outlet | Unpublished | [LFO guide](wavegraph-lfo/README.md) | [![Build status][lfo-build]][lfo-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
@@ -52,6 +53,8 @@ cargo +stable test -p wavegraph-dsp --test patch --locked
 [808-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-808.yml
 [909-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-909.yml/badge.svg?branch=main&event=push
 [909-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-909.yml
+[lfo-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-lfo.yml/badge.svg?branch=main&event=push
+[lfo-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-lfo.yml
 [arp-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-arp.yml/badge.svg?branch=main&event=push
 [arp-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-arp.yml
 [fm1-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml/badge.svg?branch=main&event=push

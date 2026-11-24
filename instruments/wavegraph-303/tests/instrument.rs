@@ -250,3 +250,38 @@ fn output_gain_rejects_invalid_values() {
         assert!(std::panic::catch_unwind(|| Tb303::new(RATE).with_output_gain(gain)).is_err());
     }
 }
+
+#[test]
+fn modulation_follows_automation_and_retargeting_restores_the_base() {
+    use wavegraph_303::Destination::{Pitch, Resonance};
+    fn render(events: &[Event<Message>]) -> [f32; 512] {
+        let mut out = [0.0; 512];
+        Tb303::new(RATE).process(&mut ProcessContext {
+            frames: out.len(),
+            inputs: &[],
+            outputs: &mut [&mut out],
+            events,
+            emit: &mut Err,
+        });
+        out
+    }
+    let actual = render(&[
+        at(0, Message::Modulate(Pitch, 0.5)),
+        at(0, note(48, true, false)),
+        at(64, Message::TuningSemitones(3.0)),
+        at(128, Message::Modulate(Resonance, 0.25)),
+        at(256, Message::Resonance(0.625)),
+        at(384, Message::Modulate(Resonance, 0.0)),
+    ]);
+    let expected = render(&[
+        at(0, Message::TuningSemitones(1.0)),
+        at(0, note(48, true, false)),
+        at(64, Message::TuningSemitones(4.0)),
+        at(128, Message::TuningSemitones(3.0)),
+        at(128, Message::Resonance(0.75)),
+        at(256, Message::Resonance(0.875)),
+        at(384, Message::Resonance(0.625)),
+    ]);
+    assert!(actual.iter().any(|&s| s != 0.0));
+    assert_eq!(actual, expected);
+}

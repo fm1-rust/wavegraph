@@ -11,6 +11,49 @@ pub enum Waveform {
     Square,
 }
 
+/// Destination of a bipolar modulation message. The stored panel settings remain
+/// the center of the sweep, including when automation changes them mid-note.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Destination {
+    /// Oscillator pitch, up to two semitones either side of the tuned pitch.
+    Pitch,
+    /// Filter cutoff, up to three octaves either side of the base cutoff.
+    Cutoff,
+    /// Filter resonance.
+    Resonance,
+    /// Filter envelope depth.
+    EnvMod,
+    /// Filter envelope decay time.
+    Decay,
+    /// VCA attack time.
+    Attack,
+    /// Accent amount.
+    Accent,
+    /// Drive into the ladder filter.
+    Overdrive,
+}
+
+impl Destination {
+    // Called at control boundaries. Keep destination mapping out of the
+    // FM-1 SRAM section reserved for the sample renderer.
+    #[inline(never)]
+    fn apply(self, p: &mut VoiceParams, amount: f32) {
+        match self {
+            Self::Pitch => p.tuning_st += 2.0 * amount,
+            Self::Cutoff => {
+                p.cutoff_hz =
+                    (p.cutoff_hz * crate::dsp::fast_exp2(3.0 * amount)).clamp(62.0, 8000.0)
+            }
+            Self::Resonance => p.resonance = (p.resonance + amount).clamp(0.0, 1.0),
+            Self::EnvMod => p.env_oct = (p.env_oct + 6.0 * amount).clamp(0.0, 6.0),
+            Self::Decay => p.decay_s = (p.decay_s + 1.95 * amount).clamp(0.05, 2.0),
+            Self::Attack => p.attack_s = (p.attack_s + 0.060 * amount).clamp(0.0, 0.060),
+            Self::Accent => p.accent = (p.accent + amount).clamp(0.0, 1.0),
+            Self::Overdrive => p.overdrive_db = (p.overdrive_db + 36.0 * amount).clamp(0.0, 36.0),
+        }
+    }
+}
+
 /// Notes and panel changes for the 303's message inlet.
 /// Out-of-range notes and controls are ignored.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,6 +85,9 @@ pub enum Message {
     Accent(f32),
     /// Set the tuning offset in semitones (finite).
     TuningSemitones(f32),
+    /// Replace the current modulation with a bipolar offset in -1..=1.
+    /// Zero bypasses modulation on all destinations.
+    Modulate(Destination, f32),
     /// Select the oscillator shape using the voice's existing crossfade.
     Waveform(Waveform),
     /// Reset the voice at a transport discontinuity, retaining the panel settings.
@@ -55,6 +101,7 @@ pub struct Tb303 {
     /// Panel settings and voice calibration. Send [`Message`]s to move panel
     /// controls at a particular frame during playback.
     pub params: VoiceParams,
+    modulation: (Destination, f32),
     voice: Voice,
     held_note: Option<u8>,
     last_cycle_start: Option<usize>,
@@ -68,6 +115,7 @@ impl Tb303 {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             params: VoiceParams::default(),
+            modulation: (Destination::Pitch, 0.0),
             voice: Voice::new(sample_rate),
             held_note: None,
             last_cycle_start: None,
@@ -105,6 +153,9 @@ impl Tb303 {
             Message::Accent(value) if (0.0..=1.0).contains(&value) => self.params.accent = value,
             Message::TuningSemitones(semitones) if semitones.is_finite() => {
                 self.params.tuning_st = semitones
+            }
+            Message::Modulate(target, value) if (-1.0..=1.0).contains(&value) => {
+                self.modulation = (target, value);
             }
             Message::Waveform(shape) => self.params.square = shape == Waveform::Square,
             Message::Reset => {
@@ -160,17 +211,24 @@ impl Tb303 {
         if output.is_empty() {
             return;
         }
-        if self.suspend_idle && self.voice.skip_silence(&self.params, output.len()) {
+        let mut effective;
+        let (target, amount) = self.modulation;
+        let params = if amount == 0.0 {
+            &self.params
+        } else {
+            effective = self.params;
+            target.apply(&mut effective, amount);
+            &effective
+        };
+        if self.suspend_idle && self.voice.skip_silence(params, output.len()) {
             for sample in output {
                 S::write(sample, 0.0);
             }
         } else {
             let gain = self.output_gain;
-            let cycle = self
-                .voice
-                .render_with(&self.params, output, |sample, value| {
-                    S::write(sample, value * gain);
-                });
+            let cycle = self.voice.render_with(params, output, |sample, value| {
+                S::write(sample, value * gain);
+            });
             if let Some(frame) = cycle {
                 self.last_cycle_start = start.checked_add(frame);
             }

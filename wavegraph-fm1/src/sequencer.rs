@@ -564,6 +564,10 @@ pub(super) struct PatternPlayer {
 }
 
 impl PatternPlayer {
+    pub(super) fn transport_changed(&self, transport: Transport) -> bool {
+        self.transport.generation != transport.generation
+    }
+
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
             edits: &EDITS,
@@ -603,7 +607,7 @@ impl PatternPlayer {
         if frames == 0 {
             return Ok(());
         }
-        let restart = self.transport.generation != transport.generation;
+        let restart = self.transport_changed(transport);
         for channel in Channel::ALL {
             let i = channel.index();
             let mut route = Route {
