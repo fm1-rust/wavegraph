@@ -37,6 +37,7 @@ mod grid;
 mod jp8080;
 mod lettering;
 mod lfo;
+mod polyphony;
 use grid::TextGrid;
 mod master_fx;
 mod microwave;
@@ -114,6 +115,7 @@ enum Page {
     Timing,
     Scope(Channel, Part),
     Arp(Channel, Part),
+    VoiceMode(Channel, Part, wavegraph_organ::VoiceMode),
     Lfo(Channel, crate::lfo::Controls),
     Fx(Channel, Part),
     MasterFx,
@@ -651,6 +653,24 @@ impl Screen {
                     (motion.position, motion.banks[labels.seq.channel.index()]),
                 )
                 .await;
+        }
+        if labels.view == View::VoiceMode {
+            let page = Page::VoiceMode(labels.channel, labels.focus, labels.mode);
+            if self.page == Some(page) {
+                return Ok(());
+            }
+            let entering = !matches!(self.page, Some(Page::VoiceMode(channel, part, _)) if (channel, part) == (labels.channel, labels.focus));
+            if entering {
+                self.change_view(if labels.focus == Part::Organ {
+                    ORGAN_STYLE
+                } else {
+                    microwave::STYLE
+                });
+            }
+            let mut draw = pin!(polyphony::paint(lcd, clock, self.strip, &labels, entering));
+            poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+            self.page = Some(page);
+            return Ok(());
         }
         if labels.view == View::Lfo {
             let page = Page::Lfo(labels.channel, labels.lfo);

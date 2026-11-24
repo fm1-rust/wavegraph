@@ -9,6 +9,8 @@ pub use bank::{BANKS, Bank};
 pub use scan::{Mode, Scan};
 pub use wavegraph_adsr::Adsr;
 pub use wavegraph_core::Tuning;
+pub use wavegraph_core::polyphony::{Chord, VoiceMode};
+use wavegraph_core::{midi::Note, polyphony::Keyboard};
 
 use bank::Level;
 use scan::{Cursor, Travel};
@@ -38,6 +40,8 @@ pub const DEFAULT_POSITION_ENVELOPE: Adsr = Adsr {
 /// Sample-timed controls accepted on inlet zero.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
+    /// Change voice allocation, immediately revoicing any held keys.
+    VoiceMode(VoiceMode),
     /// Strike a MIDI note. Velocity zero releases it.
     NoteOn {
         /// MIDI note number in 0–127.
@@ -96,6 +100,7 @@ pub struct Wavetable<'a> {
     travel: Travel,
     timing: Timing,
     position_timing: Timing,
+    keyboard: Keyboard,
     voices: [Voice; POLYPHONY],
 }
 
@@ -116,6 +121,7 @@ impl<'a> Wavetable<'a> {
             travel: Travel::new(Scan::RESONANT, bank.last, tuning.sample_period()),
             timing: DEFAULT_ENVELOPE.at_sample_period(tuning.sample_period()),
             position_timing: DEFAULT_POSITION_ENVELOPE.at_sample_period(tuning.sample_period()),
+            keyboard: Keyboard::EMPTY,
             voices: [Voice::idle(); POLYPHONY],
         })
     }
@@ -149,6 +155,46 @@ impl<'a> Wavetable<'a> {
         self.travel = travel;
     }
 
+    fn release_slot(&mut self, i: usize) {
+        let v = &mut self.voices[i];
+        v.envelope.gate_off(&self.timing);
+        v.position_envelope.gate_off(&self.position_timing);
+    }
+
+    fn strike(&mut self, i: usize, note: Note, step: u32) {
+        self.voices[i] = Voice {
+            note: note.number,
+            phase: 0,
+            step,
+            level: Level::for_step(step),
+            gain: f32::from(note.velocity.min(127)) / (127.0 * 4.0 * 32768.0),
+            cursor: Cursor::default(),
+            envelope: Envelope::IDLE,
+            position_envelope: Envelope::IDLE,
+        };
+        self.voices[i].envelope.gate_on(&self.timing);
+        if self.scan.mode == Mode::Envelope {
+            self.voices[i]
+                .position_envelope
+                .gate_on(&self.position_timing);
+        }
+    }
+
+    fn revoice(&mut self) {
+        for i in 0..POLYPHONY {
+            if let Some(note) = self.keyboard.voice(i) {
+                let step = self.keyboard.step(i, self.tuning.phase_step(note.number));
+                if step != 0 {
+                    self.strike(i, note, step);
+                    continue;
+                }
+            }
+            if self.voices[i].envelope.is_gated() {
+                self.release_slot(i);
+            }
+        }
+    }
+
     fn apply(&mut self, message: Message) {
         match message {
             Message::Scan(scan) => self.scan(scan),
@@ -174,14 +220,23 @@ impl<'a> Wavetable<'a> {
                 }
                 self.position_timing = timing;
             }
+
+            Message::VoiceMode(mode) => {
+                if self.keyboard.mode != mode {
+                    self.keyboard.mode = mode;
+                    self.revoice();
+                }
+            }
             Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
-                if let Some(v) = self
-                    .voices
-                    .iter_mut()
-                    .find(|v| v.note == note && !v.envelope.is_idle())
-                {
-                    v.envelope.gate_off(&self.timing);
-                    v.position_envelope.gate_off(&self.position_timing);
+                let newest = self.keyboard.release(note);
+                if self.keyboard.mode == VoiceMode::Poly {
+                    for i in 0..POLYPHONY {
+                        if self.voices[i].note == note && self.voices[i].envelope.is_gated() {
+                            self.release_slot(i);
+                        }
+                    }
+                } else if newest {
+                    self.revoice();
                 }
             }
             Message::NoteOn { note, velocity } => {
@@ -189,29 +244,23 @@ impl<'a> Wavetable<'a> {
                 if step == 0 {
                     return;
                 }
-                let index = self
-                    .voices
-                    .iter()
-                    .position(|v| !v.envelope.is_idle() && v.note == note)
-                    .or_else(|| self.voices.iter().position(|v| v.envelope.is_idle()))
-                    .or_else(|| self.voices.iter().rposition(|v| !v.envelope.is_gated()))
-                    .unwrap_or(POLYPHONY - 1);
-                self.voices[..=index].rotate_right(1);
-                self.voices[0] = Voice {
-                    note,
-                    phase: 0,
-                    step,
-                    level: Level::for_step(step),
-                    gain: f32::from(velocity.min(127)) / (127.0 * 4.0 * 32768.0),
-                    cursor: Cursor::default(),
-                    envelope: Envelope::IDLE,
-                    position_envelope: Envelope::IDLE,
+                let note = Note {
+                    number: note,
+                    velocity,
                 };
-                self.voices[0].envelope.gate_on(&self.timing);
-                if self.scan.mode == Mode::Envelope {
-                    self.voices[0]
-                        .position_envelope
-                        .gate_on(&self.position_timing);
+                self.keyboard.press(note);
+                if self.keyboard.mode == VoiceMode::Poly {
+                    let index = self
+                        .voices
+                        .iter()
+                        .position(|v| !v.envelope.is_idle() && v.note == note.number)
+                        .or_else(|| self.voices.iter().position(|v| v.envelope.is_idle()))
+                        .or_else(|| self.voices.iter().rposition(|v| !v.envelope.is_gated()))
+                        .unwrap_or(POLYPHONY - 1);
+                    self.voices[..=index].rotate_right(1);
+                    self.strike(0, note, step);
+                } else {
+                    self.revoice();
                 }
             }
         }

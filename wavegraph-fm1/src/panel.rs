@@ -1,5 +1,7 @@
 //! Channel selection and page navigation for the FM-1 panel.
 
+use wavegraph_organ::{Chord, VoiceMode};
+
 use crate::{
     bass::Knob,
     fx::{Device, INSERT_SLOTS, InsertKind},
@@ -74,6 +76,7 @@ impl Assignment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum View {
     Scope,
+    VoiceMode,
     Envelope,
     Arp,
     Lfo,
@@ -93,7 +96,8 @@ impl View {
         match self {
             Self::Scope | Self::Fx => true,
             Self::Envelope => part.is_kit(), // Drum kits fall back to their scope.
-            Self::Lfo
+            Self::VoiceMode
+            | Self::Lfo
             | Self::Arp
             | Self::Mixer
             | Self::Channel
@@ -103,8 +107,36 @@ impl View {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Polyphony {
+    pub(super) mode: VoiceMode,
+    chord: Chord,
+}
+
+impl Polyphony {
+    pub(super) const INITIAL: Self = Self {
+        mode: VoiceMode::Poly,
+        chord: Chord::MAJOR,
+    };
+
+    pub(super) fn edit(&mut self, sel: bool, detents: i8) {
+        if sel {
+            self.mode = match self.mode {
+                VoiceMode::Poly => VoiceMode::Chord(self.chord),
+                VoiceMode::Chord(_) => VoiceMode::Unison,
+                VoiceMode::Unison => VoiceMode::Poly,
+            };
+        }
+        if matches!(self.mode, VoiceMode::Chord(_)) && detents != 0 {
+            self.chord = self.chord.turn(detents);
+            self.mode = VoiceMode::Chord(self.chord);
+        }
+    }
+}
+
 pub(super) enum PageButton {
     Home,
+    Edit,
     Arp,
     Lfo,
     Env,
@@ -207,6 +239,13 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
+            PageButton::Edit
+                if self.view == View::Scope
+                    && matches!(self.part(), Part::Organ | Part::Wavetable) =>
+            {
+                View::VoiceMode
+            }
+            PageButton::Edit if self.view != View::VoiceMode => self.view,
             PageButton::Lfo if self.view == View::Scope && self.part() == Part::Bass => View::Lfo,
             PageButton::Lfo if self.view != View::Lfo => self.view,
             PageButton::Arp if self.view == View::Scope => View::Arp,
@@ -292,7 +331,10 @@ impl Navigation {
             if self.focus != previous_channel || self.view == View::Envelope {
                 self.bass_slot = None;
             }
-            if self.view == View::Envelope || (self.view == View::Lfo && self.part() != Part::Bass)
+            if self.view == View::Envelope
+                || (self.view == View::VoiceMode
+                    && !matches!(self.part(), Part::Organ | Part::Wavetable))
+                || (self.view == View::Lfo && self.part() != Part::Bass)
             {
                 self.view = View::Scope;
             }

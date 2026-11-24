@@ -297,3 +297,30 @@ fn overlapping_keys_run_independent_envelopes_and_restrikes_start_fresh() {
         render::<32>(&mut first, &strike)
     );
 }
+
+#[test]
+fn chord_and_unison_follow_the_last_held_root() {
+    use wavegraph_organ::{Chord, VoiceMode};
+    let mut organ = Organ::new(44_100, 1).expect("clock");
+    let mut send = |message| {
+        render::<16>(&mut organ, &[event(0, message)]);
+        organ.held_notes()
+    };
+    send(key(60));
+    send(key(65));
+    let chord = Message::VoiceMode(VoiceMode::Chord(Chord::MAJOR.turn(2)));
+    assert_eq!(send(chord), [65, 69, 72, 76].map(Some));
+    // A shared chord tone (or its stale note-off) does not own the chord.
+    assert_eq!(send(Message::NoteOff(69)), [65, 69, 72, 76].map(Some));
+    assert_eq!(send(Message::NoteOff(65)), [60, 64, 67, 71].map(Some));
+    assert_eq!(send(Message::VoiceMode(VoiceMode::Unison)), [Some(60); 4]);
+    assert_eq!(send(key(67)), [Some(67); 4]);
+    assert_eq!(
+        send(Message::VoiceMode(VoiceMode::Poly)),
+        [Some(67), Some(60), None, None]
+    );
+    send(chord);
+    assert_eq!(send(key(125)), [Some(125), None, None, None]);
+    assert_eq!(send(Message::AllNotesOff), [None; 4]);
+    assert_eq!(send(Message::NoteOff(125)), [None; 4]);
+}
