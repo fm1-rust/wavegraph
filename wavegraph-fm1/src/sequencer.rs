@@ -365,8 +365,11 @@ impl Lane {
                 route.graph(Message::Bass(message))?;
             }
         }
-        if self.slide {
-            route.wire(MidiMessage::Control(CC_SLIDE, 127));
+        if route.track.assignment.part == Part::Bass {
+            route.wire(MidiMessage::Control(
+                CC_SLIDE,
+                if self.slide { 127 } else { 0 },
+            ));
         }
         Ok(())
     }
