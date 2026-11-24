@@ -1,0 +1,100 @@
+name: Retry macOS runner allocation
+
+# Adapted from https://github.com/RustCrypto/utils/pull/1612
+# Inspired by Canonical's bounded PR retries and Link Foundation's runner-acquisition check.
+# https://github.com/canonical/snapd/blob/master/.github/workflows/rerun.yaml
+# https://github.com/link-foundation/links-notation/blob/main/.github/workflows/rerun-unacquired.yml
+on:
+  workflow_run:
+    workflows: [wavegraph-audio]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  retry-macos:
+    if: >-
+      github.event.workflow_run.path == '.github/workflows/wavegraph-audio.yml' &&
+      (github.event.workflow_run.conclusion == 'failure' ||
+       github.event.workflow_run.conclusion == 'cancelled') &&
+      (github.event.workflow_run.event == 'pull_request' ||
+       (github.event.workflow_run.head_repository.full_name == github.repository &&
+        (github.event.workflow_run.event == 'workflow_dispatch' ||
+         (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      checks: read
+      pull-requests: read
+    concurrency:
+      group: retry-macos-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    steps:
+      - name: Retry an unacquired runner
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const head = run.head_repository;
+            if (!head?.id) return;
+
+            const { owner, repo } = context.repo;
+            const target = { owner, repo, run_id: run.id };
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...target, attempt_number: run.run_attempt, per_page: 100
+            });
+            const unsuccessful = jobs.filter(job => !['success', 'skipped', 'neutral'].includes(job.conclusion));
+            const [job] = unsuccessful;
+            if (unsuccessful.length !== 1 || job.name !== 'macos' ||
+                !job.labels?.includes('macos-latest') || job.status !== 'completed' ||
+                !['failure', 'cancelled'].includes(job.conclusion) ||
+                job.runner_id || job.runner_name || job.steps?.length !== 0) {
+              core.info('Expected a single unsuccessful macos job with no runner and no steps.');
+              return;
+            }
+
+            // A manually cancelled job can also have an empty runner and step list.
+            const annotations = await github.paginate(github.rest.checks.listAnnotations, {
+              owner, repo, check_run_id: job.id, per_page: 100
+            });
+            if (!annotations.some(a => a.message?.includes('was not acquired by Runner'))) {
+              core.info('GitHub did not report a runner-acquisition failure.');
+              return;
+            }
+            const maxAttempts = 3; // Initial allocation plus two automatic retries.
+            if (run.run_attempt >= maxAttempts) {
+              core.warning(`Retry limit reached. To retry manually: gh run rerun --job ${job.id} -R ${owner}/${repo}`);
+              return;
+            }
+
+            // workflow_run.pull_requests can be empty even for a PR from this repository.
+            if (run.event === 'pull_request') {
+              const pulls = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', head: `${head.owner.login}:${run.head_branch}`, per_page: 100
+              });
+              if (!pulls.some(pr => pr.head.repo?.id === head.id && pr.head.ref === run.head_branch &&
+                  pr.head.sha === run.head_sha)) {
+                core.info('The PR has closed or moved to another commit.');
+                return;
+              }
+            }
+
+            // Only a newer run of the audio workflow supersedes a path-filtered push.
+            const recent = await github.paginate(github.rest.actions.listWorkflowRuns, {
+              owner, repo, workflow_id: run.workflow_id, branch: run.head_branch, event: run.event,
+              created: `>=${run.created_at}`, per_page: 100
+            });
+            if (recent.some(other => other.head_repository?.id === head.id && other.run_number > run.run_number)) {
+              core.info('A newer audio run exists for this source branch.');
+              return;
+            }
+
+            // A maintainer may already have clicked Re-run while we checked the job.
+            const { data: current } = await github.rest.actions.getWorkflowRun(target);
+            if (current.status !== 'completed' || current.run_attempt !== run.run_attempt) {
+              core.info('The run has already been restarted.');
+              return;
+            }
+            await github.rest.actions.reRunJobForWorkflowRun({ owner, repo, job_id: job.id });
+            core.notice(`Requested macos attempt ${run.run_attempt + 1}/${maxAttempts}.`);
