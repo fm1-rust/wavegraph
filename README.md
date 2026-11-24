@@ -11,16 +11,16 @@ caller-owned buffers. Each instrument is a separate crate. The
 
 | Crate | Description | crates.io | Documentation | Build status |
 | --- | --- | --- | --- | --- |
-| [`wavegraph`](wavegraph/) | DSP and bytecode interpreter | [crates.io](https://crates.io/crates/wavegraph) | [Patch guide](wavegraph/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
 | [`wavegraph-303`](instruments/wavegraph-303/) | Monophonic 303 bass synth with accent and slide | Unpublished | [Instrument guide](instruments/wavegraph-303/README.md) | [![Build status][303-build]][303-ci] |
 | [`wavegraph-808`](instruments/wavegraph-808/) | Synthesized 808 kick, snare and shared-source hats with individual outputs | Unpublished | [Instrument guide](instruments/wavegraph-808/README.md) | [![Build status][808-build]][808-ci] |
 | [`wavegraph-909`](instruments/wavegraph-909/) | Six-voice hybrid 909 with a mono mix and individual outputs | Unpublished | [Instrument guide](instruments/wavegraph-909/README.md) | [![Build status][909-build]][909-ci] |
-| [`wavegraph-adsr`](wavegraph-adsr/) | Sample-clocked ADSR shared by the monosynth and organ | Unpublished | [Envelope guide](wavegraph-adsr/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-adsr`](wavegraph-adsr/) | Sample-clocked ADSR shared by the monosynth and organ | Unpublished | [Envelope guide](wavegraph-adsr/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-arp`](wavegraph-arp/) | Frame-clocked MIDI arpeggiator | Unpublished | [Arpeggiator guide](wavegraph-arp/README.md) | [![Build status][arp-build]][arp-ci] |
 | [`wavegraph-audio`](wavegraph-audio/) | Routed audio I/O for macOS and the FM-1 | Unpublished | [Run the Mac synth](wavegraph-audio/README.md) | [![Build status][audio-build]][audio-ci] |
-| [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][dsp-build]][dsp-ci] |
+| [`wavegraph-dsp`](wavegraph-dsp/) | DSP and bytecode interpreter | Unpublished | [Patch guide](wavegraph-dsp/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
-| [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][wavegraph-build]][wavegraph-ci] |
+| [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |
 | [`wavegraph-sample`](wavegraph-sample/) | PCM sample types, conversions and arithmetic | [crates.io](https://crates.io/crates/wavegraph-sample) | [Sample guide](wavegraph-sample/README.md) | [![Build status][sample-build]][sample-ci] |
 | [`wavegraph-sampler`](instruments/wavegraph-sampler/) | One-shot mono PCM player | Unpublished | [Playback guide](instruments/wavegraph-sampler/README.md) | [![Build status][sampler-build]][sampler-ci] |
@@ -32,20 +32,20 @@ To browse their API documentation locally, run `cargo doc --workspace --no-deps 
 
 ## Patch example
 
-The [engine example](wavegraph/README.md#rendering-a-compiled-patch) runs the
+The [engine example](wavegraph-dsp/README.md#rendering-a-compiled-patch) runs the
 monosynth from bytecode at the FM-1 sample rate.
 
-The [patch integration test](wavegraph/tests/patch.rs) connects two gain objects.
+The [patch integration test](wavegraph-dsp/tests/patch.rs) connects two gain objects.
 One cord carries audio samples and another carries gain changes. Both objects
 apply each change at the same frame. The test renders the patch with `f32`
 and signed 24-bit PCM.
 
 ```sh
-cargo +stable test -p wavegraph --test patch --locked
+cargo +stable test -p wavegraph-dsp --test patch --locked
 ```
 
-[wavegraph-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
-[wavegraph-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
+[dsp-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml/badge.svg?branch=main&event=push
+[dsp-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml
 [303-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml/badge.svg?branch=main&event=push
 [303-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-303.yml
 [808-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-808.yml/badge.svg?branch=main&event=push

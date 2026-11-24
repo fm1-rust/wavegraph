@@ -232,11 +232,11 @@ mod app {
     use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
-    use wavegraph::{
+    use wavegraph_audio::{Playback as _, fm1::Dac};
+    use wavegraph_dsp::{
         control::{Controller, EditQueue, Host, Revision},
         mailbox,
     };
-    use wavegraph_audio::{Playback as _, fm1::Dac};
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;

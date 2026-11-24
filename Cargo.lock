@@ -847,24 +847,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
-name = "wavegraph"
-version = "0.1.0"
-dependencies = [
- "critical-section",
- "heapless",
- "wavegraph-core",
- "wavegraph-monosynth",
- "wavegraph-sample",
-]
-
-[[package]]
 name = "wavegraph-303"
 version = "0.0.0"
 dependencies = [
  "libm",
  "micromath",
- "wavegraph",
  "wavegraph-core",
+ "wavegraph-dsp",
  "wavegraph-sample",
 ]
 
@@ -872,8 +861,8 @@ dependencies = [
 name = "wavegraph-808"
 version = "0.1.0"
 dependencies = [
- "wavegraph",
  "wavegraph-core",
+ "wavegraph-dsp",
  "wavegraph-sample",
 ]
 
@@ -881,8 +870,8 @@ dependencies = [
 name = "wavegraph-909"
 version = "0.1.0"
 dependencies = [
- "wavegraph",
  "wavegraph-core",
+ "wavegraph-dsp",
  "wavegraph-sample",
  "wavegraph-sampler",
 ]
@@ -905,7 +894,7 @@ version = "0.1.0"
 dependencies = [
  "fm1-audio",
  "sdl3",
- "wavegraph",
+ "wavegraph-dsp",
  "wavegraph-monosynth",
  "wavegraph-sample",
 ]
@@ -913,6 +902,17 @@ dependencies = [
 [[package]]
 name = "wavegraph-core"
 version = "0.1.0"
+
+[[package]]
+name = "wavegraph-dsp"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "heapless",
+ "wavegraph-core",
+ "wavegraph-monosynth",
+ "wavegraph-sample",
+]
 
 [[package]]
 name = "wavegraph-fm1"
@@ -929,13 +929,13 @@ dependencies = [
  "micromath",
  "midly",
  "static_cell",
- "wavegraph",
  "wavegraph-303",
  "wavegraph-808",
  "wavegraph-909",
  "wavegraph-adsr",
  "wavegraph-arp",
  "wavegraph-audio",
+ "wavegraph-dsp",
  "wavegraph-fx",
  "wavegraph-monosynth",
  "wavegraph-organ",
@@ -980,8 +980,8 @@ version = "0.1.0"
 name = "wavegraph-sampler"
 version = "0.1.0"
 dependencies = [
- "wavegraph",
  "wavegraph-core",
+ "wavegraph-dsp",
  "wavegraph-sample",
 ]
 

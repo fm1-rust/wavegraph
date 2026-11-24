@@ -1,6 +1,6 @@
 //! Render the 303 through the patch interpreter and compare it to the native voice.
-use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Program, dsp::Software};
 use wavegraph_303::{Message, Tb303, Voice, VoiceParams, Waveform};
+use wavegraph_dsp::{Event, Port, Process, ProcessContext, bytecode::Program, dsp::Software};
 use wavegraph_sample::{I24, Sample, types::i24};
 
 const RATE: f32 = 24_000_000.0 / 544.0;

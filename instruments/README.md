@@ -122,7 +122,7 @@ fn strike_sounds_on_its_frame() {
 
 To play it in a patch, create the instrument once, bind it in the program's
 object table, and use `Op::Call` with zero signal inputs and one signal output.
-Pass its events to `patch.render` for each block. The [engine example](../wavegraph/README.md#rendering-a-compiled-patch)
+Pass its events to `patch.render` for each block. The [engine example](../wavegraph-dsp/README.md#rendering-a-compiled-patch)
 shows the whole path for the monosynth. When several instruments use different
 message types, the host can wrap them in one patch-wide enum and dispatch
 each variant to its instrument, as the [FM-1 does](../wavegraph-fm1/src/instrument.rs).

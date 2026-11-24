@@ -1,8 +1,8 @@
-# WaveGraph
+# wavegraph-dsp
 
 [![Build status][ci-badge]][ci]
 
-WaveGraph runs compiled audio patches on caller-owned buffers without a heap.
+`wavegraph-dsp` runs compiled audio patches on caller-owned buffers without a heap.
 It re-exports `Event`, `Op`, `Port`, `Process`, and `ProcessContext` from
 [`wavegraph-core`][core]. Instrument crates depend on that interface directly.
 An application supplies instances and selects the sample format and DSP
@@ -14,7 +14,7 @@ The following program plays the waveform monosynth through a half-gain stage.
 The note starts at frame 2. Its state carries over to the next block.
 
 ```rust
-use wavegraph::{Event, bytecode::Program, dsp::Software};
+use wavegraph_dsp::{Event, bytecode::Program, dsp::Software};
 use wavegraph_monosynth::{Message, Monosynth, Tuning, Waveform};
 use wavegraph_sample::I24;
 
@@ -25,7 +25,7 @@ let program = [
     1, 0, 0, 1, // call object 0 with no signal inputs and one output (bus 0)
     2, 0, 64,   // scale bus 0 by 64/128, producing bus 1
 ];
-let mut objects: [&mut dyn wavegraph::Process<Message, I24>; 1] = [&mut voice];
+let mut objects: [&mut dyn wavegraph_dsp::Process<Message, I24>; 1] = [&mut voice];
 let schedule = Program::<2>::decode(&program).unwrap();
 let mut patch = schedule.bind(&mut objects).unwrap();
 let notes = [
@@ -47,7 +47,7 @@ instances retain their state.
 
 ## Awaiting a program change
 
-Enable the `async` feature and split a `wavegraph::control::EditQueue` between
+Enable the `async` feature and split a `wavegraph_dsp::control::EditQueue` between
 the editor and the render host. The editor calls `control.commit(&next).await`
 with a predecoded program. At a block boundary, the host calls
 `host.begin_block(|plan| patch.replace(plan, buses.len()))` and keeps the
@@ -64,7 +64,7 @@ tests, `critical-section/std` uses a process-wide mutex.
 The [held-note test](tests/control.rs) exercises a route change during playback.
 
 A host can delegate rendering to another core through two
-`wavegraph::mailbox::Mailbox` instances in coherent memory. Send a tagged,
+`wavegraph_dsp::mailbox::Mailbox` instances in coherent memory. Send a tagged,
 exclusively borrowed buffer through one mailbox and receive it back through
 the other. The worker keeps its patch and scratch buffers between blocks.
 If a deadline passes, ownership stays with the worker until it returns the
@@ -101,10 +101,10 @@ Unless you explicitly state otherwise, you license any contribution you
 intentionally submit for inclusion in this work (as defined in the Apache-2.0
 license) under both licenses above, without additional terms or conditions.
 
-[ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
-[ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
+[ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml/badge.svg?branch=main&event=push
+[ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml
 [core]: https://github.com/fm1-rust/wavegraph/tree/main/wavegraph-core
 [bytecode]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-core/src/bytecode.rs
 [fm1]: https://github.com/fm1-rust/fm1-rust/blob/main/fm1/src/audio.rs
-[apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE-APACHE
-[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/LICENSE-MIT
+[apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-dsp/LICENSE-APACHE
+[mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-dsp/LICENSE-MIT

@@ -4,8 +4,8 @@ use crate::{
     instrument::{Message, RoutedEvents, Track},
     sequencer::DrumMessage,
 };
-use wavegraph::{Event, bytecode::Error, midi::MidiMessage};
 use wavegraph_arp::{Chord, Clock, Config, Division, Mode};
+use wavegraph_dsp::{Event, bytecode::Error, midi::MidiMessage};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Controls {

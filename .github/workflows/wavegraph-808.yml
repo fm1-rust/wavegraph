@@ -6,7 +6,7 @@ on:
       - 'instruments/wavegraph-808/**'
       - 'wavegraph-core/**'
       - 'wavegraph-sample/**'
-      - 'wavegraph/**'
+      - 'wavegraph-dsp/**'
       - Cargo.toml
       - Cargo.lock
       - .github/workflows/wavegraph-808.yml

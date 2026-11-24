@@ -5,7 +5,7 @@ use crate::{handoff::Job, peer};
 use core::sync::atomic::{AtomicU32, Ordering, fence};
 use fm1_rticx::bsp::time::{Timers, cycles};
 use heapless::mpmc::Queue;
-use wavegraph::mailbox::{Receiver, Sender};
+use wavegraph_dsp::mailbox::{Receiver, Sender};
 
 pub(super) type BlockJob = Job<&'static mut RenderBlock>;
 

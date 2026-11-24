@@ -5,7 +5,7 @@ on:
     paths: &firmware-paths
       - 'wavegraph-fm1/**'
       - 'wavegraph-audio/**'
-      - 'wavegraph/**'
+      - 'wavegraph-dsp/**'
       - 'instruments/wavegraph-*/**'
       - 'wavegraph-adsr/**'
       - 'wavegraph-arp/**'

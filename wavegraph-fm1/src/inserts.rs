@@ -6,7 +6,7 @@ use crate::{
     panel::{CHANNELS, Channel},
 };
 use heapless::Vec;
-use wavegraph::{Event, Port, Process, ProcessContext};
+use wavegraph_dsp::{Event, Port, Process, ProcessContext};
 use wavegraph_fx::{Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq};
 use wavegraph_sample::I24;
 

@@ -6,8 +6,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-use wavegraph::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_909::{DEMO_PATTERN, Samples, Tr909, Voice};
+use wavegraph_dsp::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_sample::{I24, Sample};
 
 fn load(path: &Path) -> io::Result<Vec<u8>> {

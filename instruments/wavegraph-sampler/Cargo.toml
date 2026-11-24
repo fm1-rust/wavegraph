@@ -14,7 +14,7 @@ wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
 [dev-dependencies]
-wavegraph = { version = "0.1", path = "../../wavegraph" }
+wavegraph-dsp = { version = "0.1", path = "../../wavegraph-dsp" }
 
 [lints]
 workspace = true

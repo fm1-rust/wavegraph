@@ -10,7 +10,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
     task::{Context, Poll, Waker},
 };
-use wavegraph::{
+use wavegraph_dsp::{
     Event, Process,
     bytecode::{Error, Program},
     control::{Applied, CommitError, EditQueue},

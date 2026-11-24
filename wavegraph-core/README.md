@@ -23,7 +23,7 @@ can represent bangs, numbers, symbols and lists. Signal samples default to
 A board adapter can implement `Dsp<S>` to provide block gain and mix kernels.
 Oscillators can share a `Tuning` with MIDI phase increments and the output sample period.
 The core crate has no dependencies. The scalar implementations and interpreter
-live in `wavegraph`.
+live in `wavegraph-dsp`.
 
 ## Patch bytecode
 
@@ -62,9 +62,9 @@ Unless you explicitly state otherwise, you license any contribution you
 intentionally submit for inclusion in this work (as defined in the Apache-2.0
 license) under both licenses above, without additional terms or conditions.
 
-[ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml/badge.svg?branch=main&event=push
-[ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph.yml
+[ci-badge]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml/badge.svg?branch=main&event=push
+[ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-dsp.yml
 [sample]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-sample/src/lib.rs
-[patch]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph/tests/patch.rs
+[patch]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-dsp/tests/patch.rs
 [apache]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-core/LICENSE-APACHE
 [mit]: https://github.com/fm1-rust/wavegraph/blob/main/wavegraph-core/LICENSE-MIT

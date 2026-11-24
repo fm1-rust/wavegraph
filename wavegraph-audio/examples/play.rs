@@ -10,11 +10,11 @@ fn main() {
 fn main() -> std::io::Result<()> {
     use core::{num::NonZeroU32, time::Duration};
     use std::{env, io, thread, time::Instant};
-    use wavegraph::{Event, bytecode::Program, dsp::Software};
     use wavegraph_audio::{
         DeviceHost, Direction, FRAMES, Playback, Submission,
         coreaudio::{Channels, Host, Output, Route},
     };
+    use wavegraph_dsp::{Event, bytecode::Program, dsp::Software};
     use wavegraph_monosynth::{Message, Monosynth, Tuning};
     use wavegraph_sample::I24;
 

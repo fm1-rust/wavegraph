@@ -21,14 +21,14 @@ use crate::{
 #[cfg(test)]
 use crate::{fx::BassFx, panel::Navigation};
 use heapless::Vec;
-use wavegraph::{
+use wavegraph_303::{Message as BassMessage, Tb303};
+use wavegraph_909::Voice as Drum;
+use wavegraph_dsp::{
     Event, Port, Process, ProcessContext,
     bytecode::{Error, Patch, Program, VERSION},
     dsp::Software,
     midi::MidiMessage,
 };
-use wavegraph_303::{Message as BassMessage, Tb303};
-use wavegraph_909::Voice as Drum;
 use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage, MixerMessage};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
@@ -164,7 +164,7 @@ impl Part {
     }
 }
 
-pub(super) use wavegraph::midi::Note;
+pub(super) use wavegraph_dsp::midi::Note;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct Gate {

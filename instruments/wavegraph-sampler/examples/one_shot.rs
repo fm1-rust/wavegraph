@@ -4,7 +4,7 @@ use std::{
     env, fs,
     io::{self, Write},
 };
-use wavegraph::{Event, Process, bytecode::Program, dsp::Software};
+use wavegraph_dsp::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_sample::{I24, Sample};
 use wavegraph_sampler::{Message, Sampler};
 
