@@ -205,8 +205,9 @@ dependencies = [
 
 [[package]]
 name = "fm1"
-version = "0.2.0-rc.0"
-source = "git+https://github.com/fm1-rust/fm1-rust.git?rev=2d524a766422f849a7ef0d50df7f59396910e4b4#2d524a766422f849a7ef0d50df7f59396910e4b4"
+version = "0.2.0-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4e69f73354d7df82927fb8234eef2ade1bded3d9d1012ec268c14a4bbf4634c"
 dependencies = [
  "critical-section",
  "embedded-hal",
@@ -248,9 +249,9 @@ dependencies = [
 
 [[package]]
 name = "fm1-rticx"
-version = "0.2.0-rc.0"
+version = "0.2.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28129355d2440a59231dccfcab9e060e2daa084631b956b114c4b638860bc549"
+checksum = "238c3c1295e1e1d6570411a972c84e274678c868b8a81143b36468ffa75d73f8"
 dependencies = [
  "critical-section",
  "fm1",
