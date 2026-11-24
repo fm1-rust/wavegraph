@@ -34,9 +34,7 @@ pub(super) fn install(worker: Worker) {
     fence(Ordering::SeqCst);
 }
 
-// The boot queue uses the compiler's CAS helper in flash. Keep this one-shot
-// call in XIP within reach of both the SRAM entry and that helper.
-#[unsafe(link_section = ".text.wavegraph_boot")]
+// Leave the one-shot dequeue in XIP to save worker SRAM.
 #[inline(never)]
 fn take_worker() -> Worker {
     BOOT.dequeue().expect("CPU0 published the renderer")

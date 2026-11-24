@@ -8,7 +8,8 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 export RUSTC_BOOTSTRAP=1
 export CARGO_TARGET_PI32V2_NONE_LINKER="$PI32V2_BIN/ld.lld"
-export RUSTFLAGS="-C link-arg=-Twavegraph-fm1.ld"
+# SRAM interrupt and worker code can call any XIP routine using call.xl.
+export RUSTFLAGS="-C link-arg=-Twavegraph-fm1.ld -C llvm-args=-pi32v2-large-program=true"
 out=${CARGO_TARGET_DIR:-"$root/target"}
 cargo build --manifest-path "$root/Cargo.toml" --locked -p wavegraph-fm1 --profile firmware \
     --target "$PI32V2_TARGET" --target-dir "$out" "$@" \
