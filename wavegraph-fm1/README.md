@@ -23,7 +23,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 
 | Monosynth | 303 direct knobs | 303 editing Drive |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed below the scope](assets/tb-303.png) | ![303 with Drive highlighted in green beside the scope](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with Drive highlighted in green beside the readout](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
@@ -69,7 +69,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
-The silver 303 faceplate puts a 240 × 176 live scope above the six sound knobs.
+The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
 [Roland TB-03][tb03]. The four numbered encoders map to the boxed, blue-gray
 knobs in the middle. Turn SELECT clockwise to visit all six dials from left to

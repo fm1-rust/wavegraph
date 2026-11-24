@@ -817,7 +817,9 @@ impl Screen {
         } else if saw || wave {
             frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
-            frame.trace.map(|y| (34 + u16::from(y) * 9 / 10) as u8)
+            frame
+                .trace
+                .map(|y| (tb303::SCOPE_TOP + 2 + u16::from(y) * 9 / 10) as u8)
         } else if organ {
             frame.trace.map(|y| (36 + u16::from(y) * 7 / 8) as u8)
         } else {
@@ -826,7 +828,7 @@ impl Screen {
         let (header, footer) = if drums {
             (56, 56)
         } else if bass {
-            (tb303::MARGIN, tb303::MARGIN)
+            (tb303::SCOPE_TOP, 0)
         } else if saw || wave {
             (32, 40)
         } else if organ {
@@ -850,22 +852,25 @@ impl Screen {
                     .await?;
             }
             if bass {
-                for y in [header - 1, SIZE - footer] {
-                    self.selector
-                        .badge
-                        .fill_rows(&mut lcd, y..y + 1, muted)
-                        .await?;
-                }
+                self.selector
+                    .badge
+                    .fill_rows(&mut lcd, header - 1..header, muted)
+                    .await?;
             }
         }
         let sweep = Sweep { trace, head };
+        let center = if bass {
+            header + (SIZE - header) / 2
+        } else {
+            SIZE / 2
+        };
         self.paint_scope(
             lcd,
             clock,
             sweep,
             style,
             labels.focus,
-            (header..SIZE - footer, SIZE / 2),
+            (header..SIZE - footer, center),
         )
         .await?;
         if bass {

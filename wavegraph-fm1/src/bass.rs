@@ -35,7 +35,7 @@ pub(super) enum Knob {
 }
 
 impl Knob {
-    /// Left to right along the bottom row, then the two dials beside the wordmark.
+    /// Left to right along the six-knob row, then the two dials beside the wordmark.
     pub(super) const PANEL: [Self; 8] = [
         Self::Tuning,
         Self::Cutoff,
