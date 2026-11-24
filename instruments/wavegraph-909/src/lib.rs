@@ -126,15 +126,40 @@ impl<'a> Tr909<'a> {
         denominator: u32,
         decay_percent: u8,
     ) -> Option<Self> {
+        Self::with_cymbals(
+            [
+                Sampler::from_pcm16le(samples.closed_hat)?,
+                Sampler::from_pcm16le(samples.open_hat)?,
+                Sampler::from_pcm16le(samples.ride)?,
+            ],
+            numerator,
+            denominator,
+            decay_percent,
+        )
+    }
+
+    /// Supply closed hat, open hat and ride players in that order. The clock and
+    /// modeled drum decay have the same meaning as in [`Self::with_decay`].
+    /// Returns `None` for a zero clock.
+    #[must_use]
+    pub fn with_cymbals(
+        [mut closed_hat, mut open_hat, mut ride]: [Sampler<'a>; 3],
+        numerator: u32,
+        denominator: u32,
+        decay_percent: u8,
+    ) -> Option<Self> {
         let clock = analog::Clock::new(numerator, denominator)?;
+        closed_hat.stop();
+        open_hat.stop();
+        ride.stop();
         let decay = f32::from(decay_percent.min(100)) / 100.0;
         Some(Self {
             clap: HandClap::from_clock(clock, decay),
             kick: BassDrum::from_clock(clock, decay),
             snare: SnareDrum::from_clock(clock, decay),
-            closed_hat: Sampler::from_pcm16le(samples.closed_hat)?,
-            open_hat: Sampler::from_pcm16le(samples.open_hat)?,
-            ride: Sampler::from_pcm16le(samples.ride)?,
+            closed_hat,
+            open_hat,
+            ride,
             opened_this_frame: false,
         })
     }

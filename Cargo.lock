@@ -948,6 +948,7 @@ dependencies = [
  "wavegraph-monosynth",
  "wavegraph-organ",
  "wavegraph-sample",
+ "wavegraph-sampler",
  "wavegraph-supersaw",
  "wavegraph-wavetable",
 ]
@@ -1010,6 +1011,7 @@ version = "0.1.0"
 name = "wavegraph-sampler"
 version = "0.1.0"
 dependencies = [
+ "fm1-assets",
  "wavegraph-core",
  "wavegraph-dsp",
  "wavegraph-sample",

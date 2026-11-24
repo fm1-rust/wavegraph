@@ -762,8 +762,7 @@ impl DrumKits {
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
             tr808: wavegraph_808::Tr808::new(rate.0, rate.1).expect("808 clock"),
-            tr909: Tr909::with_decay(crate::assets::CYMBALS, rate.0, rate.1, 55)
-                .expect("909 clock and PCM"),
+            tr909: crate::assets::tr909(rate, 55).expect("909 clock and PCM"),
             flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16,
         }
     }
