@@ -1,5 +1,5 @@
 //! Dirty-cell bookkeeping adapted from fm1-graphics 0.2.0-rc.0 (MIT OR Apache-2.0).
-use embedded_graphics::pixelcolor::raw::ToBytes;
+use fm1_graphics::embedded_graphics::pixelcolor::raw::ToBytes;
 use fm1_graphics::{Rgb565, palette};
 use fm1_rticx::bsp::display::{Display, Error, SIZE};
 use fm1_rticx::time::Clock;

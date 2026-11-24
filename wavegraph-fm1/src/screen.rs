@@ -17,7 +17,7 @@ use core::{
     pin::{Pin, pin},
     task::{Context, Poll},
 };
-use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
+use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{

@@ -6,12 +6,12 @@ use super::{
     selector::Selector,
 };
 use crate::{panel::Channel, sequencer::DrumLamp};
-use embedded_graphics::{
+use fm1_graphics::Rgb565;
+use fm1_graphics::embedded_graphics::{
     pixelcolor::RgbColor,
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_graphics::Rgb565;
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Error},
     time::Clock,

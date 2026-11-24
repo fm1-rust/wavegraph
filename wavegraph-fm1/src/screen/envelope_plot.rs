@@ -1,6 +1,6 @@
 //! Envelope plots share the screen's pixel strip. Each keeps only its last trace.
 use super::{BAND, Clock, Display, Error, WaveformStyle};
-use embedded_graphics::pixelcolor::raw::ToBytes;
+use fm1_graphics::embedded_graphics::pixelcolor::raw::ToBytes;
 
 pub(super) struct Plot<const W: usize, const H: usize> {
     last: [u8; W],

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::fx::{Device, Fx, MAX_DELAY_MS};
 use core::fmt::Write;
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };

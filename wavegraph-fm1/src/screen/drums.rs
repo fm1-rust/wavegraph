@@ -2,7 +2,7 @@
 
 use super::{mixer::Band, selector::Selector, tr808};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     Drawable,
     pixelcolor::{IntoStorage, raw::ToBytes},
     prelude::{Point, Primitive, Size},

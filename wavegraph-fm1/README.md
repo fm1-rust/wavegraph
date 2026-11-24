@@ -698,6 +698,11 @@ in bold white beneath the logo and stays on screen for 500 ms.
 MASTER controls the cue throughout. Turning it fully down skips the rest
 of the cue for that boot.
 
+The monochrome UI fonts come from the public-domain X.Org misc-fixed faces in
+`fm1_graphics::embedded_graphics::mono_font::ascii`. The host build packs the
+upstream atlas pixels for upper flash. The firmware uses the same upstream
+glyph mappings and metrics for layout.
+
 The TB-303, TR-808, TR-909 and JP-8080 panels use Orbitron Bold. Their model
 marks and the temporary channel digits are rasterized on the host at their LCD
 sizes. Dynamic labels use packed two-bit glyphs, and the shared dashboard grid

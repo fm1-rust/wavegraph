@@ -3,7 +3,7 @@
 use super::{GRID, mixer::Band, selector::Selector};
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{envelope::EnvelopeTarget, firmware::Labels, panel::Channel, wavetable::Program};
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     Drawable,
     mono_font::MonoTextStyle,
     prelude::{Point, Size},

@@ -8,7 +8,7 @@ use crate::{
     panel::{CHANNELS, View},
 };
 use core::{convert::Infallible, str};
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     Drawable, Pixel,
     draw_target::DrawTarget,
     geometry::OriginDimensions,

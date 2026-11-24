@@ -7,7 +7,7 @@ use crate::{
     panel::{CHANNELS, Channel},
     scope::Window,
 };
-use embedded_graphics::{
+use fm1_graphics::embedded_graphics::{
     Drawable,
     framebuffer::{Framebuffer, buffer_size},
     mono_font::MonoTextStyle,
@@ -141,7 +141,7 @@ impl Selector {
                                         (left + i * mask.width + dx) as i32,
                                         y + 2 + dy as i32,
                                     );
-                                    embedded_graphics::Pixel(p, BinaryColor::On)
+                                    fm1_graphics::embedded_graphics::Pixel(p, BinaryColor::On)
                                         .draw(&mut self.mask)
                                         .expect("infallible mask");
                                 }
