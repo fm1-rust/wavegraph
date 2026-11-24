@@ -17,6 +17,14 @@ macro_rules! flash_asset {
 }
 pub(crate) use flash_asset;
 
+// Keep the upstream notice with standalone firmware and emulator images.
+#[cfg(target_os = "none")]
+#[used]
+// SAFETY: the linker keeps this immutable text in read-only upper flash.
+#[unsafe(link_section = ".wavegraph_assets.notices")]
+static PATTERN_NOTICE: [u8; include_bytes!("../patterns/NOTICE.txt").len()] =
+    *include_bytes!("../patterns/NOTICE.txt");
+
 #[cfg(target_os = "none")]
 pub(crate) mod fonts {
     use embedded_graphics::{

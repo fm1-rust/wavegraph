@@ -5,16 +5,24 @@ use wavegraph::midi::MidiMessage;
 
 pub(crate) const BAR: u16 = 128; // eight ticks per sixteenth
 pub(crate) const STEPS: usize = 64;
-pub(crate) const SLOTS: usize = 4;
+pub(crate) const SLOTS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Slot(u8);
 
 impl Slot {
     pub(crate) const FIRST: Self = Self(0);
-    /// Leftmost white keys, F3 G3 A3 B3, independent of the octave setting.
-    pub(crate) const KEYS: [(u8, Self); SLOTS] =
-        [(0, Self(0)), (2, Self(1)), (4, Self(2)), (6, Self(3))];
+    /// First eight white keys, F3 through F4, independent of the octave setting.
+    pub(crate) const KEYS: [(u8, Self); SLOTS] = [
+        (0, Self(0)),
+        (2, Self(1)),
+        (4, Self(2)),
+        (6, Self(3)),
+        (7, Self(4)),
+        (9, Self(5)),
+        (11, Self(6)),
+        (12, Self(7)),
+    ];
 
     pub(crate) fn number(self) -> u8 {
         self.0.saturating_add(1)

@@ -25,7 +25,7 @@ pub(super) fn compile_banks(out: &Path) {
     );
     for bank in BANKS {
         code.push_str("[\n");
-        for slot in 1..=4 {
+        for slot in 1..=8 {
             let filename = format!("patterns/{bank}/{slot:02}.mid");
             println!("cargo:rerun-if-changed={filename}");
             let bytes = fs::read(&filename).expect(&filename);

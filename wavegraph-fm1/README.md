@@ -33,7 +33,7 @@ WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
 | KNOBS 1–4 in ARP | Set order (up, down, up/down, as played, random), rate (1/4 through 1/32, including triplets), octave range (1–4), and gate (1–100%). |
 | SELECT in ARP | Turn clockwise to latch the chord. Release all keys and play a new chord to replace it. Turn counterclockwise to release unheld keys. |
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
-| Piano keys in the SEQ pattern view | The first four white keys (F, G, A, B) select slots 1–4. All four keys light and the active slot flashes. |
+| Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
 | KNOB 2 in SEQ | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
 | SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
@@ -278,7 +278,7 @@ to the same live view.
 ## Pattern banks
 
 Press **SEQ**, turn **PRESETS** to the instrument you want, and press one of the
-four lit white keys. **F, G, A, B** select the four numbered slots from left
+eight lit white keys. **F, G, A, B, C, D, E, F** select the numbered slots from left
 to right, even after an octave change. The active key flashes. While stopped,
 a selection immediately previews bar one. During playback, the grid and flashing
 key follow the sounding clip. An underline and **QUEUED** identify the incoming
@@ -298,17 +298,25 @@ pp. 19–21][rebirth] · [TB-03 owner's manual][tb03-manual]
 | G | 2 · Undertow | 2 | Low fifth-to-seventh slides answer the high line. Backbeat claps alternate with snares and an open-hat pickup. |
 | A | 3 · Jack Track | 1 | Octave bass stabs, a climbing upper voice and an extra 909 kick just before beat four. |
 | B | 4 · Negative Space | 2 | An off-downbeat bass leaves room for syncopated hats and a sparser backbeat. |
+| C | 5 · Acid Trip – Pulse | 1 | The low 303 jumps octaves under a sparse upper answer. The 808 plays the backbeat against a four-on-the-floor 909. |
+| D | 6 · Acid Trip – Full Kit | 1 | The bass slides up from the seventh. Ghost snares, claps and offbeat open hats fill out the groove. |
+| E | 7 · Acid Trip – Break | 2 | A chain of 303 slides rides over a kickless bar of sixteenth-note hats. The kick returns under a snare roll in bar two. |
+| Higher F | 8 · Devil Fish | 1 | The open-hat steps of the source groove lift the bass into four accented high notes. The second 303 answers above the backbeat. |
 
-The monosynth, M1 organ, Super Saw and wavetable also have four clips each.
+Slots 5–8 adapt two demo songs by **verytired** from the MIT-licensed
+AfterBirth AB-3389. Both 303 lines are transposed from C to D to sit alongside
+the factory bassline. The monosynth, M1 organ, Super Saw and wavetable each
+have eight clips, with their own voicings and rhythms. [Pattern sources and kit mappings](patterns/README.md)
+
 The melodic grid shows note lengths. On a 303, **A** marks an accent and **S**
 a note entered with slide. Three traces show the cutoff, resonance and drive
 messages in the clip. The drum grid puts each voice on its own row with sixteen
 steps grouped in fours. The charcoal 808 has four voice lanes and the ivory 909
 has six. The lower strip follows the current step. [ReDrum drum computer][redrum]
 
-| TR-808, queued change | TR-909, pattern 4 |
+| TR-808, queued change | TR-909, pattern 8 |
 | --- | --- |
-| ![TR-808 playing pattern 2 with 3 queued](assets/tr808-pattern-bank.png) | ![TR-909 step grid playing pattern 4](assets/tr909-pattern-bank.png) |
+| ![TR-808 playing slot 5 with slot 7 queued](assets/tr808-pattern-bank.png) | ![TR-909 playing the Devil Fish groove in slot 8](assets/tr909-pattern-bank.png) |
 
 Live keys outside the pattern view temporarily take over their melodic channel.
 Releasing them rejoins the clip at the next scheduled note. Inside the pattern
@@ -332,9 +340,9 @@ local kit leaves silent. Reassigning an instrument resets that channel’s arp.
 
 ## MIDI files and USB MIDI
 
-Each bank has four Standard MIDI Files under [patterns/](patterns/).
+Each bank has eight Standard MIDI Files under [patterns/](patterns/).
 For example, drag `patterns/tb303-low/01.mid` into a DAW to hear or edit the
-original bassline. For import, save a clip over `01.mid` through `04.mid` in
+original bassline. For import, save a clip over `01.mid` through `08.mid` in
 the desired bank, then [build and flash](#build-and-flash). MIDI files are the
 source for both playback and the display. The build compiles the events, pitches,
 and clip directory into the upper-flash asset file.
@@ -591,7 +599,7 @@ read the factory assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | `0x04000..0x93000` | Application directory and `app.bin` (entry at physical `0x04120`). Unused space here is available for code growth. |
-| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, five display font atlases, and the 32 compiled MIDI patterns. |
+| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, five display font atlases, the 64 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can
