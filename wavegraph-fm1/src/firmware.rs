@@ -17,7 +17,9 @@ use crate::{
     mixer::Mixer,
     organ::Controls as OrganControls,
     panel::{CHANNELS, Channel, Navigation, View},
-    sequencer::{BankPosition, DrumLamp, Position, Sequencer, pattern::Automation},
+    sequencer::{
+        BankPosition, DrumLamp, Position, SeqPage, Sequencer, Transport, pattern::Automation,
+    },
     wavetable::Program as WaveProgram,
 };
 use fm1_audio::MasterLevel;
@@ -92,7 +94,9 @@ impl Settings {
                 self.tracks[self.nav.focus.index()].envelope_target == EnvelopeTarget::Modulation
             }
             View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
-            View::Sequencer => self.seq.enabled[self.seq.channel.index()],
+            View::Sequencer => {
+                self.seq.page != Some(SeqPage::Step) && self.seq.enabled[self.seq.channel.index()]
+            }
             _ => false,
         }
     }
@@ -128,6 +132,7 @@ pub(super) struct Labels {
 #[derive(Clone, Copy, Default)]
 pub struct Motion {
     pub(super) position: Option<Position>,
+    pub(super) transport: Option<Transport>,
     pub(super) bass_automation: Option<(Channel, Automation)>,
     pub(super) banks: [BankPosition; CHANNELS],
     pub(super) peaks: [u8; CHANNELS],
@@ -206,7 +211,7 @@ mod app {
         overload::Overloads,
         panel::{CHANNELS, Channel, Navigation, PageButton, View, pattern_press_lamp, preset_age},
         screen::Screen,
-        sequencer::{DrumKits, SeqPage, Sequencer, pattern::Slot},
+        sequencer::{DrumKits, SeqPage, Sequencer, edit::EDITS, pattern::Slot},
     };
     use core::pin::pin;
     use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
@@ -575,12 +580,10 @@ mod app {
             }
             if scan.pressed(Button::Play) {
                 self.seq.transport.toggle();
+                if !self.seq.transport.playing() && self.seq.page == Some(SeqPage::Record) {
+                    self.seq.back();
+                }
             }
-            self.leds.set_play(if self.seq.transport.playing() {
-                PlayLedState::Green
-            } else {
-                PlayLedState::Red
-            });
             let page = [
                 (Button::Home, PageButton::Home),
                 (Button::Glo, PageButton::Glo),
@@ -630,14 +633,37 @@ mod app {
             {
                 self.nav.preset_since = None;
             }
+            let rec = scan.pressed(Button::Rec);
+            if rec && self.nav.view != View::Sequencer {
+                self.nav.press(PageButton::Seq);
+            }
             if (self.nav.view == View::Sequencer) != self.seq.page.is_some() {
                 self.seq.toggle_page();
             }
             if self.nav.view == View::Sequencer {
+                if channel_changed && self.seq.page == Some(SeqPage::Record) {
+                    self.seq.back();
+                }
                 self.seq.channel = self.nav.focus;
+                if rec {
+                    self.seq.record();
+                } else if scan.pressed(Button::Edit) {
+                    if self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel) {
+                        if let Some(at) = self.seq.edit_address(self.nav.part(), None) {
+                            EDITS.restore(at);
+                            self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
+                            self.seq.full = false;
+                        }
+                    } else {
+                        self.seq.step_edit();
+                    }
+                }
+                if self.seq.page == Some(SeqPage::Step) {
+                    self.seq.turn_cursor(scan.encoder_delta(Encoder::Knob1));
+                }
                 self.seq
                     .turn_bar(self.nav.part(), scan.encoder_delta(Encoder::Knob2));
-                if scan.pressed(Button::Sel) {
+                if scan.pressed(Button::Sel) && self.seq.page != Some(SeqPage::Step) {
                     self.seq.toggle_track();
                 }
             }
@@ -647,13 +673,25 @@ mod app {
                     scan.encoder_delta(Encoder::Knob3),
                 );
             }
+            self.leds.set_play(if self.seq.transport.playing() {
+                PlayLedState::Green
+            } else {
+                PlayLedState::Red
+            });
+            self.leds
+                .set(Button::Rec, self.seq.page == Some(SeqPage::Record));
+            self.leds
+                .set(Button::Edit, self.seq.page == Some(SeqPage::Step));
             self.leds.set(Button::Seq, self.seq.page.is_some());
             self.leds.set(
                 Button::Home,
                 matches!(self.nav.view, View::Channel | View::MasterFx(Some(_)))
                     || self.nav.insert_slot().is_some()
                     || self.nav.bass_knob().is_some()
-                    || self.seq.page == Some(SeqPage::Tempo),
+                    || matches!(
+                        self.seq.page,
+                        Some(SeqPage::Tempo | SeqPage::Record | SeqPage::Step)
+                    ),
             );
             self.leds.set(
                 Button::Glo,
@@ -735,14 +773,34 @@ mod app {
                             None if assignment.part.is_kit() => 127,
                             None => continue,
                         };
-                        self.piano.event(
-                            channel,
-                            assignment,
-                            MidiAction::On(Note {
-                                number: 53 + key.index(),
-                                velocity,
-                            }),
-                        );
+                        let physical = Note {
+                            number: 53 + key.index(),
+                            velocity,
+                        };
+                        let erase =
+                            self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel);
+                        let note = if erase {
+                            self.piano.mapped_note(assignment.part, physical)
+                        } else {
+                            self.piano.press(channel, assignment, physical)
+                        };
+                        if matches!(self.seq.page, Some(SeqPage::Record | SeqPage::Step))
+                            && let Some(note) = note
+                        {
+                            let playing = if self.seq.page == Some(SeqPage::Record) {
+                                self.shared().motion.lock(|m| {
+                                    m.position
+                                        .filter(|_| m.transport == Some(self.seq.transport))
+                                        .map(|p| (p, m.banks[channel.index()]))
+                                })
+                            } else {
+                                None
+                            };
+                            if let Some(at) = self.seq.edit_address(assignment.part, playing) {
+                                self.seq.full = !EDITS.write(at, note, erase);
+                                self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
+                            }
+                        }
                     }
                 }
             }

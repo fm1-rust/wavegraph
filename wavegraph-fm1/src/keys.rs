@@ -122,22 +122,41 @@ impl<const KEYS: usize> Piano<KEYS> {
 
     pub(super) fn event(&mut self, channel: Channel, assignment: Assignment, event: MidiAction) {
         match event {
-            MidiAction::On(note) => self.press(channel, assignment, note),
+            MidiAction::On(note) => {
+                self.press(channel, assignment, note);
+            }
             MidiAction::Off(key) => self.release(key),
             MidiAction::Control(..) => (),
         }
     }
 
-    pub(super) fn press(&mut self, channel: Channel, assignment: Assignment, key: Note) {
-        self.release(key.number);
-        let pitch = if assignment.part.is_kit() {
-            let Some(drum) = [53, 55, 57, 59, 60, 62]
+    pub(super) fn mapped_note(&self, part: Part, key: Note) -> Option<Note> {
+        let number = if part.is_kit() {
+            let pad = [53, 55, 57, 59, 60, 62]
                 .iter()
-                .position(|&n| n == key.number)
-                .and_then(|i| assignment.part.pads().get(i).copied())
-            else {
-                return;
-            };
+                .position(|&n| n == key.number)?;
+            let drum = part.pads().get(pad)?;
+            [36, 38, 39, 42, 46, 51][*drum as usize]
+        } else {
+            key.number
+                .saturating_add_signed(self.octave.saturating_mul(12))
+                .min(127)
+        };
+        Some(Note {
+            number,
+            velocity: key.velocity,
+        })
+    }
+
+    pub(super) fn press(
+        &mut self,
+        channel: Channel,
+        assignment: Assignment,
+        key: Note,
+    ) -> Option<Note> {
+        self.release(key.number);
+        let note = self.mapped_note(assignment.part, key)?;
+        if let Some(drum) = assignment.part.drum(note.number) {
             let pads = &mut self.pads[channel.index()];
             if pads.generation != assignment.generation {
                 *pads = PanelPads {
@@ -145,26 +164,19 @@ impl<const KEYS: usize> Piano<KEYS> {
                     strikes: HitLog::EMPTY,
                 };
             }
-            pads.strikes.push(drum, key.velocity);
-            [36, 38, 39, 42, 46, 51][drum as usize]
-        } else {
-            key.number
-                .saturating_add_signed(self.octave.saturating_mul(12))
-                .min(127)
-        };
+            pads.strikes.push(drum, note.velocity);
+        }
         self.serial = self.serial.wrapping_add(1);
         self.held
             .push(Press {
                 key: key.number,
                 channel,
                 generation: assignment.generation,
-                note: Note {
-                    number: pitch,
-                    velocity: key.velocity,
-                },
+                note,
                 strike: self.serial,
             })
             .expect("one press per physical key");
+        Some(note)
     }
 
     pub(super) fn release(&mut self, key: u8) {

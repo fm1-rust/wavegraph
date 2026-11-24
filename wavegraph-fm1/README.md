@@ -34,10 +34,13 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SELECT in ARP | Turn clockwise to latch the chord. Release all keys and play a new chord to replace it. Turn counterclockwise to release unheld keys. |
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
+| REC | Start live recording on the current channel. REC ends recording and keeps the loop playing. PLAY stops both. |
+| EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
+| SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
-| KNOB 2 in SEQ | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
-| SEL in SEQ | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
-| SELECT in SEQ | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
+| KNOB 2 in the pattern bank | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
+| SEL in the pattern bank | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
+| SELECT in the pattern bank | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
 | PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
@@ -332,6 +335,28 @@ view the piano keys operate the bank. USB MIDI still addresses its assigned
 instrument. The transport, gates and controller events share the existing
 audio-frame clock. Changing tempo retains the position within the step.
 
+### Recording and step editing
+
+Choose a pattern, then press **REC** and play the piano roll. The REC lamp lights
+and the transport starts if stopped. Each strike uses the sixteenth currently
+sounding on that channel, including its local bar and bank slot during a queued
+change. New notes keep the panel velocity and octave or drum-pad mapping. They
+repeat with a gate of three quarters of a sixteenth. Press **REC** to finish the
+take while the loop continues. Leaving REC or changing channels also disarms it.
+
+Press **EDIT** in SEQ for a stationary cursor. Turn **KNOB 1** for steps 1–16
+and **KNOB 2** for the bar, even during playback. Tap a key to audition and
+write there. A melodic edit replaces the factory notes at that step. Organ
+and wavetable accept up to four pitches per step. On kits, each pad edits its
+own voice, so adding a hat preserves the kick and snare. Factory controller
+automation continues through edits.
+
+Hold **SEL** and tap a key to write a melodic rest or clear that drum voice.
+Hold **SEL** and press **EDIT** to restore the entire factory step. Edits survive
+transport stops, slot changes and instrument swaps during the session. The
+shared RAM pool holds 16 edited bars. Restoring every edited step in a bar
+frees it for reuse. Power cycling restores all factory clips.
+
 ## Live arpeggiator
 
 Play a chord on the panel or send notes to USB MIDI channel 1–4. The first
@@ -520,7 +545,7 @@ Turn SELECT to enter a drilldown from an overview and highlight the item it
 acts on. Light HOME while the drilldown is open. HOME returns one level and
 clears the drilldown highlight. In GLO this leaves the mixer open with all four
 meters live, and a second HOME press returns to the instrument. In SEQ, HOME
-returns from tempo to the channel’s pattern.
+returns from tempo, live recording or step editing to the channel’s pattern.
 
 PRESETS browses channels in ordinary views. In a channel assignment drilldown,
 it picks the instrument for the highlighted slot. The picker highlights the

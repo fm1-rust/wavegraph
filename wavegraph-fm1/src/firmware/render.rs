@@ -156,6 +156,7 @@ impl Renderer {
         };
         block.motion = Motion {
             position: graph.position,
+            transport: Some(settings.seq.transport),
             banks: graph.banks(),
             bass_automation: graph.bass_automation(nav.focus),
             peaks,

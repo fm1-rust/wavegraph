@@ -12,7 +12,8 @@ use crate::{
     bass::CC_SLIDE,
     instrument::Part,
     sequencer::{
-        BankPosition, Position, Sequencer,
+        BankPosition, Position, SeqPage, Sequencer,
+        edit::{Address, EDITS, Step, Suppressed},
         pattern::{BAR, Clip, SLOTS, Slot},
     },
 };
@@ -76,84 +77,133 @@ struct Cell {
 }
 
 struct Roll {
+    pitches: [u8; 10],
+    pitch_count: usize,
     cells: [[Cell; 16]; 10],
     // 7-bit MIDI controls plus a sentinel for an unwritten lane.
     curves: [[u8; 3]; 128],
 }
 
 impl Roll {
-    fn rows(part: Part, clip: &Clip) -> usize {
+    fn rows(&self, part: Part) -> usize {
         if part.is_kit() {
             part.pads().len()
         } else {
-            clip.pitches
-                .len()
-                .min(if part == Part::Bass { 7 } else { 10 })
+            self.pitch_count
         }
     }
 
-    fn pitch_row(clip: &Clip, rows: usize, pitch: u8) -> usize {
-        let rank = clip.pitches.partition_point(|&p| p > pitch);
-        rank * rows / clip.pitches.len()
+    fn pitch_row(&self, pitch: u8) -> usize {
+        self.pitches[..self.pitch_count]
+            .partition_point(|&p| p >= pitch)
+            .saturating_sub(1)
     }
 
-    fn read(&mut self, clip: &Clip, part: Part, bar: u8) {
+    fn read(&mut self, clip: &Clip, at: Address) {
+        let part = at.part;
         self.cells = [[Cell::default(); 16]; 10];
         self.curves.fill([255; 3]);
-        let rows = Self::rows(part, clip);
+        if !part.is_kit() {
+            let mut used = [false; 128];
+            for &pitch in clip.pitches {
+                used[usize::from(pitch)] = true;
+            }
+            for step in 0..16 {
+                for note in EDITS.step(Address { step, ..at }).notes() {
+                    used[usize::from(note.number)] = true;
+                }
+            }
+            let total = used.iter().filter(|&&present| present).count();
+            self.pitch_count = total.min(if part == Part::Bass { 7 } else { 10 });
+            let mut row = 0;
+            for (rank, pitch) in (0..128u8)
+                .rev()
+                .filter(|&n| used[usize::from(n)])
+                .enumerate()
+            {
+                if rank * self.pitch_count / total == row {
+                    self.pitches[row] = pitch;
+                    row += 1;
+                }
+            }
+        }
+        let mut edited = Step::EMPTY;
+        let mut suppressed = Suppressed::EMPTY;
         let mut held = [None; 4];
         let mut events = clip.events.iter().peekable();
         let mut lanes = [255; 3];
         let mut slide = false;
-        let start = u16::from(bar) * BAR;
+        let start = u16::from(at.bar) * BAR;
         for tick in 0..start + BAR {
             let t = usize::from(tick % BAR);
             let step = t / 8;
-            while let Some(e) = events.next_if(|e| e.tick() == tick) {
-                match e.message() {
-                    MidiMessage::On(n) if part.is_kit() => {
-                        if tick >= start
-                            && let Some(voice) = part.drum(n.number)
-                            && let Some(row) = part.pads().iter().position(|&v| v == voice)
-                        {
-                            self.cells[row][step].gate = 255;
-                            self.cells[row][step].accent |= n.velocity >= 100;
-                        }
+            let phase = tick % 8;
+            if phase == 0 {
+                edited = EDITS.step(Address {
+                    bar: (tick / BAR) as u8,
+                    step: step as u8,
+                    ..at
+                });
+                if edited.edited() && !part.is_kit() {
+                    for &n in held.iter().flatten() {
+                        suppressed.cut(n);
                     }
-                    MidiMessage::On(n) => {
-                        let row = Self::pitch_row(clip, rows, n.number);
-                        if tick >= start {
-                            let cell = &mut self.cells[row][step];
-                            cell.accent |= n.velocity >= 100;
-                            cell.slide |= slide || held.iter().any(Option::is_some);
-                        }
-                        if matches!(part, Part::Wavetable | Part::Organ) {
-                            if !held.contains(&Some(n.number))
-                                && let Some(v) = held.iter_mut().find(|v| v.is_none())
-                            {
-                                *v = Some(n.number);
-                            }
-                        } else {
-                            held[0] = Some(n.number);
-                        }
-                    }
-                    MidiMessage::Off(n) => {
-                        if let Some(v) = held.iter_mut().find(|v| **v == Some(n)) {
-                            *v = None;
-                        }
-                    }
-                    MidiMessage::Control(CC_SLIDE, value) => slide = value >= 64,
-                    MidiMessage::Control(cc, value) => {
-                        if let Some(lane) = [74, 71, 17].iter().position(|&n| n == cc) {
-                            lanes[lane] = value;
-                        }
+                    held.fill(None);
+                }
+            }
+            let mut apply = |msg| match msg {
+                MidiMessage::On(n) if part.is_kit() => {
+                    if tick >= start
+                        && let Some(voice) = part.drum(n.number)
+                        && let Some(row) = part.pads().iter().position(|&v| v == voice)
+                    {
+                        self.cells[row][step].gate = 255;
+                        self.cells[row][step].accent |= n.velocity >= 100;
                     }
                 }
+                MidiMessage::On(n) => {
+                    let row = self.pitch_row(n.number);
+                    if tick >= start {
+                        let cell = &mut self.cells[row][step];
+                        cell.accent |= n.velocity >= 100;
+                        cell.slide |= slide || held.iter().any(Option::is_some);
+                    }
+                    if matches!(part, Part::Wavetable | Part::Organ) {
+                        if !held.contains(&Some(n.number))
+                            && let Some(v) = held.iter_mut().find(|v| v.is_none())
+                        {
+                            *v = Some(n.number);
+                        }
+                    } else {
+                        held[0] = Some(n.number);
+                    }
+                }
+                MidiMessage::Off(n) => {
+                    if let Some(v) = held.iter_mut().find(|v| **v == Some(n)) {
+                        *v = None;
+                    }
+                }
+                MidiMessage::Control(CC_SLIDE, value) => slide = value >= 64,
+                MidiMessage::Control(cc, value) => {
+                    if let Some(lane) = [74, 71, 17].iter().position(|&n| n == cc) {
+                        lanes[lane] = value;
+                    }
+                }
+            };
+            while let Some(e) = events.next_if(|e| e.tick() == tick) {
+                let msg = e.message();
+                if suppressed.factory(edited, part, msg, phase) {
+                    apply(msg);
+                }
+            }
+            for msg in edited.events(phase) {
+                apply(msg);
             }
             if tick >= start {
                 self.curves[t] = lanes;
                 for &n in held.iter().flatten() {
-                    self.cells[Self::pitch_row(clip, rows, n)][step].gate |= 1 << (t % 8);
+                    let row = self.pitch_row(n);
+                    self.cells[row][step].gate |= 1 << (t % 8);
                 }
             }
         }
@@ -297,7 +347,8 @@ struct BankButton {
 }
 
 pub(super) struct Grid {
-    previous: Option<(Slot, u8, bool)>,
+    previous: Option<(Slot, u8, bool, u32)>,
+    cursor: Option<u8>,
     buttons: [Option<BankButton>; SLOTS],
     head: Option<u8>,
     roll: Roll,
@@ -307,9 +358,12 @@ impl Grid {
     pub(super) const fn new() -> Self {
         Self {
             previous: None,
+            cursor: None,
             buttons: [None; SLOTS],
             head: None,
             roll: Roll {
+                pitches: [0; 10],
+                pitch_count: 0,
                 cells: [[Cell {
                     gate: 0,
                     accent: false,
@@ -322,17 +376,18 @@ impl Grid {
 
     pub(super) fn invalidate(&mut self) {
         self.previous = None;
+        self.cursor = None;
         self.buttons = [None; SLOTS];
         self.head = None;
     }
 
     async fn labels(
+        &self,
         lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
         part: Part,
-        clip: &Clip,
     ) -> Result<(), Error> {
-        let rows = Roll::rows(part, clip);
+        let rows = self.roll.rows(part);
         let paper = style(part).background;
         for y in (0..HEIGHT).step_by(16) {
             let mut band = Band::new(strip, 0, 0, LEFT as u16, 16, paper)
@@ -340,7 +395,7 @@ impl Grid {
             if !part.is_kit() {
                 let row = y / 16;
                 if row < rows {
-                    let n = clip.pitches[(row * clip.pitches.len()).div_ceil(rows)];
+                    let n = self.roll.pitches[row];
                     let name = note_name(n);
                     band.label(
                         core::str::from_utf8(&name)
@@ -462,50 +517,89 @@ impl Grid {
     ) -> Result<(), Error> {
         let next = seq.slot(seq.channel, part);
         let position = position.filter(|_| seq.transport.playing());
-        let slot = position.map_or(next, |_| bank.slot);
+        let editing = seq.page == Some(SeqPage::Step);
+        let cursor = editing.then_some(seq.cursor);
+        let follow = position.filter(|_| !editing);
+        let slot = follow.map_or(next, |_| bank.slot);
         let clip = slot.clip(part, seq.channel);
-        let bar = position.map_or(seq.bar % clip.bars, |_| bank.bar % clip.bars);
-        let head = position.map(|p| p.step % 16);
+        let bar = follow.map_or(seq.bar % clip.bars, |_| bank.bar % clip.bars);
+        let head = position
+            .filter(|_| bank.slot == slot && bank.bar == bar)
+            .map(|p| p.step % 16);
         let enabled = seq.enabled[seq.channel.index()];
-        let key = (slot, bar, enabled);
+        let key = (slot, bar, enabled, seq.edit_revision);
         let changed = self.previous != Some(key);
         let mut lcd = lcd.as_async(clock)?;
-        self.buttons(&mut lcd, strip, part, slot, next, seq.pressed_key_dark)
-            .await?;
+        if seq.page == Some(SeqPage::Pattern) {
+            self.buttons(&mut lcd, strip, part, slot, next, seq.pressed_key_dark)
+                .await?;
+        } else {
+            text.text(0, 13, b"P", ink(part));
+            text.number(1, 13, 1, u32::from(slot.number()), ink(part));
+            text.text(
+                4,
+                13,
+                if editing {
+                    b"K1 STEP   K2 BAR"
+                } else {
+                    b"PLAY TO OVERDUB "
+                },
+                ink(part),
+            );
+        }
         text.number(16, 0, 1, u32::from(bar) + 1, ink(part));
         text.text(17, 0, [b'/', b'0' + clip.bars], ink(part));
-        if let Some(head) = head {
+        if let Some(head) = cursor.or(head) {
             text.number(17, 1, 2, u32::from(head) + 1, ink(part));
         } else {
             text.text(17, 1, b"--", ink(part));
         }
-        if slot != next {
+        if seq.full && matches!(seq.page, Some(SeqPage::Record | SeqPage::Step)) {
+            text.text(0, 14, b"EDIT LIMIT REACHED  ", ink(part));
+        } else if editing {
+            text.text(0, 14, b"KEY SET  SEL+KEY DEL", ink(part));
+        } else if seq.page == Some(SeqPage::Record) {
+            text.text(0, 14, b"REC AGAIN TO FINISH ", ink(part));
+        } else if slot != next {
             text.text(0, 14, b"QUEUED   / NEXT BAR ", ink(part));
             text.number(7, 14, 1, u32::from(next.number()), ink(part));
         } else {
-            text.text(0, 14, b"WHITE KEYS  / SELECT", ink(part));
+            text.text(0, 14, b"KEYS:BANK   REC EDIT", ink(part));
         }
-        if !changed && head == self.head {
+        if !changed && head == self.head && cursor == self.cursor {
             return lcd.flush().await;
         }
         if changed {
-            if self.previous.is_none_or(|p| p.0 != slot) {
-                Self::labels(&mut lcd, strip, part, clip).await?;
+            let old_labels = (self.roll.pitch_count, self.roll.pitches);
+            self.roll.read(
+                clip,
+                Address {
+                    channel: seq.channel,
+                    part,
+                    slot,
+                    bar,
+                    step: 0,
+                },
+            );
+            if self.previous.is_none() || old_labels != (self.roll.pitch_count, self.roll.pitches) {
+                self.labels(&mut lcd, strip, part).await?;
             }
-            self.roll.read(clip, part, bar);
         }
-        let rows = Roll::rows(part, clip);
+        let rows = self.roll.rows(part);
         for step in 0..16u8 {
-            if !changed && self.head != Some(step) && head != Some(step) {
+            if !changed && ![self.head, head, self.cursor, cursor].contains(&Some(step)) {
                 continue;
             }
             for top in [0, HALF] {
                 let pixels = &mut strip[..WIDTH * HALF];
                 for y in top..top + HALF {
                     for x in 0..WIDTH {
-                        pixels[(y - top) * WIDTH + x] = self
-                            .roll
-                            .pixel(
+                        pixels[(y - top) * WIDTH + x] = if cursor == Some(step)
+                            && (x == 0 || x == WIDTH - 1 || y == 0 || y == HEIGHT - 1)
+                        {
+                            ink(part)
+                        } else {
+                            self.roll.pixel(
                                 part,
                                 rows,
                                 usize::from(step),
@@ -514,7 +608,8 @@ impl Grid {
                                 head == Some(step),
                                 enabled,
                             )
-                            .to_be_bytes();
+                        }
+                        .to_be_bytes();
                     }
                 }
                 lcd.write_rect_buffered(
@@ -530,6 +625,7 @@ impl Grid {
         lcd.flush().await?;
         self.previous = Some(key);
         self.head = head;
+        self.cursor = cursor;
         Ok(())
     }
 }
