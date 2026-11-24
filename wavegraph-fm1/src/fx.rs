@@ -425,7 +425,7 @@ mod tests {
             Dynamics {
                 threshold_db: -36,
                 ratio_x2: 6,
-                makeup_db: 10,
+                makeup_db: 8,
                 ceiling_db: -4
             }
         );
