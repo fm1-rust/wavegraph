@@ -154,21 +154,7 @@ fn main() {
     let mut offsets = Vec::new();
     for block in pcm.chunks(128) {
         offsets.push(u16::try_from(encoded.len()).expect("cue fits 64 KiB"));
-        let mut previous = 0_i16;
-        for (i, &bytes) in block.iter().enumerate() {
-            let value = i16::from_le_bytes(bytes);
-            let delta = i32::from(value).wrapping_sub(i32::from(previous));
-            if i != 0
-                && let Ok(d) = i8::try_from(delta)
-                && d != i8::MIN
-            {
-                encoded.extend(d.to_le_bytes());
-            } else {
-                encoded.push(0x80);
-                encoded.extend(bytes);
-            }
-            previous = value;
-        }
+        encode_block(block, &mut encoded);
     }
     fs::write(out.join("bumper.delta"), encoded).expect("write packed cue");
     fs::write(
@@ -181,4 +167,45 @@ fn main() {
     .expect("write cue index");
     // The host regression test compares every decoded sample to the original mix.
     fs::write(out.join("bumper.s16le"), pcm.as_flattened()).expect("write boot cue");
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "Widths are 0..=16; the bit reservoir has at most 23 occupied bits and emits its low byte."
+)]
+fn encode_block(block: &[[u8; 2]], encoded: &mut Vec<u8>) {
+    // Pack signed second differences at a fixed bit width per 16 frames.
+    // Wrap at i16 precision so even a full-scale transition takes at most 16 bits.
+    let mut previous = 0_i16;
+    let mut slope = 0_i16;
+    for group in block.chunks(16) {
+        let residuals: Vec<u16> = group
+            .iter()
+            .map(|&bytes| {
+                let sample = i16::from_le_bytes(bytes);
+                let delta = sample.wrapping_sub(previous);
+                let residual = delta.wrapping_sub(slope);
+                previous = sample;
+                slope = delta;
+                ((residual << 1) ^ (residual >> 15)).cast_unsigned()
+            })
+            .collect();
+        let width = (16 - residuals.iter().copied().max().unwrap_or(0).leading_zeros()) as u8;
+        encoded.push(width);
+        let mut bits = 0_u32;
+        let mut count = 0;
+        for residual in residuals {
+            bits |= u32::from(residual) << count;
+            count += width;
+            while count >= 8 {
+                encoded.push(bits as u8);
+                bits >>= 8;
+                count -= 8;
+            }
+        }
+        if count != 0 {
+            encoded.push(bits as u8);
+        }
+    }
 }

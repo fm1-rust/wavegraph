@@ -662,6 +662,12 @@ and a continuous filter envelope. Two quiet 909 knocks lead into the landing. MA
 Turning it fully down skips the rest of the cue for that boot. The firmware
 version beneath the logo comes from the `wavegraph-fm1` Cargo package.
 
+The TB-303, TR-808, TR-909 and JP-8080 panels use Orbitron Bold. Their model
+marks and the temporary channel digits are rasterized on the host at their LCD
+sizes. Dynamic labels use packed two-bit glyphs, and the shared dashboard grid
+uses a 12 × 16 atlas. The panel blends grayscale coverage into its RGB565 strip.
+The generator and Open Font License are in `assets/panel-type/`.
+
 The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
 artwork. Both draw in buffered RGB565 strips. The scope stays live while the transport is stopped. During playback, a
 narrow phosphor pulse crosses the trace once per quarter note, starting at
@@ -730,7 +736,7 @@ read the factory assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | `0x04000..0x93000` | Application directory and `app.bin` (entry at physical `0x04120`). Unused space here is available for code growth. |
-| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, five display font atlases, the 64 compiled MIDI patterns and their attribution. |
+| `0x93000..0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can

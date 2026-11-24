@@ -169,6 +169,7 @@ impl ChannelStrip {
 
 pub(super) struct Band<'a> {
     pub(super) pixels: &'a mut [[u8; 2]],
+    panel_type: bool,
     x: u16,
     y: u16,
     width: u16,
@@ -191,11 +192,59 @@ impl<'a> Band<'a> {
         let pixels = &mut storage[..usize::from(width) * usize::from(height)];
         pixels.fill(background.to_be_bytes());
         Self {
+            panel_type: false,
             pixels,
             x,
             y,
             width,
             height,
+        }
+    }
+
+    pub(super) fn with_panel_type(mut self, enabled: bool) -> Self {
+        self.panel_type = enabled;
+        self
+    }
+
+    pub(super) fn mask(
+        &mut self,
+        at: Point,
+        mask: super::lettering::Mask,
+        split: usize,
+        colors: [Rgb565; 2],
+    ) {
+        let left = at.x - i32::from(self.x);
+        let top = at.y - i32::from(self.y);
+        for y in (-top).max(0)..(mask.height as i32).min(i32::from(self.height) - top) {
+            let start = (top + y) as usize * usize::from(self.width);
+            for x in (-left).max(0)..(mask.width as i32).min(i32::from(self.width) - left) {
+                super::lettering::blend(
+                    &mut self.pixels[start + (left + x) as usize],
+                    colors[usize::from(x as usize >= split)],
+                    mask.coverage(x as usize, y as usize),
+                );
+            }
+        }
+    }
+
+    fn panel_text(
+        &mut self,
+        name: &str,
+        mut point: Point,
+        alignment: Alignment,
+        ink: Rgb565,
+        face: super::lettering::Mask,
+    ) {
+        let advance = face.width as i32;
+        let width = name.len() as i32 * advance;
+        point.x -= match alignment {
+            Alignment::Left => 0,
+            Alignment::Right => (width - 1).max(0),
+            Alignment::Center => width / 2,
+        };
+        for byte in name.bytes() {
+            self.mask(point, face.glyph(byte), 0, [ink; 2]);
+            point.x += advance;
         }
     }
 
@@ -207,7 +256,9 @@ impl<'a> Band<'a> {
         }
         let active = if strip.active { palette::CYAN } else { LABEL };
         self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), active);
+        self.panel_type = super::lettering::panel_type(strip.part);
         self.title(strip.part.name(), Point::new(25, y + 3), palette::WHITE);
+        self.panel_type = false;
         self.meter(y as u16, peak);
         let Strip {
             level,
@@ -368,6 +419,15 @@ impl<'a> Band<'a> {
     }
 
     pub(super) fn title(&mut self, name: &str, point: Point, color: Rgb565) {
+        if self.panel_type {
+            return self.panel_text(
+                name,
+                point,
+                Alignment::Left,
+                color,
+                super::lettering::HEADING,
+            );
+        }
         Text::with_baseline(
             name,
             point,
@@ -379,6 +439,9 @@ impl<'a> Band<'a> {
     }
 
     pub(super) fn label(&mut self, name: &str, point: Point, alignment: Alignment, color: Rgb565) {
+        if self.panel_type {
+            return self.panel_text(name, point, alignment, color, super::lettering::LEGEND);
+        }
         Text::with_text_style(
             name,
             point,

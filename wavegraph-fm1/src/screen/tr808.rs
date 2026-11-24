@@ -29,7 +29,7 @@ pub(super) async fn status(
     selector: &Selector,
     (channel, kit_scope, transport): (Channel, bool, &str),
 ) -> Result<(), Error> {
-    let mut window = Band::new(pixels, 0, 0, 103, 15, selector.shade(RUBBER));
+    let mut window = Band::new(pixels, 0, 0, 103, 15, selector.shade(RUBBER)).with_panel_type(true);
     let ink = selector.shade(CREAM);
     let left = Alignment::Left;
     window.label(
@@ -66,7 +66,7 @@ pub(super) async fn controls(
     let ink = selector.shade(CREAM);
     if previous.is_none() {
         for (x, title) in [(114, "BASS DRUM"), (174, "SNARE")] {
-            let mut group = Band::new(pixels, 0, 0, 60, 10, paper);
+            let mut group = Band::new(pixels, 0, 0, 60, 10, paper).with_panel_type(true);
             group.label(title, Point::new(30, 0), Alignment::Center, ink);
             lcd.write_rect_buffered(x, 0, 60, 10, group.pixels.as_flattened())
                 .await?;
@@ -82,7 +82,7 @@ pub(super) async fn controls(
         if old.is_some_and(|v| v[i] == value) {
             continue;
         }
-        let mut dial = Band::new(pixels, 0, 0, 30, 41, paper);
+        let mut dial = Band::new(pixels, 0, 0, 30, 41, paper).with_panel_type(true);
         dial.knob(
             Point::new(15, 10),
             value,
@@ -126,7 +126,8 @@ pub(super) async fn switches(
     for (i, (voice, name, color)) in SWITCHES.into_iter().enumerate() {
         let x = 3 + 60 * i as u16;
         if previous.is_none() {
-            let mut legend = Band::new(pixels, 0, 0, 54, 12, selector.shade(PANEL));
+            let mut legend =
+                Band::new(pixels, 0, 0, 54, 12, selector.shade(PANEL)).with_panel_type(true);
             legend.label(
                 name,
                 Point::new(27, 0),
@@ -145,7 +146,7 @@ pub(super) async fn switches(
             DrumLamp::Tail => (0, highlight(color, 2), Rgb565::new(26, 19, 4)),
             DrumLamp::Strike => (2, highlight(color, 5), Rgb565::new(31, 59, 22)),
         };
-        let mut cap = Band::new(pixels, 0, 0, 54, 33, selector.shade(PANEL));
+        let mut cap = Band::new(pixels, 0, 0, 54, 33, selector.shade(PANEL)).with_panel_type(true);
         for (left, top, w, h, ink) in [
             (0, 0, 54, 33, RUBBER),
             (1, 1, 52, 31, Rgb565::BLACK),

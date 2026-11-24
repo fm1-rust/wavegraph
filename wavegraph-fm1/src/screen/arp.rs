@@ -109,7 +109,8 @@ impl Panel {
             if !dirty {
                 continue;
             }
-            let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, colors.face);
+            let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, colors.face)
+                .with_panel_type(super::lettering::panel_type(labels.focus));
             match y {
                 0..48 => {
                     band.title("ARPEGGIATOR", Point::new(10, 7), colors.ink);

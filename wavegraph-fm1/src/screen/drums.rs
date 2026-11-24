@@ -1,19 +1,13 @@
 //! Drum faceplates and per-voice activity beneath the live kit scope.
 
 use super::{mixer::Band, selector::Selector, tr808};
-use crate::assets::fonts::{FONT_5X8, FONT_6X10, FONT_9X15_BOLD};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
 use embedded_graphics::{
     Drawable,
-    framebuffer::Framebuffer,
-    mono_font::MonoTextStyle,
-    pixelcolor::{
-        BinaryColor,
-        raw::{BigEndian, RawU1, ToBytes},
-    },
+    pixelcolor::raw::ToBytes,
     prelude::{Point, Primitive, Size},
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
-    text::{Alignment, Baseline, Text, TextStyleBuilder},
+    text::Alignment,
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
@@ -76,41 +70,32 @@ impl Panel {
         selector: &mut Selector,
         part: Part,
     ) -> Result<(), Error> {
-        // Expand the one-bit wordmark in eight-row strips.
-        type Title = Framebuffer<BinaryColor, RawU1, BigEndian, 56, 16, 112>;
-        let mut mask = Title::new();
-        Text::with_baseline(
-            part.name(),
-            Point::zero(),
-            MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On),
-            Baseline::Top,
-        )
-        .draw(&mut mask)
-        .expect("infallible framebuffer");
-        let [paper, gray, orange] = [
-            style(part).background,
-            if part == Part::Tr808 { CREAM } else { GRAPHITE },
-            ORANGE,
-        ]
-        .map(|ink| selector.shade(ink).to_be_bytes());
-        let rows = mask.data().as_chunks::<7>().0;
-        for (band, source) in rows.chunks_exact(4).enumerate() {
-            let pixels = &mut strip[..112 * 8];
-            for (y, row) in pixels.chunks_exact_mut(112).enumerate() {
-                for (x, pixel) in row.iter_mut().enumerate() {
-                    let bit = x / 2;
-                    *pixel = if source[y / 2][bit / 8] & (0x80 >> (bit % 8)) == 0 {
-                        paper
-                    } else if bit < 3 * 9 {
-                        gray
-                    } else {
-                        orange
-                    };
-                }
-            }
-            let y = 1 + 8 * band;
-            selector.badge.compose(10, y, 112, pixels);
-            lcd.write_rect_buffered(10, y as u16, 112, 8, pixels.as_flattened())
+        // The 808 controls repaint from x=114. Keep the whole title tile to their left.
+        let (mask, split, model) = if part == Part::Tr808 {
+            (super::lettering::TR808, 46, CREAM)
+        } else {
+            (super::lettering::TR909, 51, GRAPHITE)
+        };
+        let width = mask.width as u16;
+        for y in (0..32).step_by(8) {
+            let mut band = Band::new(
+                strip,
+                0,
+                y,
+                width,
+                8,
+                selector.shade(style(part).background),
+            );
+            band.mask(
+                Point::zero(),
+                mask,
+                split,
+                [model, ORANGE].map(|c| selector.shade(c)),
+            );
+            selector
+                .badge
+                .compose(10, usize::from(y + 1), mask.width, band.pixels);
+            lcd.write_rect_buffered(10, y + 1, width, 8, band.pixels.as_flattened())
                 .await?;
         }
         Ok(())
@@ -139,27 +124,14 @@ impl Panel {
             Voice::OpenHat => ("OPEN", "HAT"),
             Voice::Ride => ("RIDE", ""),
         };
-        let text = MonoTextStyle::new(&FONT_6X10, selector.shade(GRAPHITE));
-        let align = TextStyleBuilder::new()
-            .alignment(Alignment::Center)
-            .baseline(Baseline::Top)
-            .build();
+        let ink = selector.shade(GRAPHITE);
         for (label, y) in [
             (first, if second.is_empty() { 20 } else { 16 }),
             (second, 26),
+            (["F3", "G3", "A3", "B3", "C4", "D4"][slot], 35),
         ] {
-            Text::with_text_style(label, Point::new(19, y), text, align)
-                .draw(key)
-                .expect("infallible framebuffer");
+            key.label(label, Point::new(19, y), Alignment::Center, ink);
         }
-        Text::with_text_style(
-            ["F3", "G3", "A3", "B3", "C4", "D4"][slot],
-            Point::new(19, 36),
-            MonoTextStyle::new(&FONT_5X8, selector.shade(GRAPHITE)),
-            align,
-        )
-        .draw(key)
-        .expect("infallible framebuffer");
     }
 
     pub(super) async fn status808(
@@ -236,7 +208,8 @@ impl Panel {
                     KEY_W as u16,
                     KEY_H as u16,
                     selector.shade(STYLE.background),
-                );
+                )
+                .with_panel_type(true);
                 Self::key_face(&mut key, voice, i, selector);
                 lcd.write_rect_buffered(
                     x,

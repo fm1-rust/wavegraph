@@ -46,7 +46,6 @@ pub(crate) mod fonts {
         };
     }
 
-    font!(FONT_5X8, "font_5x8.raw");
     font!(FONT_6X9, "font_6x9.raw");
     font!(FONT_6X10, "font_6x10.raw");
     font!(FONT_7X13_BOLD, "font_7x13_bold.raw");
@@ -65,3 +64,11 @@ pub(crate) static WAVETABLES: [Bank<'static>; 2] = [
     Bank::from_packed12(flash_asset!(u8, BANKS[0].as_packed12())).expect("resonant frames"),
     Bank::from_packed12(flash_asset!(u8, BANKS[1].as_packed12())).expect("vocal frames"),
 ];
+
+// Carry the font copyright and license with the raster assets in standalone images.
+#[cfg(target_os = "none")]
+#[used]
+// SAFETY: the linker keeps this immutable notice in read-only upper flash.
+#[unsafe(link_section = ".wavegraph_assets.notices")]
+static FONT_NOTICE: [u8; include_bytes!("../assets/panel-type/OFL.txt").len()] =
+    *include_bytes!("../assets/panel-type/OFL.txt");

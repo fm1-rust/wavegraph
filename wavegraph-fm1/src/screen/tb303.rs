@@ -1,7 +1,6 @@
 //! Six fixed sound knobs below the scope and two auxiliary knobs beside the wordmark.
 
 use super::{OXIDE_RED, mixer::Band, selector::Selector};
-use crate::assets::fonts::FONT_6X10;
 use crate::{
     bass::{Controls, Knob, cutoff_detent},
     firmware::Labels,
@@ -12,15 +11,9 @@ use crate::{
 use core::{fmt::Write, str};
 use embedded_graphics::{
     Drawable,
-    framebuffer::Framebuffer,
-    mono_font::MonoTextStyle,
-    pixelcolor::{
-        BinaryColor,
-        raw::{BigEndian, RawU1},
-    },
     prelude::{Point, Primitive, RgbColor, Size},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
-    text::{Alignment, Baseline, Text},
+    text::Alignment,
 };
 use fm1_graphics::Rgb565;
 use fm1_rticx::{
@@ -226,20 +219,21 @@ impl Panel {
         }
         let paper = selector.shade(METAL);
         if entering {
-            let mut logo = Band::new(pixels, 0, 0, 78, 20, paper);
+            let mut logo = Band::new(pixels, 0, 0, 78, 20, paper).with_panel_type(true);
             wordmark(&mut logo, selector);
             logo.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(0, 0, 78, 20, logo.pixels.as_flattened())
                 .await?;
         }
         if old.is_none_or(|s| s.controls != state.controls || s.selected != state.selected) {
-            let mut display = Band::new(pixels, 0, 0, 80, 20, selector.shade(GRAPHITE));
+            let mut display =
+                Band::new(pixels, 0, 0, 80, 20, selector.shade(GRAPHITE)).with_panel_type(true);
             readout(&mut display, state.controls, state.selected, selector);
             lcd.write_rect_buffered(78, 0, 80, 20, display.pixels.as_flattened())
                 .await?;
         }
         if old.is_none_or(|s| s.status != state.status) {
-            let mut status = Band::new(pixels, 0, 0, 158, 10, paper);
+            let mut status = Band::new(pixels, 0, 0, 158, 10, paper).with_panel_type(true);
             state.status.draw(&mut status, selector.shade(GRAPHITE));
             selector.badge.compose(0, 21, 158, status.pixels);
             lcd.write_rect_buffered(0, 21, 158, 10, status.pixels.as_flattened())
@@ -279,7 +273,7 @@ impl Panel {
             let dy = area.top_left.y as u16;
             let w = area.size.width as u16;
             let h = area.size.height as u16;
-            let mut cell = Band::new(pixels, dx, dy, w, h, paper);
+            let mut cell = Band::new(pixels, dx, dy, w, h, paper).with_panel_type(true);
             dial.draw(&mut cell, selector, knob, center);
             lcd.write_rect_buffered(x + dx, y + dy, w, h, cell.pixels.as_flattened())
                 .await?;
@@ -328,27 +322,10 @@ fn readout(band: &mut Band<'_>, controls: Controls, selected: Option<Knob>, sele
 }
 
 fn wordmark(band: &mut Band<'_>, selector: &Selector) {
-    let mut mask = Framebuffer::<BinaryColor, RawU1, BigEndian, 40, 10, 50>::new();
-    Text::with_baseline(
-        "TB-303",
+    band.mask(
         Point::zero(),
-        MonoTextStyle::new(&FONT_6X10, BinaryColor::On),
-        Baseline::Top,
-    )
-    .draw(&mut mask)
-    .expect("infallible mask");
-    let [model, digits] = [GRAPHITE, OXIDE_RED].map(|c| selector.shade(c));
-    for (y, row) in (0..10).zip(mask.data().chunks_exact(5)) {
-        for x in 0..36 {
-            if row[x / 8] & (0x80 >> (x % 8)) != 0 {
-                let slant = (9 - y) / 3;
-                let left = 2 + slant + 2 * i32::try_from(x).expect("36 columns");
-                band.rect(
-                    Point::new(left, y * 2),
-                    Size::new(2, 2),
-                    if x < 18 { model } else { digits },
-                );
-            }
-        }
-    }
+        super::lettering::BASS,
+        36,
+        [GRAPHITE, OXIDE_RED].map(|c| selector.shade(c)),
+    );
 }

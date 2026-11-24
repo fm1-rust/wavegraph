@@ -1,20 +1,10 @@
 //! Temporary channel number in the upper-left corner of the LCD.
 
-use crate::assets::fonts::FONT_9X15_BOLD;
+use super::TextGrid;
 use crate::panel::Channel;
 use core::ops::Range;
-use embedded_graphics::{
-    Drawable,
-    framebuffer::Framebuffer,
-    mono_font::MonoTextStyle,
-    pixelcolor::{
-        BinaryColor,
-        raw::{BigEndian, RawU1, ToBytes},
-    },
-    prelude::Point,
-    text::{Baseline, Text},
-};
-use fm1_graphics::{Rgb565, TextGrid, palette};
+use embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
+use fm1_graphics::{Rgb565, palette};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
@@ -24,12 +14,9 @@ use fm1_rticx::{
 const W: usize = 24;
 const H: usize = 32;
 type Pixel = [u8; 2];
-// The badge is monochrome. Pad the 12-pixel glyph to a two-byte scanline.
-type Glyph = Framebuffer<BinaryColor, RawU1, BigEndian, 16, 16, 32>;
 
 pub(super) struct ChannelBadge {
     channel: Option<Channel>,
-    glyph: Glyph,
     underneath: [[Pixel; W]; H],
 }
 
@@ -37,7 +24,6 @@ impl ChannelBadge {
     pub(super) const fn new() -> Self {
         Self {
             channel: None,
-            glyph: Glyph::new(),
             underneath: [[[0; 2]; W]; H],
         }
     }
@@ -55,16 +41,7 @@ impl ChannelBadge {
         }
         let mut lcd = lcd.as_async(clock)?;
         self.channel = channel;
-        if let Some(channel) = channel {
-            self.glyph = Glyph::new();
-            Text::with_baseline(
-                ["1", "2", "3", "4"][channel.index()],
-                Point::new(2, 1),
-                MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On),
-                Baseline::Top,
-            )
-            .draw(&mut self.glyph)
-            .expect("infallible tile");
+        if channel.is_some() {
             let pixels = &mut strip[..W * H];
             for (y, row) in pixels.chunks_exact_mut(W).enumerate() {
                 self.draw_row(0, y, row);
@@ -145,14 +122,10 @@ impl ChannelBadge {
     }
 
     fn draw_row(&self, x: usize, y: usize, pixels: &mut [Pixel]) {
-        let source = &self.glyph.data()[y / 2 * 2..];
+        let mask = super::lettering::BADGE.frame(self.channel.expect("visible badge").index());
         for (x, pixel) in (x..).zip(pixels) {
-            let bit = x / 2;
-            *pixel = if source[bit / 8] & (0x80 >> (bit % 8)) != 0 {
-                [255; 2]
-            } else {
-                [0; 2]
-            };
+            *pixel = [0; 2];
+            super::lettering::blend(pixel, Rgb565::WHITE, mask.coverage(x, y));
         }
     }
 }
