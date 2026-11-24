@@ -103,36 +103,13 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/fonts.rs");
     println!("cargo:rerun-if-changed=assets/boot_timing.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
-        println!("cargo:rerun-if-env-changed=PI32V2_BIN");
-        println!("cargo:rerun-if-changed=runtime");
-        let clang = PathBuf::from(env::var_os("PI32V2_BIN").expect("pi32v2 LLVM")).join("clang");
         let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build directory"));
         fonts::write_atlases(&out);
+        println!("cargo:rustc-link-arg=--defsym=__wavegraph_job_reserve=4864");
         println!(
             "cargo:rustc-link-arg=-Map={}",
             out.join("wavegraph-fm1.map").display()
         );
-        // The BSP reset prefix holds CPU1, then branches to _start. Insert
-        // the application's NOLOAD initialization there, before the BSP CRT.
-        println!("cargo:rustc-link-arg=--wrap=_start");
-        let object = out.join("start.o");
-        let status = std::process::Command::new(&clang)
-            .args([
-                "--target=pi32v2",
-                "-mcpu=ac791n",
-                "-O2",
-                "-ffreestanding",
-                "-c",
-            ])
-            .arg("runtime/start.S")
-            .arg("-o")
-            .arg(&object)
-            .status()
-            .expect("pi32v2 clang");
-        assert!(status.success(), "compiling startup");
-        println!("cargo:rustc-link-arg={}", object.display());
-        println!("cargo:rerun-if-changed=wavegraph-fm1.ld");
-        println!("cargo:rustc-link-search={}", env!("CARGO_MANIFEST_DIR"));
     }
     let mut mix = vec![0.0; frame(750)];
     acid(&mut mix);

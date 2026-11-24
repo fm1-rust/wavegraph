@@ -16,6 +16,8 @@ unsafe extern "C" {
     fn fm1_cli();
     fn wavegraph_dsp_enter() -> !;
     fn wavegraph_cpu1_usp_free() -> u32;
+    fn wavegraph_usp_free() -> u32;
+    fn wavegraph_ssp_free() -> u32;
 }
 
 /// Release CPU1 once. One means the BSP verified both the challenge response
@@ -25,14 +27,14 @@ unsafe extern "C" {
 /// CPU0 only, once in RTICX init before Board::take configures TIMER4 and
 /// before enabling interrupts. The BSP reset entry must have held the peer
 /// before the CRT touched static storage.
-pub(crate) unsafe fn start() -> u32 {
+pub unsafe fn start() -> u32 {
     // SAFETY: the caller provides the exclusive early boot context.
     unsafe { fm1_cpu1_probe_run(1) }
 }
 
 /// Permanently hold a failed peer before returning control to CPU0. Owned
 /// Rust storage still belongs to its last owner after this call.
-pub(crate) fn stop() {
+pub(super) fn stop() {
     assert_eq!(fm1_core_id(), 0, "only CPU0 may halt CPU1");
     // SAFETY: the native operation masks CPU0 interrupts for the hold and
     // restores the saved exception vector. It is idempotent after shutdown.
@@ -40,7 +42,7 @@ pub(crate) fn stop() {
 }
 
 /// Observe faults after a successful boot. The BSP status belongs to CPU0.
-pub(crate) fn healthy() -> bool {
+pub(super) fn healthy() -> bool {
     // SAFETY: CPU0 only reads the BSP-owned status via its native ABI.
     fm1_core_id() == 0 && unsafe { fm1_cpu1_probe_healthy() != 0 }
 }
@@ -60,15 +62,31 @@ extern "C" fn fm1_cpu1_probe_word(challenge: u32) -> ! {
 
 /// Number of contiguous untouched bytes at the bottom of the running DSP
 /// stack. Only the owning core can inspect it.
-pub(crate) fn stack_free() -> u32 {
+///
+/// # Panics
+/// Called outside CPU1.
+#[must_use]
+pub fn cpu1_stack_free() -> u32 {
     assert_eq!(fm1_core_id(), 1, "DSP stack belongs to CPU1");
     // SAFETY: only CPU1 reads its own descending stack; bounds are fixed
     // linker symbols. The assembly scanner creates no Rust references.
     unsafe { wavegraph_cpu1_usp_free() }
 }
 
+/// Untouched bytes at the bottom of the CPU0 user and supervisor stacks, respectively.
+///
+/// # Panics
+/// Called outside CPU0.
+#[must_use]
+pub fn cpu0_stack_free() -> (u32, u32) {
+    assert_eq!(fm1_core_id(), 0, "CPU0 owns these stacks");
+    // SAFETY: the assembly routines read only the linker-bounded stack paint
+    // of the calling core, without forming references into either stack.
+    unsafe { (wavegraph_usp_free(), wavegraph_ssp_free()) }
+}
+
 /// Return to m-bootloader without leaving a CPU fetching WaveGraph from flash.
-pub(crate) fn download() -> ! {
+pub fn download() -> ! {
     if fm1_core_id() != 0 {
         // SAFETY: CPU1 is the single writer of the diagnostic status. A
         // panicking DSP reports a fault then parks until CPU0 holds it.

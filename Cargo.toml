@@ -10,6 +10,7 @@ members = [
     "wavegraph-dsp",
     "wavegraph-fx",
     "wavegraph-fm1",
+    "wavegraph-fm1-core",
     "wavegraph-sample"
 ]
 
@@ -19,6 +20,7 @@ license = "Apache-2.0 OR MIT"
 
 [workspace.dependencies]
 fm1-graphics = { version = "0.2.0-rc.1", features = ["embedded-graphics"] }
+fm1-rticx = "0.2.0-rc.1"
 fm1-audio = "0.2.0-rc.1"
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-adsr = { version = "0.1", path = "wavegraph-adsr" }

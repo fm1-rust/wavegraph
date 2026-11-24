@@ -483,11 +483,6 @@ impl Screen {
         clock: &mut Clock,
         t: Timing,
     ) -> Result<(), Error> {
-        // These leaf routines only read the linker-bounded, painted CPU0 stacks.
-        unsafe extern "C" {
-            safe fn wavegraph_usp_free() -> u32;
-            safe fn wavegraph_ssp_free() -> u32;
-        }
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
             self.selector.select(None);
             self.change_view(STYLE);
@@ -539,9 +534,10 @@ impl Screen {
                 self.text.text(x + 1, 1, "    -", palette::MUTED);
             }
         }
+        let (user_free, supervisor_free) = wavegraph_fm1_core::peer::cpu0_stack_free();
         for (i, (label, value)) in [
-            ("USP FREE B", wavegraph_usp_free()),
-            ("SSP FREE B", wavegraph_ssp_free()),
+            ("USP FREE B", user_free),
+            ("SSP FREE B", supervisor_free),
             ("REFILL US", t.refill.div_ceil(24)),
             ("PLAY US", t.playing_refill.div_ceil(24)),
             ("WRITE US", t.commit.div_ceil(24)),

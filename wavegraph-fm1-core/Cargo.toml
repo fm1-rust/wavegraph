@@ -1,0 +1,29 @@
+[package]
+name = "wavegraph-fm1-core"
+description = "Dual-core WaveGraph audio runtime for RTICX applications on the M-VAVE FM-1"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/fm1-rust/wavegraph"
+categories = ["embedded", "multimedia::audio", "no-std"]
+
+[dependencies]
+fm1-audio.workspace = true
+wavegraph-dsp = { version = "0.1", path = "../wavegraph-dsp", features = ["async"] }
+
+[target.'cfg(target_os = "none")'.dependencies]
+fm1-assets = { version = "0.2.0-rc.0", default-features = false }
+fm1-rticx = { workspace = true, features = ["audio", "cpu1-probe"] }
+heapless.workspace = true
+static_cell = "2.1.1"
+wavegraph-audio = { version = "0.1", path = "../wavegraph-audio", features = ["fm1"] }
+
+[target.'cfg(target_os = "none")'.dev-dependencies]
+wavegraph-monosynth = { version = "0.1", path = "../instruments/wavegraph-monosynth" }
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
+
+[lints]
+workspace = true

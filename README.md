@@ -20,6 +20,7 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-dsp`](wavegraph-dsp/) | DSP and bytecode interpreter | Unpublished | [Patch guide](wavegraph-dsp/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
+| [`wavegraph-fm1-core`](wavegraph-fm1-core/) | Run your own DSP graph on CPU1 with RTICX and the FM-1 DAC on CPU0 | Unpublished | [Build an app](wavegraph-fm1-core/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-lfo`](wavegraph-lfo/) | Frame-clocked modulation source with a float message outlet | Unpublished | [LFO guide](wavegraph-lfo/README.md) | [![Build status][lfo-build]][lfo-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-organ`](instruments/wavegraph-organ/) | Four-voice, modeled M1-inspired house organ | Unpublished | [Instrument guide](instruments/wavegraph-organ/README.md) | [![Build status][organ-build]][organ-ci] |

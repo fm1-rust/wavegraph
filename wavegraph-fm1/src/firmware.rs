@@ -5,7 +5,6 @@
 )]
 
 mod render;
-mod worker;
 
 use crate::{
     bass::{Controls, Knob},
@@ -198,12 +197,12 @@ pub struct Frame {
 #[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
 mod app {
     use super::render::{RenderBlock, Renderer};
-    use super::worker::{self, BlockJob, Worker};
+    use wavegraph_fm1_core::{Driver, OutputHealth, Refilled, peer};
+    wavegraph_fm1_core::dsp_worker!(static DSP: Renderer);
     use super::{Frame, Labels, Motion, Performance, Settings, Timing};
     use crate::{
         bumper::Bumper,
         capture::{Capture, FLAT, Scale, ScopeUpdates},
-        handoff::{Handoff, OutputHealth},
         inserts::ChannelInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
@@ -235,9 +234,8 @@ mod app {
     use futures_util::future::{Either, select};
     use heapless::Vec;
     use static_cell::{ConstStaticCell, StaticCell};
-    use wavegraph_audio::{Playback as _, fm1::Dac};
     use wavegraph_dsp::{
-        control::{Controller, EditQueue, Host, Revision},
+        control::{Controller, EditQueue, Revision},
         mailbox,
     };
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
@@ -362,7 +360,7 @@ mod app {
         // SAFETY: RTICX init runs once on CPU0 with interrupts disabled.
         // The reset prefix held CPU1 before CRT. Board::take starts TIMER4
         // after the BSP bootstrap has finished using it for the ROM handshake.
-        let boot = unsafe { crate::peer::start() };
+        let boot = unsafe { peer::start() };
         let board = Board::take().expect("CPU0 board");
         let port = board.take_usb().expect("one USB device");
         let identity = Identity {
@@ -397,32 +395,18 @@ mod app {
         #[unsafe(link_section = ".wavegraph.job")]
         static SLOT: StaticCell<RenderBlock> = StaticCell::new();
         let slot = SLOT.init_with(RenderBlock::new);
-        static JOBS: ConstStaticCell<mailbox::Mailbox<BlockJob>> =
-            ConstStaticCell::new(mailbox::Mailbox::new());
-        static DONE: ConstStaticCell<mailbox::Mailbox<BlockJob>> =
-            ConstStaticCell::new(mailbox::Mailbox::new());
         static GATE: ConstStaticCell<mailbox::Mailbox<()>> =
             ConstStaticCell::new(mailbox::Mailbox::new());
-        let (mut issue, jobs) = JOBS.take().split();
-        let (completed, done) = DONE.take().split();
         let (release, gate) = GATE.take().split();
 
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
-        let (editor, mut host) = EDITS.take().split();
-        let mut handoff = Handoff::new(slot);
-        // Render the initial, muted settings before starting the DMA clock.
-        let first = handoff
-            .issue(|_| host.begin_block(|_| Ok(())))
-            .expect("initial slot");
-        issue.try_send(first).ok().expect("empty render queue");
-        if boot == 1 {
-            worker::install(Worker {
-                renderer: Renderer::new(instrument, BUSES.take()),
-                jobs,
-                completed,
-                release: gate,
-            });
-        }
+        let (editor, host) = EDITS.take().split();
+        let driver = (boot == 1).then(|| {
+            let mut driver = DSP.connect(Renderer::new(instrument, BUSES.take(), gate), slot, host);
+            // Prime the muted graph before enabling DMA.
+            driver.request(|_, host| host.begin_block(|_| Ok(())));
+            driver
+        });
         let (scans, input) = make_channel!(PanelFrame, SCANS);
         let (wake_usb, outbound) = make_channel!((), 1);
         let (midi_out, midi_in) = make_channel!(MidiEvent, MIDI_EVENTS);
@@ -469,14 +453,10 @@ mod app {
                 start_audio: StartAudio {
                     draw_wake: draw_wake.clone(),
                     port: Some(board.audio.into()),
-                    completed: Some(done),
-                    host: (boot == 1).then_some(host),
+                    driver,
                 },
                 audio: Audio {
                     draw_wake: draw_wake.clone(),
-                    handoff,
-                    jobs: issue,
-                    missing_since: None,
                     output_health: OutputHealth::default(),
                     deadline: None,
                     release,
@@ -714,7 +694,7 @@ mod app {
                 self.piano.octave = 0;
                 if now.wrapping_sub(*self.octave_since.get_or_insert(now)) >= 2 * Timers::CRYSTAL_HZ
                 {
-                    crate::peer::download();
+                    peer::download();
                 }
             } else {
                 self.octave_since = None;
@@ -1016,9 +996,7 @@ mod app {
 
     pub struct Playback {
         output: &'static mut Output,
-        completed: mailbox::Receiver<'static, BlockJob>,
-        first: Option<BlockJob>,
-        host: Option<Host<'static, bool>>,
+        driver: Option<Driver<RenderBlock, bool>>,
     }
 
     // Give the cold graph its first full render before starting the DMA clock.
@@ -1026,46 +1004,28 @@ mod app {
     struct StartAudio {
         draw_wake: Sender<'static, (), 1>,
         port: Option<Cpu0<fm1_audio::AudioPort>>,
-        completed: Option<mailbox::Receiver<'static, BlockJob>>,
-        host: Option<Host<'static, bool>>,
+        driver: Option<Driver<RenderBlock, bool>>,
     }
 
     impl RticAsyncTask for StartAudio {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
-            let Some(host) = self.host.take() else { return };
-            let mut completed = self.completed.take().expect("one DSP worker");
-            let started = cycles();
-            let first = loop {
-                let fault = if !crate::peer::healthy() {
-                    Some(4)
-                } else if cycles().wrapping_sub(started) >= Timers::CRYSTAL_HZ {
-                    Some(5)
-                } else {
-                    None
-                };
-                if let Some(code) = fault {
-                    crate::peer::stop();
-                    self.shared().timing.lock(|t| t.boot = code);
-                    let _ = self.draw_wake.try_send(());
-                    return;
-                }
-                if let Some(first) = completed.try_recv() {
-                    break first;
-                }
-                DeadlineClock::delay(250.micros()).await;
+            let Some(mut driver) = self.driver.take() else {
+                return;
             };
+            if let Err(fault) = driver.wait_first().await {
+                self.shared().timing.lock(|t| t.boot = fault as u32);
+                let _ = self.draw_wake.try_send(());
+                return;
+            }
             static OUTPUT: StaticCell<Output> = StaticCell::new();
             let port = self.port.take().expect("start once").into_inner();
             self.shared().stream.lock(|stream| {
-                let output = OUTPUT.init_with(|| Output::start(port).expect("audio clock"));
-                // Clear the muted half left pending by the BSP's 5 ms DAC startup.
-                output.render_with_interval(fm1_audio::MasterLevel::MIN, |_, _| {});
+                let output = OUTPUT
+                    .init_with(|| wavegraph_fm1_core::start_output(port).expect("audio clock"));
                 *stream = Some(Playback {
                     output,
-                    completed,
-                    first: Some(first),
-                    host: Some(host),
+                    driver: Some(driver),
                 });
             });
         }
@@ -1075,11 +1035,8 @@ mod app {
     struct Audio {
         draw_wake: Sender<'static, (), 1>,
         playback: Option<Playback>,
-        missing_since: Option<u32>,
         output_health: OutputHealth,
         deadline: Option<u32>,
-        handoff: Handoff<&'static mut RenderBlock>,
-        jobs: mailbox::Sender<'static, BlockJob>,
         release: mailbox::Sender<'static, ()>,
         gated: bool,
         half_gain: bool,
@@ -1098,8 +1055,6 @@ mod app {
             let (master, playing) = shared
                 .settings
                 .lock(|s| (s.settings.master, s.settings.seq.transport.playing()));
-            let mut done = None;
-            let mut current = false;
             let playback = self.playback.get_or_insert_with(|| {
                 shared
                     .stream
@@ -1107,45 +1062,23 @@ mod app {
                     .expect("DMA started with a primed block")
             });
             let output = &mut *playback.output;
-            let Some(host) = &mut playback.host else {
+            let Some(driver) = &mut playback.driver else {
                 output.render(master, |_| {});
                 return;
             };
-            let healthy = crate::peer::healthy();
-            let mut dma_gap = false;
-            let Ok(result) = Dac(output, master).render(|out, interval| {
-                dma_gap = self.handoff.observe(interval);
-                if !healthy {
-                    return;
-                }
-                done = playback
-                    .first
-                    .take()
-                    .or_else(|| playback.completed.try_recv());
-                current = self.handoff.fill(out, done.as_ref(), |b| &b.pcm);
-            });
-            let result = result.into();
+            let refill = driver.refill(output, master);
             let refill_ended = cycles();
-            if result == Refill::WouldBlock {
-                return;
-            }
-            // A transient deadline miss leaves the slot with CPU1. Only a
-            // reported fault or a full second without a return stops the peer.
-            if done.is_some() {
-                self.missing_since = None;
-            } else {
-                let since = *self.missing_since.get_or_insert(started);
-                let code = if !healthy {
-                    Some(4)
-                } else if started.wrapping_sub(since) >= Timers::CRYSTAL_HZ {
-                    Some(5)
-                } else {
-                    None
-                };
-                if let Some(code) = code {
-                    crate::peer::stop();
-                    playback.host = None;
-                    shared.timing.lock(|t| t.boot = code);
+            let Refilled {
+                result,
+                current,
+                dma_gap,
+                completed: done,
+            } = match refill {
+                Ok(Some(half)) => half,
+                Ok(None) => return,
+                Err(fault) => {
+                    playback.driver = None;
+                    shared.timing.lock(|t| t.boot = fault as u32);
                     if shared.outbox.lock(|q| q.silence())
                         && let Some(wake) = &mut self.wake_usb
                     {
@@ -1154,7 +1087,7 @@ mod app {
                     let _ = self.draw_wake.try_send(());
                     return;
                 }
-            }
+            };
             let written = result == Refill::Written;
             let silence = written && !current;
             let accepted = written && current;
@@ -1178,7 +1111,7 @@ mod app {
             let mut discarded = None;
             let mut edit_sequence = None;
             if let Some(job) = &done {
-                let block = &*job.slot;
+                let block = job.slot;
                 work = block.work;
                 if let Some(at) = self.deadline.take() {
                     ready = block.ready_at.wrapping_sub(block.issued_at);
@@ -1238,8 +1171,7 @@ mod app {
             if !(written && current) {
                 self.scope_updates.missed();
             }
-            self.handoff.finish(host, result, &mut done);
-            let job = self.handoff.issue(|block| {
+            driver.request(|block, host| {
                 shared.settings.lock(|s| block.snapshot(s));
                 block.cue = shared.bumper.lock(|b| b.take(OUTPUT_FRAMES, master.raw()));
                 block.usb_session = shared.outbox.lock(|q| q.session());
@@ -1258,16 +1190,10 @@ mod app {
                         cfg!(feature = "late-block-probe") && shared.timing.lock(|t| t.visible);
                     self.gated = block.hold;
                 }
+                self.deadline = Some(started.wrapping_add(fm1_audio::BLOCK_TICKS));
+                block.issued_at = cycles();
                 revision
             });
-            if let Some(job) = job {
-                self.deadline = Some(started.wrapping_add(fm1_audio::BLOCK_TICKS));
-                job.slot.issued_at = cycles();
-                self.jobs
-                    .try_send(job)
-                    .ok()
-                    .expect("free slot implies empty job queue");
-            }
             let previous = self.last_start.replace(started);
             let service_miss = self.stats.record_with_refill(started, refill_ended, result);
             if service_miss || silence || dma_gap {

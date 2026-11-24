@@ -30,7 +30,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - run: cargo test --locked -p wavegraph-fm1
+      - run: cargo test --locked -p wavegraph-fm1 -p wavegraph-fm1-core
 
   firmware:
     needs: verify

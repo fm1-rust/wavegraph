@@ -71,6 +71,8 @@ impl RenderBlock {
 pub(super) struct Renderer {
     instrument: &'static mut Instrument<'static>,
     buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
+    release: wavegraph_dsp::mailbox::Receiver<'static, ()>,
+    measured: Option<u32>,
     next_frame: u64,
     meter: Meter,
     assignments: [Assignment; CHANNELS],
@@ -80,8 +82,11 @@ impl Renderer {
     pub(super) fn new(
         instrument: &'static mut Instrument<'static>,
         buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
+        release: wavegraph_dsp::mailbox::Receiver<'static, ()>,
     ) -> Self {
         Self {
+            release,
+            measured: None,
             instrument,
             buses,
             next_frame: 0,
@@ -92,7 +97,7 @@ impl Renderer {
 
     // Keep the DSP call frame out of the RTICX dispatcher's frame.
     #[inline(never)]
-    pub(super) fn render(&mut self, first_frame: u64, block: &mut RenderBlock) {
+    fn render_graph(&mut self, first_frame: u64, block: &mut RenderBlock) {
         let settings = &block.settings;
         let nav = settings.nav;
         let graph = &mut *self.instrument;
@@ -178,5 +183,37 @@ impl Settings {
     pub(super) fn source_tap(&self) -> bool {
         self.nav.view == View::Fx
             || (self.nav.view == View::Scope && self.tracks[self.nav.focus.index()].voice_tap)
+    }
+}
+
+impl wavegraph_fm1_core::AudioBlock for RenderBlock {
+    fn write(&self, out: &mut fm1_audio::OutputBlock) {
+        self.pcm.write(out);
+    }
+}
+
+impl wavegraph_fm1_core::Render for Renderer {
+    type Block = RenderBlock;
+
+    fn render(&mut self, first_frame: u64, block: &mut RenderBlock) {
+        use fm1_rticx::bsp::time::{Timers, cycles};
+        let started = cycles();
+        self.render_graph(first_frame, block);
+        block.work = cycles().wrapping_sub(started);
+        block.stack_free = if self
+            .measured
+            .is_none_or(|at| started.wrapping_sub(at) >= Timers::CRYSTAL_HZ)
+        {
+            self.measured = Some(started);
+            Some(wavegraph_fm1_core::peer::cpu1_stack_free())
+        } else {
+            None
+        };
+        if cfg!(feature = "late-block-probe") && block.hold {
+            while self.release.try_recv().is_none() {
+                core::hint::spin_loop();
+            }
+        }
+        block.ready_at = cycles();
     }
 }
