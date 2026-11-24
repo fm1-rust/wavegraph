@@ -507,7 +507,7 @@ in 5 ms steps and stays fixed across tempo changes. Turn a strip’s knob 3 to
 send more of that instrument into the shared delay.
 
 EQ starts flat with band splits at 250 Hz and 3.2 kHz. The compressor starts
-at −12 dBFS, 2:1, with +4 dB makeup. Its 15 ms attack lets the front of a kick
+at −12 dBFS, 2:1, with +2 dB makeup. Its 15 ms attack lets the front of a kick
 through and its 150 ms release brings the gain back between beats. Makeup
 feeds a separate sample-peak limiter with an initial −1 dBFS ceiling and
 80 ms release. The GR readout shows their combined gain reduction in dB.
