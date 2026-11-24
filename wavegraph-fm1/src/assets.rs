@@ -3,25 +3,13 @@
 use wavegraph_909::Samples;
 use wavegraph_wavetable::{BANKS, Bank};
 
-/// Put the array itself in the asset section. Placing only a slice there
-/// would leave its backing bytes in the code partition.
-macro_rules! flash_asset {
-    ($item:ty, $source:expr) => {{
-        const SOURCE: &[$item] = $source;
-        // SAFETY: the linker places these immutable arrays at their natural
-        // alignment in read-only XIP. The packager installs that section intact.
-        #[cfg_attr(target_os = "none", unsafe(link_section = ".wavegraph_assets"))]
-        static DATA: [$item; SOURCE.len()] = *SOURCE.first_chunk().expect("source length");
-        &DATA
-    }};
-}
-pub(crate) use flash_asset;
+pub(crate) use fm1_assets::flash_asset;
 
 // Keep the upstream notice with standalone firmware and emulator images.
 #[cfg(target_os = "none")]
 #[used]
 // SAFETY: the linker keeps this immutable text in read-only upper flash.
-#[unsafe(link_section = ".wavegraph_assets.notices")]
+#[unsafe(link_section = ".fm1_assets.keep")]
 static PATTERN_NOTICE: [u8; include_bytes!("../patterns/NOTICE.txt").len()] =
     *include_bytes!("../patterns/NOTICE.txt");
 
@@ -61,7 +49,7 @@ pub(crate) const CYMBALS: Samples<'static> = Samples {
 };
 
 // SAFETY: the catalog contains immutable references to the upper-flash banks.
-#[cfg_attr(target_os = "none", unsafe(link_section = ".wavegraph_assets"))]
+#[cfg_attr(target_os = "none", unsafe(link_section = ".fm1_assets"))]
 pub(crate) static WAVETABLES: [Bank<'static>; 2] = [
     Bank::from_packed12(flash_asset!(u8, BANKS[0].as_packed12())).expect("resonant frames"),
     Bank::from_packed12(flash_asset!(u8, BANKS[1].as_packed12())).expect("vocal frames"),
@@ -71,6 +59,6 @@ pub(crate) static WAVETABLES: [Bank<'static>; 2] = [
 #[cfg(target_os = "none")]
 #[used]
 // SAFETY: the linker keeps this immutable notice in read-only upper flash.
-#[unsafe(link_section = ".wavegraph_assets.notices")]
+#[unsafe(link_section = ".fm1_assets.keep")]
 static FONT_NOTICE: [u8; include_bytes!("../assets/panel-type/OFL.txt").len()] =
     *include_bytes!("../assets/panel-type/OFL.txt");

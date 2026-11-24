@@ -216,6 +216,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fm1-assets"
+version = "0.2.0-rc.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37e63fe5c41d94e1576e3e579821884a749cd67b567f35ba56331f00c5cd9913"
+
+[[package]]
 name = "fm1-audio"
 version = "0.2.0-rc.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -920,6 +926,7 @@ name = "wavegraph-fm1"
 version = "0.0.0"
 dependencies = [
  "critical-section",
+ "fm1-assets",
  "fm1-audio",
  "fm1-controls",
  "fm1-graphics",

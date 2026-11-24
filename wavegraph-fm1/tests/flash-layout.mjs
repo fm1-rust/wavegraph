@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 const [flasher, image] = process.argv.slice(2);
 const lib = pathToFileURL(resolve(flasher, "web/lib") + "/");
-const { appTable, appRead, appFilesStatus, AppStatus, BOOT_AREA, FLASH_SIZE } =
+const { appTable, appRead, appFilesStatus, AppStatus, BOOT_AREA, FLASH_SIZE, SECTOR } =
     await import(new URL("formats.js", lib));
 const { CHIP_KEY, FM1, planFirmware } = await import(new URL("unit.js", lib));
 const previous = new Uint8Array(FLASH_SIZE).fill(0x5a);
@@ -19,12 +19,15 @@ const files = appTable(target, CHIP_KEY).filter(e => e.attr === 0x82);
 assert.deepEqual(files.map(e => e.name), ["app.bin", "assets.bin"]);
 const [app, assets] = files;
 assert.equal(app.addr, 0x120);
-assert.equal(assets.addr + BOOT_AREA, 0x93000);
-assert.ok(app.addr + app.len <= assets.addr);
-const end = Math.ceil((BOOT_AREA + assets.addr + assets.len) / 4096) * 4096;
+const appEnd = BOOT_AREA + app.addr + app.len;
+const assetStart = BOOT_AREA + assets.addr;
+const assetEnd = assetStart + assets.len;
+assert.equal(assetStart, Math.ceil(appEnd / SECTOR) * SECTOR);
+const end = Math.ceil(assetEnd / SECTOR) * SECTOR;
 assert.ok(end <= 0xe0000);
 assert.equal(raw.length, assets.addr + assets.len - app.addr);
-assert.ok(target.subarray(BOOT_AREA + app.addr + app.len, 0x93000).every(b => b === 0xff));
+assert.ok(target.subarray(appEnd, assetStart).every(b => b === 0xff));
+assert.ok(target.subarray(assetEnd, end).every(b => b === 0xff));
 assert.deepEqual(target.subarray(0, BOOT_AREA), previous.subarray(0, BOOT_AREA));
 assert.deepEqual(target.subarray(end), previous.subarray(end));
 assert.equal(appFilesStatus(target, CHIP_KEY), AppStatus.OK);
