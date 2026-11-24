@@ -452,10 +452,7 @@ mod tests {
         );
         nav.turn(1, -1);
         assert_eq!(nav.insert_slot(), Some(1));
-        assert_eq!(
-            nav.insert_kinds[0],
-            [InsertKind::Saturator, InsertKind::Phaser]
-        );
+        assert_eq!(nav.insert_kinds[0], [InsertKind::Saturator, InsertKind::Eq]);
         assert_eq!(nav.focus, Channel::One);
         assert_eq!(nav.insert_kinds[1], InsertKind::factory(Part::Bass));
         nav.press(PageButton::Home);

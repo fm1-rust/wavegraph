@@ -4,7 +4,8 @@ use crate::instrument::{Message, Part, at};
 use heapless::Vec;
 use wavegraph::Event;
 use wavegraph_fx::{
-    Delay, Dynamics, MasterControls, Message as FxMessage, PhaserControls, SaturatorControls,
+    Delay, Dynamics, EqControls, MasterControls, Message as FxMessage, PhaserControls,
+    SaturatorControls,
 };
 
 // Shared by the delay-line allocation, panel clamp and rack readout.
@@ -124,10 +125,17 @@ pub(super) enum InsertKind {
     Compressor,
     Saturator,
     Phaser,
+    Eq,
 }
 
 impl InsertKind {
-    pub(super) const ALL: [Self; 4] = [Self::None, Self::Compressor, Self::Saturator, Self::Phaser];
+    pub(super) const ALL: [Self; 5] = [
+        Self::None,
+        Self::Compressor,
+        Self::Saturator,
+        Self::Phaser,
+        Self::Eq,
+    ];
 
     pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
         [
@@ -143,8 +151,8 @@ impl InsertKind {
     pub(super) fn turn(self, detents: i8) -> Self {
         let i = i16::from(self as u8)
             .saturating_add(i16::from(detents))
-            .rem_euclid(4);
-        Self::ALL[usize::try_from(i).expect("four effects")]
+            .rem_euclid(i16::try_from(Self::ALL.len()).expect("small effect catalog"));
+        Self::ALL[usize::try_from(i).expect("wrapped effect index")]
     }
 
     #[cfg(target_os = "none")]
@@ -154,6 +162,7 @@ impl InsertKind {
             Self::Compressor => "SIDECHAIN",
             Self::Saturator => "SATURATOR",
             Self::Phaser => "PHASER",
+            Self::Eq => "3-BAND EQ",
         }
     }
 
@@ -163,6 +172,7 @@ impl InsertKind {
             Self::Compressor => Insert::Compressor(BassFx::INITIAL),
             Self::Saturator => Insert::Saturator(SaturatorControls::INITIAL),
             Self::Phaser => Insert::Phaser(PhaserControls::INITIAL),
+            Self::Eq => Insert::Eq(EqControls::INITIAL),
         }
     }
 }
@@ -173,6 +183,13 @@ pub(super) enum Insert {
     Compressor(BassFx),
     Saturator(SaturatorControls),
     Phaser(PhaserControls),
+    Eq(EqControls),
+}
+
+fn edit_eq(db: &mut [i8; 3], knobs: [i8; 4]) {
+    for (gain, delta) in db.iter_mut().zip(knobs) {
+        *gain = gain.saturating_add(delta).clamp(-12, 12);
+    }
 }
 
 impl Insert {
@@ -187,6 +204,7 @@ impl Insert {
             Self::Compressor(_) => InsertKind::Compressor,
             Self::Saturator(_) => InsertKind::Saturator,
             Self::Phaser(_) => InsertKind::Phaser,
+            Self::Eq(_) => InsertKind::Eq,
         }
     }
 
@@ -196,6 +214,7 @@ impl Insert {
             Self::Compressor(fx) => fx.enabled,
             Self::Saturator(fx) => fx.enabled,
             Self::Phaser(fx) => fx.enabled,
+            Self::Eq(fx) => fx.enabled,
         }
     }
 
@@ -208,6 +227,10 @@ impl Insert {
                 turn(&mut fx.drive, knobs[0]);
                 turn(&mut fx.mix, knobs[1]);
                 turn(&mut fx.level, knobs[2]);
+                fx.enabled ^= toggle;
+            }
+            Self::Eq(fx) => {
+                edit_eq(&mut fx.db, knobs);
                 fx.enabled ^= toggle;
             }
             Self::Phaser(fx) => {
@@ -282,9 +305,7 @@ impl Fx {
                 self.delay.enabled ^= toggle;
             }
             Device::Eq => {
-                for (gain, delta) in self.eq.iter_mut().zip(knobs) {
-                    *gain = gain.saturating_add(delta).clamp(-12, 12);
-                }
+                edit_eq(&mut self.eq, knobs);
                 self.eq_enabled ^= toggle;
             }
             Device::Dynamics => {

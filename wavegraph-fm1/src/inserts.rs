@@ -7,7 +7,7 @@ use crate::{
 };
 use heapless::Vec;
 use wavegraph::{Event, Port, Process, ProcessContext};
-use wavegraph_fx::{Message as FxMessage, Phaser, Saturator, SidechainDucker};
+use wavegraph_fx::{Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq};
 use wavegraph_sample::I24;
 
 #[derive(Clone, Copy)]
@@ -16,6 +16,7 @@ enum Processor {
     Compressor(SidechainDucker),
     Saturator(Saturator),
     Phaser(Phaser),
+    Eq(ThreeBandEq),
 }
 
 impl Processor {
@@ -25,12 +26,14 @@ impl Processor {
             Self::Compressor(_) => InsertKind::Compressor,
             Self::Saturator(_) => InsertKind::Saturator,
             Self::Phaser(_) => InsertKind::Phaser,
+            Self::Eq(_) => InsertKind::Eq,
         }
     }
 
-    fn new(kind: InsertKind, rate_hz: u32, factory: SidechainDucker) -> Self {
+    fn new(kind: InsertKind, rate_hz: u32, factory: SidechainDucker, eq: ThreeBandEq) -> Self {
         match kind {
             InsertKind::None => Self::None,
+            InsertKind::Eq => Self::Eq(eq),
             InsertKind::Compressor => Self::Compressor(factory),
             InsertKind::Saturator => Self::Saturator(Saturator::new()),
             InsertKind::Phaser => Self::Phaser(Phaser::new(rate_hz).expect("audio sample rate")),
@@ -46,6 +49,7 @@ pub(super) struct ChannelInserts {
     processors: [[Processor; INSERT_SLOTS]; CHANNELS],
     rate_hz: u32,
     factory: SidechainDucker,
+    flat_eq: ThreeBandEq,
 }
 
 impl ChannelInserts {
@@ -57,6 +61,7 @@ impl ChannelInserts {
             processors: [[Processor::None; INSERT_SLOTS]; CHANNELS],
             rate_hz,
             factory,
+            flat_eq: ThreeBandEq::new(rate_hz).expect("audio sample rate"),
         }
     }
 
@@ -181,7 +186,8 @@ impl Process<Message, I24> for ChannelInserts {
                 };
                 let processor = &mut self.processors[i][slot];
                 if processor.kind() != setting.kind() {
-                    *processor = Processor::new(setting.kind(), self.rate_hz, self.factory);
+                    *processor =
+                        Processor::new(setting.kind(), self.rate_hz, self.factory, self.flat_eq);
                     changed[i][slot] = true;
                 }
                 match (processor, setting) {
@@ -217,6 +223,14 @@ impl Process<Message, I24> for ChannelInserts {
                             *sample = fx.tick(*sample);
                         }
                     }
+                    (Processor::Eq(fx), Insert::Eq(settings)) => {
+                        if changed[i][slot] {
+                            fx.set_controls(settings);
+                        }
+                        for sample in &mut *strip {
+                            *sample = fx.tick(*sample);
+                        }
+                    }
                     _ => (),
                 }
             }
@@ -227,6 +241,49 @@ impl Process<Message, I24> for ChannelInserts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eq_edits_and_bypass_only_affect_the_selected_strip() {
+        let mut rack = ChannelInserts::new(44_118);
+        let mut eq = InsertKind::Eq.initial();
+        let input = [I24::new_unchecked(100_000); 128];
+        let silence = [I24::default(); 128];
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+
+        // Put the EQ in channel 2's second slot. Equal gain in every band
+        // has a known transfer even before the crossover filters settle.
+        for (knobs, toggle, expected) in [
+            ([0; 4], false, 100_000),
+            ([8; 4], false, 251_188),
+            ([0; 4], true, 100_000),
+            ([0; 4], true, 251_188),
+            ([-127; 4], false, 25_118),
+        ] {
+            eq.edit(knobs, toggle);
+            rack.process(&mut ProcessContext {
+                frames: input.len(),
+                inputs: &[
+                    &input, &silence, &input, &silence, &input, &silence, &input, &silence,
+                ],
+                outputs: &mut outputs.each_mut().map(|block| &mut block[..]),
+                events: &[Event {
+                    frame: 0,
+                    port: 0,
+                    message: Message::ChannelInserts(Channel::Two, [Insert::None, eq]),
+                }],
+                emit: &mut Err,
+            });
+            for sample in &outputs[1][63..] {
+                assert_eq!(sample.inner(), expected);
+            }
+            if expected != input[0].inner() {
+                assert_ne!(outputs[1][0].inner(), expected, "gain changes ramp");
+            }
+            for dry in [0, 2, 3] {
+                assert_eq!(outputs[dry], input);
+            }
+        }
+    }
 
     #[test]
     fn slots_are_serial_and_other_channels_are_dry() {

@@ -181,6 +181,7 @@ fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
         Insert::Compressor(_) => "COMP",
         Insert::Saturator(_) => "SAT",
         Insert::Phaser(_) => "PHASER",
+        Insert::Eq(_) => "EQ",
         Insert::None => "NONE",
     };
     band.title(name, Point::new(26, y + 5), palette::WHITE);
@@ -233,6 +234,16 @@ fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
                     position,
                     str::from_utf8(&percent(position)).expect("ASCII percent"),
                 );
+            }
+        }
+        Insert::Eq(fx) => {
+            for ((x, name), db) in [(112, "1 LOW"), (164, "2 MID"), (211, "3 HIGH")]
+                .into_iter()
+                .zip(fx.db)
+            {
+                let text = heapless::format!(5; "{db:+}dB").expect("signed EQ gain");
+                let position = (i16::from(db) + 12) * 128 / 24;
+                dial(x, name, u8::try_from(position).expect("Q7 dial"), &text);
             }
         }
         Insert::Phaser(fx) => {

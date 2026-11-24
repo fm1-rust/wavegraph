@@ -254,6 +254,7 @@ macro_rules! node {
 }
 node!(Saturator, Saturator);
 node!(Phaser, Phaser);
+node!(super::ThreeBandEq, Eq);
 
 #[cfg(test)]
 mod tests {
