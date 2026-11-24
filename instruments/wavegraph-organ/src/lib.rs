@@ -3,6 +3,8 @@
 #![doc = include_str!("../README.md")]
 
 pub use wavegraph_adsr::Adsr;
+pub use wavegraph_core::polyphony::{Chord, VoiceMode};
+use wavegraph_core::{midi::Note, polyphony::Keyboard};
 
 use wavegraph_adsr::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -68,6 +70,8 @@ impl Default for Params {
 /// One message inlet accepting note and panel changes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Message {
+    /// Change voice allocation, immediately revoicing any held keys.
+    VoiceMode(VoiceMode),
     /// Note-on; zero velocity means note-off, as with MIDI.
     NoteOn {
         /// MIDI note number in 0..=127.
@@ -254,6 +258,7 @@ fn sine(phase: u32) -> i32 {
 )]
 pub struct Organ {
     steps: [u32; 128],
+    keyboard: Keyboard,
     voices: [Voice; POLYPHONY],
     params: Params,
     voice_level: u8,
@@ -297,6 +302,7 @@ impl Organ {
         let sample_period = (denominator as f64 / numerator as f64) as f32;
         let mut organ = Self {
             steps,
+            keyboard: Keyboard::EMPTY,
             voices: [Voice::SILENT; POLYPHONY],
             params,
             voice_level: 8,
@@ -413,30 +419,77 @@ impl Organ {
         self.params.release_ms = u16::try_from(adsr.release_us / 1_000).unwrap_or(u16::MAX);
     }
 
+    fn step(&self, note: u8) -> u32 {
+        self.steps.get(usize::from(note)).copied().unwrap_or(0)
+    }
+
+    fn release_slot(&mut self, i: usize) {
+        self.voices[i].release(&self.timing);
+    }
+
+    fn strike(&mut self, i: usize, note: Note, step: u32) {
+        self.serial = self.serial.wrapping_add(1);
+        self.voices[i] = Voice {
+            note: Some(note.number),
+            age: self.serial,
+            velocity: note.velocity.min(127),
+            step,
+            transient: FULL,
+            ..Voice::SILENT
+        };
+        self.voices[i].envelope.gate_on(&self.timing);
+    }
+
+    fn revoice(&mut self) {
+        // Oldest first preserves the organ's age order and slot zero is the newest key.
+        for i in (0..POLYPHONY).rev() {
+            if let Some(note) = self.keyboard.voice(i) {
+                let step = self.keyboard.step(i, self.step(note.number));
+                if step != 0 {
+                    self.strike(i, note, step);
+                    continue;
+                }
+            }
+            if self.voices[i].envelope.is_gated() {
+                self.release_slot(i);
+            }
+        }
+    }
+
     fn apply(&mut self, message: Message) {
         match message {
-            Message::NoteOn { note, velocity: 0 } | Message::NoteOff(note) => {
-                for voice in &mut self.voices {
-                    if voice.note == Some(note) {
-                        voice.release(&self.timing);
+            Message::VoiceMode(mode) => {
+                if self.keyboard.mode != mode {
+                    self.keyboard.mode = mode;
+                    self.revoice();
+                }
+            }
+            Message::NoteOff(note) | Message::NoteOn { note, velocity: 0 } => {
+                let newest = self.keyboard.release(note);
+                if self.keyboard.mode == VoiceMode::Poly {
+                    for i in 0..POLYPHONY {
+                        if self.voices[i].note == Some(note) && self.voices[i].envelope.is_gated() {
+                            self.release_slot(i);
+                        }
                     }
+                } else if newest {
+                    self.revoice();
                 }
             }
             Message::NoteOn { note, velocity } => {
-                if let Some(&step) = self.steps.get(usize::from(note))
-                    && step != 0
-                {
-                    let i = self.allocate(note);
-                    self.serial = self.serial.wrapping_add(1);
-                    self.voices[i] = Voice {
-                        note: Some(note),
-                        age: self.serial,
-                        velocity: velocity.min(127),
-                        step,
-                        transient: FULL,
-                        ..Voice::SILENT
-                    };
-                    self.voices[i].envelope.gate_on(&self.timing);
+                let step = self.step(note);
+                if step == 0 {
+                    return;
+                }
+                let note = Note {
+                    number: note,
+                    velocity,
+                };
+                self.keyboard.press(note);
+                if self.keyboard.mode == VoiceMode::Poly {
+                    self.strike(self.allocate(note.number), note, step);
+                } else {
+                    self.revoice();
                 }
             }
             Message::Voicing(voicing) => self.params.voicing = voicing,
@@ -452,11 +505,15 @@ impl Organ {
                 ..self.vca_envelope
             }),
             Message::AllNotesOff => {
+                self.keyboard.clear();
                 for voice in &mut self.voices {
                     voice.release(&self.timing);
                 }
             }
-            Message::Reset => self.voices = [Voice::SILENT; POLYPHONY],
+            Message::Reset => {
+                self.keyboard.clear();
+                self.voices = [Voice::SILENT; POLYPHONY];
+            }
         }
     }
 

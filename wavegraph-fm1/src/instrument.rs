@@ -272,6 +272,7 @@ pub(super) struct Track {
     pub(super) voice: Voice,
     pub(super) bass: Controls,
     pub(super) inserts: [Insert; INSERT_SLOTS],
+    pub(super) polyphony: crate::panel::Polyphony,
     pub(super) organ: OrganControls,
     pub(super) saw: SawControls,
     wave_programs: [WaveProgram; 2],
@@ -294,6 +295,7 @@ impl Track {
             voice: Voice::INITIAL,
             bass: Controls::INITIAL,
             inserts: Insert::factory(assignment.part),
+            polyphony: crate::panel::Polyphony::INITIAL,
             organ: OrganControls::INITIAL,
             poly_keys: [PolyKey::EMPTY; POLYPHONY],
             voice_envelope: match assignment.part {
@@ -631,6 +633,15 @@ impl Track {
     }
 
     fn poly_events(self, previous: Option<Self>, events: &mut EventBatch) {
+        let mode = self.polyphony.mode;
+        if previous.map_or(wavegraph_organ::VoiceMode::Poly, |p| p.polyphony.mode) != mode {
+            let msg = match self.assignment.part {
+                Part::Organ => Message::Organ(OrganMessage::VoiceMode(mode)),
+                Part::Wavetable => Message::Wavetable(WaveMessage::VoiceMode(mode)),
+                _ => unreachable!("polyphonic instrument"),
+            };
+            events.push(at(msg)).expect("one voice mode");
+        }
         let old_keys = previous.map_or([PolyKey::EMPTY; POLYPHONY], |p| p.poly_keys);
         let old_transpose = previous.map_or(0, |p| p.voice.transpose);
         let now_transpose = self.voice.transpose;
@@ -736,7 +747,7 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
     }
 }
 
-// Four organ note-offs, four note-ons, four panel values and a voicing event.
+// Four organ note-offs, four note-ons, four panel values and both voice mode and harmonic recipe.
 const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 // The 909 accepts nine MIDI pitches across six voices. Clip strikes on alternate
@@ -1509,6 +1520,42 @@ mod tests {
         dynamics_enabled: false,
         ..Fx::INITIAL
     };
+
+    #[test]
+    fn edit_page_cycles_each_polysynth_and_recalls_its_chord() {
+        use crate::panel::PageButton;
+        use wavegraph_organ::{Chord, VoiceMode};
+        for part in [Part::Organ, Part::Wavetable] {
+            let mut nav = Navigation::INITIAL;
+            nav.assignments[0] = Assignment::new(part);
+            let mut track = Track::new(nav.assignments[0]);
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, View::VoiceMode);
+            let old = track;
+            track.polyphony.edit(true, 2);
+            let mode = VoiceMode::Chord(Chord::MAJOR.turn(2));
+            let msg = if part == Part::Organ {
+                at(OrganMessage::VoiceMode(mode))
+            } else {
+                at(WaveMessage::VoiceMode(mode))
+            };
+            assert_eq!(
+                track.events(Some(old)).expect("mode edit").as_slice(),
+                &[msg]
+            );
+            track.polyphony.edit(true, 0);
+            assert_eq!(track.polyphony.mode, VoiceMode::Unison);
+            track.polyphony.edit(true, 0);
+            assert_eq!(track.polyphony.mode, VoiceMode::Poly);
+            track.polyphony.edit(true, 0);
+            assert_eq!(track.polyphony.mode, mode);
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, View::Scope);
+            nav.press(PageButton::Edit);
+            nav.turn(0, 1);
+            assert_eq!((nav.part(), nav.view), (Part::Bass, View::Scope));
+        }
+    }
 
     #[test]
     fn lfo_page_and_mod_wheel_follow_the_assigned_bass_channel() -> Result<(), Error> {

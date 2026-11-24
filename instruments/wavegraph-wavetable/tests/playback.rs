@@ -310,3 +310,51 @@ fn matching_off_retriggers_and_voice_stealing_on_i24() {
     render(&mut v, &mut out, &[]);
     assert!(out.iter().all(|s| s.inner() == 0));
 }
+
+#[test]
+fn one_root_matches_four_chord_strikes_and_unison_beats() {
+    use wavegraph_wavetable::{Chord, VoiceMode};
+    let tuning = Tuning::new(44_100, 1).expect("clock");
+    let synth = || Wavetable::new(&tuning, &BANKS).expect("factory banks");
+    let mut chord = synth();
+    command(
+        &mut chord,
+        Message::VoiceMode(VoiceMode::Chord(Chord::MAJOR.turn(3))),
+    );
+    command(&mut chord, on(60));
+    let mut poly = synth();
+    for pitch in [70, 67, 63, 60] {
+        command(&mut poly, on(pitch));
+    }
+    let mut actual = [0.0_f32; 128];
+    let mut expected = [0.0_f32; 128];
+    render(&mut chord, &mut actual, &[]);
+    render(&mut poly, &mut expected, &[]);
+    assert_eq!(actual, expected);
+
+    let mut unison = synth();
+    let mut single = synth();
+    for s in [&mut single, &mut unison] {
+        command(s, Message::Envelope(Adsr::GATE));
+    }
+    command(&mut unison, Message::VoiceMode(VoiceMode::Unison));
+    command(&mut unison, on(60));
+    command(&mut single, on(60));
+    render(&mut unison, &mut actual, &[]);
+    render(&mut single, &mut expected, &[]);
+    assert!(
+        actual
+            .iter()
+            .zip(expected)
+            .any(|(&a, b)| (a - 4.0 * b).abs() > 0.00001)
+    );
+    command(
+        &mut unison,
+        Message::NoteOn {
+            note: 60,
+            velocity: 0,
+        },
+    );
+    render(&mut unison, &mut actual, &[]);
+    assert_eq!(actual, [0.0; 128]);
+}

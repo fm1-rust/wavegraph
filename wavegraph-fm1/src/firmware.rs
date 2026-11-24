@@ -64,6 +64,7 @@ impl Settings {
             focus: track.assignment.part,
             bass: track.bass,
             bass_knob: self.nav.bass_knob(),
+            mode: track.polyphony.mode,
             organ: track.organ,
             drums808: track.drums808,
             saw: track.saw,
@@ -113,6 +114,7 @@ pub(super) struct Labels {
     pub(super) focus: Part,
     pub(super) bass: Controls,
     pub(super) bass_knob: Option<Knob>,
+    pub(super) mode: wavegraph_organ::VoiceMode,
     pub(super) organ: OrganControls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) saw: SawControls,
@@ -575,6 +577,7 @@ mod app {
                 (Button::Lfo, PageButton::Lfo),
                 (Button::Arp, PageButton::Arp),
                 (Button::Seq, PageButton::Seq),
+                (Button::Edit, PageButton::Edit),
             ]
             .into_iter()
             .find(|(button, _)| scan.pressed(*button));
@@ -664,8 +667,10 @@ mod app {
             });
             self.leds
                 .set(Button::Rec, self.seq.page == Some(SeqPage::Record));
-            self.leds
-                .set(Button::Edit, self.seq.page == Some(SeqPage::Step));
+            self.leds.set(
+                Button::Edit,
+                self.seq.page == Some(SeqPage::Step) || self.nav.view == View::VoiceMode,
+            );
             self.leds.set(Button::Seq, self.seq.page.is_some());
             self.leds.set(
                 Button::Home,
@@ -889,6 +894,9 @@ mod app {
             let algorithm = scan.encoder_delta(Encoder::Algorithm);
             let sel = scan.pressed(Button::Sel);
             match view {
+                View::VoiceMode => self.settings.tracks[channel.index()]
+                    .polyphony
+                    .edit(sel, knobs[0]),
                 View::Mixer => self.settings.mixer.turn_faders(knobs),
                 View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
                 View::Lfo => self.settings.tracks[channel.index()]
