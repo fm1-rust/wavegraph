@@ -5,7 +5,7 @@ use crate::panel::Navigation;
 use crate::wavetable::Program as WaveProgram;
 use crate::{
     arp::{self, ChannelArp},
-    bass::Controls,
+    bass::{Controls, Knob},
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
     fx::{BassFx, Device, Fx},
@@ -362,8 +362,15 @@ impl Track {
             Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable => {
                 self.voice.transpose = self.voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
-            Part::Bass => self.bass.turn_select(detents),
-            Part::Tr808 | Part::Tr909 => (),
+            Part::Bass | Part::Tr808 | Part::Tr909 => (),
+        }
+    }
+
+    pub(super) fn turn_algorithm(&mut self, bass_knob: Option<Knob>, detents: i8) {
+        if let Some(knob) = bass_knob {
+            self.bass.turn(knob, detents);
+        } else {
+            self.voice.turn_waveform(self.assignment.part, detents);
         }
     }
 
@@ -1178,8 +1185,9 @@ impl Instrument<'_> {
                 && let Some(owned) = self.player.automation(Channel::ALL[i])
             {
                 panel.retain(|event| match event.message {
-                    Message::Bass(message) => crate::bass::Knob::from_message(message)
-                        .is_none_or(|cc| owned.get(cc).is_none()),
+                    Message::Bass(message) => {
+                        Knob::from_message(message).is_none_or(|cc| owned.get(cc).is_none())
+                    }
                     _ => true,
                 });
             }
@@ -1617,7 +1625,7 @@ mod tests {
         parts[0].turn_knobs([-6, 0, 0, 0]);
         assert_eq!(parts[2].bass, Controls::INITIAL);
         parts[2].turn_knobs([6, 0, 0, 0]);
-        assert_eq!(parts[2].bass.readout().1, 1000);
+        assert_eq!(parts[2].bass.readout(Knob::Cutoff).1, 1000);
         parts[0].voice_envelope.turn([1, -1, 2, -2]);
         let mono = &mut parts[0].voice;
         assert_eq!(mono.cutoff_hz(), 2500);
@@ -1646,7 +1654,7 @@ mod tests {
         let open = parts;
         parts[0].voice.turn_cutoff(1);
         assert!(parts[0].oscillator_events(Some(open[0])).is_empty());
-        assert_eq!(parts[2].bass.readout().1, 1000);
+        assert_eq!(parts[2].bass.readout(Knob::Cutoff).1, 1000);
     }
 
     #[test]
@@ -2063,60 +2071,51 @@ mod tests {
     }
 
     #[test]
-    fn select_switches_the_legend_without_changing_the_sound_and_recalls_each_bank() {
-        let mut parts = Track::TEST_TRACKS;
-        let voice = Voice {
-            gate: Gate {
-                note: Some(note(53, 100)),
-                phrase: 1,
-            },
-            ..Voice::INITIAL
-        };
-        parts[0].voice = voice;
-        parts[2].voice = voice;
-        parts[2].turn_knobs([0, 0, 0, -10]);
-        let filter = parts[2].bass;
+    fn algorithm_edits_each_selected_303_knob_then_home_restores_the_waveform() -> Result<(), Error>
+    {
+        let mut nav = Navigation::INITIAL;
+        let mut track = Track::new(nav.assignments[0]);
+        track.voice.gate.note = Some(note(53, 100));
+        for (knob, message) in [
+            (Knob::Tuning, BassMessage::TuningSemitones(0.1)),
+            (Knob::Cutoff, BassMessage::CutoffHz(561.0)),
+            (Knob::Resonance, BassMessage::Resonance(0.51)),
+            (Knob::EnvMod, BassMessage::EnvOctaves(25.0 / 12.0)),
+            (Knob::Decay, BassMessage::DecaySeconds(0.61)),
+            (Knob::Accent, BassMessage::Accent(0.51)),
+            (Knob::Attack, BassMessage::AttackSeconds(0.002)),
+            (Knob::Overdrive, BassMessage::OverdriveDb(1.0)),
+        ] {
+            let before = track;
+            nav.turn(1, 0);
+            track.edit_panel(nav.view, 1, [0; 4], false);
+            assert_eq!(nav.bass_knob(), Some(knob));
+            assert!(track.events(Some(before))?.is_empty());
+            track.turn_algorithm(nav.bass_knob(), 1);
+            assert_eq!(track.events(Some(before))?.as_slice(), &[at(message)]);
+        }
+        let before = track;
+        track.edit_panel(nav.view, 0, [1, 2, 3, 4], false);
         assert_eq!(
-            filter.readout(),
-            (b"DECAY    ".as_slice(), 500, b"MS   ".as_slice())
-        );
-        parts[2].turn_select(-1);
-        assert_eq!(
-            parts[2].bass.bank.knobs().map(|k| k.name()),
-            [b"TUNING   ", b"ATTACK   ", b"ACCENT   ", b"OVERDRIVE"]
-        );
-        assert_eq!(parts[2].bass.last().name(), b"TUNING   ");
-        assert!(
-            parts[2]
-                .bass
-                .events(filter, parts[2].voice, voice)
-                .is_empty()
-        );
-        parts[2].turn_knobs([-7, 1, 5, 12]);
-        let edited = parts[2].bass;
-        assert_eq!(edited.readout().1, 12);
-        assert_eq!(
-            &*edited.events(filter, voice, voice),
+            track.events(Some(before))?.as_slice(),
             &[
-                at(BassMessage::TuningSemitones(-0.7)),
-                at(BassMessage::AttackSeconds(0.002)),
-                at(BassMessage::Accent(0.55)),
-                at(BassMessage::OverdriveDb(12.0)),
+                at(BassMessage::CutoffHz(630.0)),
+                at(BassMessage::Resonance(0.53)),
+                at(BassMessage::EnvOctaves(28.0 / 12.0)),
+                at(BassMessage::DecaySeconds(0.65)),
             ]
         );
-        parts[2].turn_select(i8::MIN);
-        assert_eq!(parts[2].bass, edited);
-        parts[2].turn_select(i8::MAX);
+        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        track.turn_algorithm(nav.bass_knob(), -1);
+        assert_eq!(track.bass.detent(Knob::Overdrive), 0);
+        let before = track;
+        nav.press(crate::panel::PageButton::Home);
+        track.turn_algorithm(nav.bass_knob(), 1);
         assert_eq!(
-            parts[2].bass.bank.knobs().map(|k| k.name()),
-            [b"CUTOFF   ", b"RESONANCE", b"ENVMOD   ", b"DECAY    "]
+            track.events(Some(before))?.as_slice(),
+            &[at(BassMessage::Waveform(wavegraph_303::Waveform::Square))]
         );
-        assert_eq!(parts[2].bass.readout(), filter.readout());
-        parts[0].turn_select(-4);
-        assert_eq!(parts[0].voice.sounding(), Some(note(49, 100)));
-        assert_eq!(parts[2].voice, voice);
-        parts[2].turn_select(1);
-        assert_eq!(parts[2].bass, edited);
+        Ok(())
     }
 
     #[test]
@@ -2582,9 +2581,10 @@ mod tests {
         bass.gate = keys.gates()[Part::Bass as usize];
         bass.turn_waveform(Part::Bass, -1);
         controls.turn_knobs([i8::MAX; 4]);
-        assert_eq!(controls.readout().1, 1870);
-        controls.turn_select(1);
-        controls.turn_knobs([i8::MAX; 4]);
+        assert_eq!(controls.readout(controls.last).1, 1870);
+        for knob in [Knob::Tuning, Knob::Attack, Knob::Accent, Knob::Overdrive] {
+            controls.turn(knob, i8::MAX);
+        }
         assert_eq!(
             &*controls.events(Controls::INITIAL, bass, old),
             &[

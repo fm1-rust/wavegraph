@@ -2,7 +2,7 @@
 
 use crate::overload::Severity;
 use crate::{
-    bass::{Bank, Controls, Knob, envelope as bass_env},
+    bass::{Controls, Knob, envelope as bass_env},
     capture::{HEIGHT, WIDTH},
     envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion},
@@ -111,7 +111,7 @@ enum Page {
     Mixer,
     Sequencer(SeqPage, Channel, Part),
     Envelope(Part, EnvelopeTarget, EnvelopeControls, bool),
-    BassEnvelope(Controls),
+    BassEnvelope(Controls, Option<Knob>),
 }
 
 pub(super) struct Screen {
@@ -290,33 +290,26 @@ impl Screen {
         self.text.paint_async(lcd, clock).await
     }
 
-    fn bass_envelope_labels(&mut self, controls: Controls) {
+    fn bass_envelope_labels(&mut self, controls: Controls, selected: Option<Knob>) {
         let (ink, muted) = (
             self.selector.shade(OXIDE_RED),
             self.selector.shade(BASS_MUTED),
         );
         self.text.text(0, 0, b"TB-303", ink);
-        let bank = controls.bank;
-        self.text.text(
-            7,
-            0,
-            match bank {
-                Bank::Filter => b"B1/2",
-                Bank::Voice => b"B2/2",
-            },
-            ink,
-        );
-        for (i, knob) in bank.knobs().into_iter().enumerate() {
-            // The right column has room for the full RESONANCE and OVERDRIVE labels.
+        self.text
+            .text(7, 0, if selected.is_some() { b"ALG" } else { b"   " }, ink);
+        let focus = selected.unwrap_or(controls.last);
+        for (i, &knob) in Knob::direct().iter().enumerate() {
             let (x, width) = if i % 2 == 0 { (0, 7) } else { (9, 9) };
             let y = 1 + i / 2;
-            let color = if knob == controls.last() { ink } else { muted };
+            let color = if knob == focus { ink } else { muted };
             self.text.text(x, y, [b"1234"[i]], ink);
             self.text.text(x + 2, y, &knob.name()[..width], color);
         }
-        let (name, value, units) = controls.readout();
-        self.text.text(0, 13, name, muted);
-        if controls.last() == Knob::Tuning {
+        let (name, value, units) = controls.readout(focus);
+        self.text
+            .text(0, 13, name, if selected.is_some() { ink } else { muted });
+        if focus == Knob::Tuning {
             self.text.signed_number(9, 13, 5, value, ink);
         } else {
             self.text.number(9, 13, 5, value.unsigned_abs(), ink);
@@ -329,11 +322,12 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         controls: Controls,
+        selected: Option<Knob>,
     ) -> Result<(), Error> {
-        let page = Page::BassEnvelope(controls);
+        let page = Page::BassEnvelope(controls, selected);
         let previous = self.page.replace(page);
         if previous != Some(page) {
-            if !matches!(previous, Some(Page::BassEnvelope(_))) {
+            if !matches!(previous, Some(Page::BassEnvelope(..))) {
                 self.change_view(SILVER);
                 // The three lane plots occupy part of the full-size scope's pixel area.
                 self.plot.invalidate();
@@ -352,10 +346,12 @@ impl Screen {
                 }
                 self.text.text(0, 14, b"PREVIEW    96 MS/DIV", BASS_MUTED);
             }
-            for (lane, trace) in self.lanes.iter_mut().zip(&bass_env::traces(controls)) {
-                lane.paint_async(lcd, trace, clock).await?;
+            if !matches!(previous, Some(Page::BassEnvelope(old, _)) if old == controls) {
+                for (lane, trace) in self.lanes.iter_mut().zip(&bass_env::traces(controls)) {
+                    lane.paint_async(lcd, trace, clock).await?;
+                }
             }
-            self.bass_envelope_labels(controls);
+            self.bass_envelope_labels(controls, selected);
         }
         self.text.paint_async(lcd, clock).await
     }
@@ -617,7 +613,11 @@ impl Screen {
         }
         if labels.view == View::Envelope {
             match labels.focus {
-                Part::Bass => return self.paint_bass_envelope(lcd, clock, labels.bass).await,
+                Part::Bass => {
+                    return self
+                        .paint_bass_envelope(lcd, clock, labels.bass, labels.bass_knob)
+                        .await;
+                }
                 Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable => {
                     let (target, controls) = match labels.focus {
                         Part::Organ => (EnvelopeTarget::Amp, labels.organ.envelope),

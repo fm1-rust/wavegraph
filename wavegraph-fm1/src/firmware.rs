@@ -5,7 +5,7 @@
 )]
 
 use crate::{
-    bass::Controls,
+    bass::{Controls, Knob},
     capture::Trace,
     envelope::{EnvelopeControls, EnvelopeTarget},
     fx::{BassFx, Fx},
@@ -58,6 +58,7 @@ impl Settings {
             arp: track.arp,
             focus: track.assignment.part,
             bass: track.bass,
+            bass_knob: self.nav.bass_knob(),
             organ: track.organ,
             drums808: track.drums808,
             saw: track.saw,
@@ -102,6 +103,7 @@ pub(super) struct Labels {
     pub(super) arp: crate::arp::Controls,
     pub(super) focus: Part,
     pub(super) bass: Controls,
+    pub(super) bass_knob: Option<Knob>,
     pub(super) organ: OrganControls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) saw: SawControls,
@@ -509,6 +511,7 @@ mod app {
             self.leds.set(
                 Button::Home,
                 matches!(self.nav.view, View::Channel | View::MasterFx(Some(_)))
+                    || self.nav.bass_knob().is_some()
                     || self.seq.page == Some(SeqPage::Tempo),
             );
             self.leds.set(
@@ -699,8 +702,7 @@ mod app {
                     }
                     View::Scope | View::Envelope => {
                         let track = &mut self.settings.tracks[channel.index()];
-                        let part = track.assignment.part;
-                        track.voice.turn_waveform(part, algorithm);
+                        track.turn_algorithm(nav.bass_knob(), algorithm);
                         track.edit_panel(view, select, knobs, sel);
                     }
                     View::MasterFx(None) | View::Sequencer => (),

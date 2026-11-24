@@ -23,21 +23,6 @@ const MIDI_CUTOFF: [u16; 128] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Bank {
-    Filter,
-    Voice,
-}
-
-impl Bank {
-    pub(super) const fn knobs(self) -> [Knob; 4] {
-        match self {
-            Self::Filter => [Knob::Cutoff, Knob::Resonance, Knob::EnvMod, Knob::Decay],
-            Self::Voice => [Knob::Tuning, Knob::Attack, Knob::Accent, Knob::Overdrive],
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Knob {
     Cutoff,
     Resonance,
@@ -50,6 +35,23 @@ pub(super) enum Knob {
 }
 
 impl Knob {
+    /// Left to right along the bottom row, then the two dials beside the wordmark.
+    pub(super) const PANEL: [Self; 8] = [
+        Self::Tuning,
+        Self::Cutoff,
+        Self::Resonance,
+        Self::EnvMod,
+        Self::Decay,
+        Self::Accent,
+        Self::Attack,
+        Self::Overdrive,
+    ];
+
+    /// The four middle dials are wired to the numbered encoders in both 303 views.
+    pub(super) fn direct() -> &'static [Self] {
+        &Self::PANEL[1..5]
+    }
+
     pub(super) const fn limits(self) -> (u8, u8) {
         match self {
             Self::Cutoff => (0, 42),
@@ -154,8 +156,7 @@ pub(super) struct Controls {
     values: [u8; 8],
     midi: [Option<u8>; 8],
     pub(super) slide: bool,
-    pub(super) bank: Bank,
-    last: [Knob; 2],
+    pub(super) last: Knob,
 }
 
 impl Controls {
@@ -164,8 +165,7 @@ impl Controls {
         values: [18, 50, 24, 60, 120, 5, 50, 0],
         midi: [None; 8],
         slide: false,
-        bank: Bank::Filter,
-        last: [Knob::Cutoff, Knob::Tuning],
+        last: Knob::Cutoff,
     };
 
     /// The factory sequence's resonant, driven voice, also available to live keys.
@@ -263,30 +263,17 @@ impl Controls {
         Some(Knob::from_cc(cc)?.message(self.voice_params()))
     }
 
-    pub(super) fn turn_select(&mut self, detents: i8) {
-        if detents % 2 != 0 {
-            self.bank = match self.bank {
-                Bank::Filter => Bank::Voice,
-                Bank::Voice => Bank::Filter,
-            };
-        }
-    }
-
-    pub(super) fn last(self) -> Knob {
-        self.last[self.bank as usize]
-    }
-
     pub(super) fn detent(self, knob: Knob) -> u8 {
         self.values[knob as usize]
     }
 
     pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
-        for (knob, delta) in self.bank.knobs().into_iter().zip(detents) {
+        for (&knob, delta) in Knob::direct().iter().zip(detents) {
             self.turn(knob, delta);
         }
     }
 
-    fn turn(&mut self, knob: Knob, detents: i8) {
+    pub(super) fn turn(&mut self, knob: Knob, detents: i8) {
         if detents == 0 {
             return;
         }
@@ -294,7 +281,7 @@ impl Controls {
         let (min, max) = knob.limits();
         let value = &mut self.values[knob as usize];
         *value = value.saturating_add_signed(detents).clamp(min, max);
-        self.last[self.bank as usize] = knob;
+        self.last = knob;
     }
 
     fn cutoff_hz(self) -> u16 {
@@ -310,8 +297,7 @@ impl Controls {
         step.saturating_sub(120).saturating_mul(10)
     }
 
-    pub(super) fn readout(self) -> (&'static [u8], i32, &'static [u8]) {
-        let knob = self.last();
+    pub(super) fn readout(self, knob: Knob) -> (&'static [u8], i32, &'static [u8]) {
         let value = i32::from(self.detent(knob));
         let (number, units): (_, &[u8; 5]) = match knob {
             Knob::Cutoff => (i32::from(self.cutoff_hz()), b"HZ   "),
@@ -365,10 +351,9 @@ impl Controls {
 
     pub(super) fn events(self, previous: Self, voice: Voice, old_voice: Voice) -> EventBatch {
         let mut batch = EventBatch::new();
-        // Edits to both banks can arrive between two audio blocks.
         if self.values != previous.values || self.midi != previous.midi {
             let params = self.voice_params();
-            for knob in Bank::Filter.knobs().into_iter().chain(Bank::Voice.knobs()) {
+            for knob in CONTROLLERS.into_iter().filter_map(Knob::from_cc) {
                 let i = knob as usize;
                 if self.values[i] == previous.values[i] && self.midi[i] == previous.midi[i] {
                     continue;

@@ -21,9 +21,9 @@ WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
 `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 `fm1 log` offline. The firmware updater remains available through the bootloader.
 
-| Monosynth | 303 bank 1 | 303 bank 2 |
+| Monosynth | 303 direct knobs | 303 editing Drive |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![303 filter bank with Decay on encoder 4](assets/tb-303.png) | ![303 voice bank with Drive on encoder 4](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed below the scope](assets/tb-303.png) | ![303 with Drive highlighted in green beside the scope](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
@@ -41,15 +41,16 @@ WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
 | PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. |
-| SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or switch the 303's knob bank. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. While a 303 knob is selected, ALGORITHM adjusts its value. |
+| SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or cycle through all eight 303 knobs. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. In ENV mode knob 3 sets position attack. |
 | Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
 | ENV | Open or close the monosynth, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to switch between AMP and FILTER on Super Saw, or AMP and POSITION on wavetable. |
-| Knobs 1–4 on the 303 | Turn the dials numbered 1–4 on the faceplate. The display beside the logo shows the last-touched setting and its units. |
+| Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
+| HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
 | Knobs 1–4 in the GLO overview | Set channel faders 1–4 independently. |
@@ -65,15 +66,19 @@ WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
-| 303 bank | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
-| --- | --- | --- | --- | --- |
-| B1/2 | Cutoff | Resonance | Filter env mod | Filter decay |
-| B2/2 | Tuning (±12 semitones, 10 cents per click) | VCA attack (0–60 ms) | Accent amount (0–100%) | Overdrive (0–36 dB into the filter) |
-
 The silver 303 faceplate puts a 240 × 176 live scope above the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
-[Roland TB-03][tb03]. Attack and Drive sit beside the display. Turn SELECT to
-switch banks. The encoder numbers move and the knobs stay in place.
+[Roland TB-03][tb03]. The four numbered encoders map to the boxed, blue-gray
+knobs in the middle. Turn SELECT clockwise to visit all six dials from left to
+right, then Attack and Drive beside the display. One click counterclockwise
+from idle goes straight to Drive.
+
+The selected cap turns neon green with a black pointer and HOME lights up.
+ALGORITHM adjusts that knob, and the display beside the logo shows its value
+even while you turn a numbered encoder. Press HOME to finish. With the
+selection cleared, the display shows the last knob you adjusted. Tuning covers
+±12 semitones in 10-cent steps, Attack spans 0–60 ms, Accent spans 0–100% and
+Drive adds 0–36 dB before the filter.
 
 Each cap points to its saved setting. During pattern playback a separate red
 mark on each automated knob follows the sequencer. The marks disappear when you play the 303 live, mute its pattern or stop playback.
@@ -205,13 +210,15 @@ release. The flat section shows the level held until key-up.
 Press ENV on the silver 303 page. The display plays a silent reference phrase
 through a separate instance of the voice’s envelopes. PLAIN marks one ordinary
 strike. The three A marks are accented strikes 96 ms apart. Each vertical grid
-division is 96 ms. Turn SELECT to switch knob banks while the preview is open.
+division is 96 ms. The numbered knobs keep their assignments here. Turn SELECT
+to choose any 303 parameter, then ALGORITHM to edit the value below the traces.
+HOME clears the selection. Press it again to return to the scope.
 
 | Trace | What to try |
 | --- | --- |
 | VCF · filter cutoff (62.5 Hz–16 kHz, logarithmic) | Raise Env Mod to deepen the sweep. Decay stretches the plain strike. Accented strikes keep their short filter decay, about 200 ms to 1% in this model. |
-| ACC · accent contribution to cutoff (0–3 octaves) | Raise Accent on bank 2, then Resonance on bank 1. The later accents start with charge left by the previous strike. Higher resonance slows the drain. |
-| VCA · amplitude gain (0–1.9) | Turn bank 2 knob 2 to lengthen the attack. Accent also boosts the gain. |
+| ACC · accent contribution to cutoff (0–3 octaves) | Select Accent and raise it with ALGORITHM, then raise Resonance with knob 2. The later accents start with charge left by the previous strike. Higher resonance slows the drain. |
+| VCA · amplitude gain (0–1.9) | Select Attack and turn ALGORITHM to lengthen it. Accent also boosts the gain. |
 
 To isolate the rounded sweep, turn Env Mod down to zero and raise Accent and
 Resonance. On the original 303, some direct filter modulation remains at

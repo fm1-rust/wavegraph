@@ -1,6 +1,6 @@
 //! Channel selection and page navigation for the FM-1 panel.
 
-use crate::{fx::Device, instrument::Part};
+use crate::{bass::Knob, fx::Device, instrument::Part};
 
 pub(super) const CHANNELS: usize = 4;
 
@@ -108,6 +108,7 @@ pub(super) struct Navigation {
     pub(super) view: View,
     pub(super) focus: Channel,
     pub(super) preset_since: Option<u32>,
+    bass_slot: Option<u8>,
     fx_parent: View,
     show_sends: bool,
     pub(super) assignments: [Assignment; CHANNELS],
@@ -118,6 +119,7 @@ impl Navigation {
         view: View::Scope,
         focus: Channel::One,
         preset_since: None,
+        bass_slot: None,
         fx_parent: View::Mixer,
         show_sends: false,
         assignments: [
@@ -140,10 +142,13 @@ impl Navigation {
     };
 
     pub(super) fn press(&mut self, button: PageButton) {
+        if matches!(button, PageButton::Home) && self.bass_slot.take().is_some() {
+            return;
+        }
         if self.view != View::Fx && !matches!(self.view, View::MasterFx(_)) {
             self.show_sends = false;
         }
-        self.view = match button {
+        let next = match button {
             PageButton::Home if matches!(self.view, View::MasterFx(Some(_))) => {
                 View::MasterFx(None)
             }
@@ -188,6 +193,10 @@ impl Navigation {
             PageButton::Env if !self.part().has_envelope() => self.view,
             _ => View::Scope,
         };
+        if self.view != next {
+            self.bass_slot = None;
+        }
+        self.view = next;
     }
 
     pub(super) fn part(self) -> Part {
@@ -198,7 +207,23 @@ impl Navigation {
         self.view == View::Fx && self.part() == Part::Bass && !self.show_sends
     }
 
+    pub(super) fn bass_knob(self) -> Option<Knob> {
+        self.bass_slot.map(|i| Knob::PANEL[usize::from(i)])
+    }
+
     pub(super) fn turn(&mut self, select: i8, presets: i8) {
+        if select != 0
+            && matches!(self.view, View::Scope | View::Envelope)
+            && self.part() == Part::Bass
+        {
+            // Enter at Tuning clockwise or Drive counterclockwise, counting every detent.
+            let start = self
+                .bass_slot
+                .map_or(if select > 0 { -1 } else { 0 }, i16::from);
+            let count = i16::try_from(Knob::PANEL.len()).expect("eight knobs");
+            let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
+            self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
+        }
         if self.view == View::Fx && self.part() == Part::Bass && select.unsigned_abs() % 2 == 1 {
             self.show_sends = !self.show_sends;
         }
@@ -225,7 +250,11 @@ impl Navigation {
                 assignment.generation = assignment.generation.wrapping_add(1);
             }
         } else {
+            let previous_channel = self.focus;
             self.focus.turn(presets);
+            if self.focus != previous_channel || self.view == View::Envelope {
+                self.bass_slot = None;
+            }
             self.show_sends = false;
             if self.view == View::Envelope {
                 self.view = View::Scope;
@@ -273,6 +302,43 @@ mod tests {
         }
         assert_eq!(pattern_press_lamp(&mut since, start.wrapping_add(20)), None);
         assert_eq!(pattern_press_lamp(&mut since, start), None);
+    }
+
+    #[test]
+    fn bass_selection_wraps_and_belongs_to_the_current_channel_and_page() {
+        let mut nav = Navigation::INITIAL;
+        nav.turn(0, 0);
+        assert_eq!(nav.bass_knob(), None);
+        nav.turn(-1, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        nav.turn(i8::MIN, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        nav.turn(i8::MAX, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Attack));
+        nav.turn(2, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
+
+        nav.turn(0, 1);
+        assert_eq!((nav.part(), nav.bass_knob()), (Part::Bass, None));
+        nav.turn(3, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Resonance));
+        nav.press(PageButton::Env);
+        assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
+        nav.turn(-3, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Accent));
+        nav.press(PageButton::Home);
+        assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
+        nav.press(PageButton::Home);
+        assert_eq!((nav.view, nav.bass_knob()), (View::Scope, None));
+
+        nav.turn(1, 0);
+        nav.press(PageButton::Fx);
+        nav.turn(1, 0);
+        assert_eq!((nav.view, nav.bass_knob()), (View::Fx, None));
+        nav.press(PageButton::Home);
+        nav.turn(0, 1);
+        nav.turn(1, 0);
+        assert_eq!((nav.part(), nav.bass_knob()), (Part::Tr808, None));
     }
 
     #[test]
