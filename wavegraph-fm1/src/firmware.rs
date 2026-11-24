@@ -11,7 +11,7 @@ use crate::{
     bass::{Controls, Knob},
     capture::Trace,
     envelope::{EnvelopeControls, EnvelopeTarget},
-    fx::{BassFx, Fx},
+    fx::{Fx, INSERT_SLOTS, Insert},
     instrument::{Part, SawControls, Track, Voice},
     keys::PolyKey,
     mixer::Mixer,
@@ -70,8 +70,8 @@ impl Settings {
             poly_keys: track.poly_keys,
             preset_since: self.nav.preset_since,
             view: self.nav.view,
-            bass_fx: track.bass_fx,
-            bass_insert: self.nav.bass_insert(),
+            inserts: track.inserts,
+            insert_slot: self.nav.insert_slot(),
             mixer: self.mixer,
             seq: self.seq,
             fx: self.fx,
@@ -84,9 +84,9 @@ impl Settings {
     fn sel_lamp(&self) -> bool {
         match self.nav.view {
             View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
-            View::Fx => {
-                self.nav.bass_insert() && self.tracks[self.nav.focus.index()].bass_fx.enabled
-            }
+            View::Fx => self.nav.insert_slot().is_some_and(|slot| {
+                self.tracks[self.nav.focus.index()].inserts[usize::from(slot)].enabled()
+            }),
             View::MasterFx(Some(row)) => self.fx.enabled(row),
             View::Envelope if matches!(self.nav.part(), Part::Supersaw | Part::Wavetable) => {
                 self.tracks[self.nav.focus.index()].envelope_target == EnvelopeTarget::Modulation
@@ -115,8 +115,8 @@ pub(super) struct Labels {
     pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
     pub(super) preset_since: Option<u32>,
     pub(super) view: View,
-    pub(super) bass_fx: BassFx,
-    pub(super) bass_insert: bool,
+    pub(super) inserts: [Insert; INSERT_SLOTS],
+    pub(super) insert_slot: Option<u8>,
     pub(super) mixer: Mixer,
     pub(super) seq: Sequencer,
     pub(super) fx: Fx,
@@ -196,7 +196,7 @@ mod app {
         bumper::Bumper,
         capture::{Capture, FLAT, Scale, ScopeUpdates},
         handoff::{Handoff, OutputHealth},
-        inserts::BassInserts,
+        inserts::ChannelInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
             Part, Programs, RoutedEvents, Track,
@@ -256,6 +256,8 @@ mod app {
 
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
     const RATE_HZ: u32 = (FRAME_RATE.0 + FRAME_RATE.1 / 2) / FRAME_RATE.1;
+    // Round to the same frame count as Delay::control(TimeMs).
+    const DELAY_SAMPLES: usize = (RATE_HZ as usize * crate::fx::MAX_DELAY_MS as usize + 500) / 1000;
 
     pub struct ScopeBlock {
         samples: Option<[i32; OUTPUT_FRAMES]>,
@@ -293,8 +295,8 @@ mod app {
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
-        static DELAY_STORAGE: ConstStaticCell<[i16; RATE_HZ as usize]> =
-            ConstStaticCell::new([0; RATE_HZ as usize]);
+        static DELAY_STORAGE: ConstStaticCell<[i16; DELAY_SAMPLES]> =
+            ConstStaticCell::new([0; DELAY_SAMPLES]);
         type Effects = (
             FxMixer,
             FxNode<Reverb<'static>>,
@@ -302,7 +304,7 @@ mod app {
             Master,
         );
         static EFFECTS: StaticCell<Effects> = StaticCell::new();
-        static INSERTS: StaticCell<BassInserts> = StaticCell::new();
+        static INSERTS: StaticCell<ChannelInserts> = StaticCell::new();
         type Nodes = [&'static mut AudioProcess<'static>; 9];
         static NODES: StaticCell<Nodes> = StaticCell::new();
         let programs = PROGRAMS.init_with(|| Programs::decode().expect("built-in programs"));
@@ -325,11 +327,11 @@ mod app {
                         .with_dry_headroom(DRY_HEADROOM),
                 ),
                 FxNode(Reverb::new(REVERB_STORAGE.take())),
-                FxNode(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("one-second delay line")),
+                FxNode(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("delay line")),
                 Master(MasterBus::new(RATE_HZ).expect("audio sample clock")),
             )
         });
-        let inserts = INSERTS.init_with(|| BassInserts::new(RATE_HZ));
+        let inserts = INSERTS.init_with(|| ChannelInserts::new(RATE_HZ));
         let nodes =
             NODES.init_with(|| [one, two, three, four, mixer, reverb, delay, inserts, master]);
         static INSTRUMENT: StaticCell<Instrument<'static>> = StaticCell::new();
@@ -591,6 +593,7 @@ mod app {
             let home = scan.pressed(Button::Home);
             let previous_view = self.nav.view;
             let previous_channel = self.nav.focus;
+            let previous_insert_slot = self.nav.insert_slot();
             if !matches!(self.nav.view, View::MasterFx(_))
                 && ((scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
                     || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo)))
@@ -610,6 +613,7 @@ mod app {
             let show_picker = match self.nav.view {
                 View::Scope => channel_changed,
                 View::Channel => true,
+                View::Fx => self.nav.insert_slot().is_some(),
                 _ => false,
             };
             if !home && presets != 0 && show_picker {
@@ -617,6 +621,7 @@ mod app {
             } else if home
                 || channel_changed
                 || self.nav.view != previous_view
+                || self.nav.insert_slot() != previous_insert_slot
                 || self
                     .nav
                     .preset_since
@@ -645,6 +650,7 @@ mod app {
             self.leds.set(
                 Button::Home,
                 matches!(self.nav.view, View::Channel | View::MasterFx(Some(_)))
+                    || self.nav.insert_slot().is_some()
                     || self.nav.bass_knob().is_some()
                     || self.seq.page == Some(SeqPage::Tempo),
             );
@@ -807,12 +813,21 @@ mod app {
             self.settings.seq = seq;
             let tracks = &mut self.settings.tracks;
             for channel in Channel::ALL {
-                let assignment = nav.assignments[channel.index()];
-                if tracks[channel.index()].assignment != assignment {
+                let i = channel.index();
+                let assignment = nav.assignments[i];
+                if tracks[i].assignment != assignment {
                     self.keys.clear(channel);
-                    tracks[channel.index()] = Track::factory(channel, assignment);
+                    let inserts = tracks[i].inserts;
+                    tracks[i] = Track::factory(channel, assignment);
+                    tracks[i].inserts = inserts;
                 }
-                pads[channel.index()].apply(&mut tracks[channel.index()]);
+                // Type choices are channel-owned and survive instrument swaps.
+                for (insert, kind) in tracks[i].inserts.iter_mut().zip(nav.insert_kinds[i]) {
+                    if insert.kind() != kind {
+                        *insert = kind.initial();
+                    }
+                }
+                pads[i].apply(&mut tracks[i]);
             }
             if *self.held != held {
                 self.keys.panel(self.held, &held, tracks);
@@ -837,9 +852,8 @@ mod app {
                     .edit(select, knobs, sel),
                 View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
                 View::Fx => {
-                    if nav.bass_insert() {
-                        self.settings.tracks[channel.index()]
-                            .bass_fx
+                    if let Some(slot) = nav.insert_slot() {
+                        self.settings.tracks[channel.index()].inserts[usize::from(slot)]
                             .edit(knobs, sel);
                     } else {
                         self.settings

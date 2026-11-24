@@ -1,9 +1,14 @@
-//! Global rack controls and the TB-303 channel insert.
+//! Global rack and channel insert controls.
 
-use crate::instrument::{Message, at};
+use crate::instrument::{Message, Part, at};
 use heapless::Vec;
 use wavegraph::Event;
-use wavegraph_fx::{Delay, Dynamics, MasterControls, Message as FxMessage};
+use wavegraph_fx::{
+    Delay, Dynamics, MasterControls, Message as FxMessage, PhaserControls, SaturatorControls,
+};
+
+// Shared by the delay-line allocation, panel clamp and rack readout.
+pub(super) const MAX_DELAY_MS: u16 = 900;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Device {
@@ -67,7 +72,7 @@ impl KeySource {
     #[cfg(target_os = "none")]
     pub(super) fn name(self) -> &'static str {
         match self {
-            Self::Bass => "303 SELF",
+            Self::Bass => "SELF",
             Self::Kick => "909 KICK",
             Self::Kit => "909 KIT",
             Self::Kick808 => "808 KICK",
@@ -108,6 +113,111 @@ impl BassFx {
             .saturating_add_signed(i16::from(knobs[2]).saturating_mul(5))
             .clamp(40, 1000);
         self.enabled ^= toggle;
+    }
+}
+
+pub(super) const INSERT_SLOTS: usize = 2;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InsertKind {
+    None,
+    Compressor,
+    Saturator,
+    Phaser,
+}
+
+impl InsertKind {
+    pub(super) const ALL: [Self; 4] = [Self::None, Self::Compressor, Self::Saturator, Self::Phaser];
+
+    pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
+        [
+            if matches!(part, Part::Bass) {
+                Self::Compressor
+            } else {
+                Self::None
+            },
+            Self::None,
+        ]
+    }
+
+    pub(super) fn turn(self, detents: i8) -> Self {
+        let i = i16::from(self as u8)
+            .saturating_add(i16::from(detents))
+            .rem_euclid(4);
+        Self::ALL[usize::try_from(i).expect("four effects")]
+    }
+
+    #[cfg(target_os = "none")]
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Compressor => "SIDECHAIN",
+            Self::Saturator => "SATURATOR",
+            Self::Phaser => "PHASER",
+        }
+    }
+
+    pub(super) const fn initial(self) -> Insert {
+        match self {
+            Self::None => Insert::None,
+            Self::Compressor => Insert::Compressor(BassFx::INITIAL),
+            Self::Saturator => Insert::Saturator(SaturatorControls::INITIAL),
+            Self::Phaser => Insert::Phaser(PhaserControls::INITIAL),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Insert {
+    None,
+    Compressor(BassFx),
+    Saturator(SaturatorControls),
+    Phaser(PhaserControls),
+}
+
+impl Insert {
+    pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
+        let [first, second] = InsertKind::factory(part);
+        [first.initial(), second.initial()]
+    }
+
+    pub(super) const fn kind(self) -> InsertKind {
+        match self {
+            Self::None => InsertKind::None,
+            Self::Compressor(_) => InsertKind::Compressor,
+            Self::Saturator(_) => InsertKind::Saturator,
+            Self::Phaser(_) => InsertKind::Phaser,
+        }
+    }
+
+    pub(super) const fn enabled(self) -> bool {
+        match self {
+            Self::None => false,
+            Self::Compressor(fx) => fx.enabled,
+            Self::Saturator(fx) => fx.enabled,
+            Self::Phaser(fx) => fx.enabled,
+        }
+    }
+
+    pub(super) fn edit(&mut self, knobs: [i8; 4], toggle: bool) {
+        let turn = |value: &mut u8, delta| *value = value.saturating_add_signed(delta).min(128);
+        match self {
+            Self::None => (),
+            Self::Compressor(fx) => fx.edit(knobs, toggle),
+            Self::Saturator(fx) => {
+                turn(&mut fx.drive, knobs[0]);
+                turn(&mut fx.mix, knobs[1]);
+                turn(&mut fx.level, knobs[2]);
+                fx.enabled ^= toggle;
+            }
+            Self::Phaser(fx) => {
+                turn(&mut fx.rate, knobs[0]);
+                turn(&mut fx.depth, knobs[1]);
+                turn(&mut fx.feedback, knobs[2]);
+                turn(&mut fx.mix, knobs[3]);
+                fx.enabled ^= toggle;
+            }
+        }
     }
 }
 
@@ -163,7 +273,7 @@ impl Fx {
                 self.time_ms = self
                     .time_ms
                     .saturating_add_signed(i16::from(knobs[0]).saturating_mul(5))
-                    .clamp(5, 1000);
+                    .clamp(5, MAX_DELAY_MS);
                 self.feedback = self
                     .feedback
                     .saturating_add_signed(knobs[1])
@@ -256,6 +366,31 @@ impl Fx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn insert_bypass_preserves_edited_controls() {
+        for kind in InsertKind::ALL {
+            let mut insert = kind.initial();
+            insert.edit([3, -4, 5, -6], false);
+            assert_eq!(insert.kind(), kind);
+            assert_eq!(insert.enabled(), kind != InsertKind::None);
+            let edited = insert;
+            insert.edit([0; 4], true);
+            assert!(!insert.enabled());
+            insert.edit([0; 4], true);
+            assert_eq!(insert, edited);
+        }
+    }
+
+    #[test]
+    fn delay_time_is_bounded_by_the_allocated_line() {
+        let mut fx = Fx::INITIAL;
+        assert_eq!(fx.time_ms, 369);
+        for _ in 0..3 {
+            fx.edit(Device::Delay, [127, 0, 0, 0], false);
+        }
+        assert_eq!(fx.time_ms, MAX_DELAY_MS);
+    }
 
     #[test]
     fn rack_edits_are_isolated_and_bypass_recalls_the_settings() {

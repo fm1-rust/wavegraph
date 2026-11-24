@@ -1,14 +1,12 @@
 //! Four assignable instrument nodes feed the shared effect send/return graph.
 
-#[cfg(test)]
-use crate::panel::Navigation;
 use crate::wavetable::Program as WaveProgram;
 use crate::{
     arp::{self, ChannelArp},
     bass::{Controls, Knob},
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
-    fx::{BassFx, Device, Fx},
+    fx::{Device, Fx, INSERT_SLOTS, Insert},
     keys::HitLog,
     keys::PolyKey,
     mixer::Mixer,
@@ -20,6 +18,8 @@ use crate::{
         pattern::{Automation, Slot},
     },
 };
+#[cfg(test)]
+use crate::{fx::BassFx, panel::Navigation};
 use heapless::Vec;
 use wavegraph::{
     Event, Port, Process, ProcessContext,
@@ -270,7 +270,7 @@ pub(super) struct Track {
     pub(super) assignment: Assignment,
     pub(super) voice: Voice,
     pub(super) bass: Controls,
-    pub(super) bass_fx: BassFx,
+    pub(super) inserts: [Insert; INSERT_SLOTS],
     pub(super) organ: OrganControls,
     pub(super) saw: SawControls,
     wave_programs: [WaveProgram; 2],
@@ -291,7 +291,7 @@ impl Track {
             assignment,
             voice: Voice::INITIAL,
             bass: Controls::INITIAL,
-            bass_fx: BassFx::INITIAL,
+            inserts: Insert::factory(assignment.part),
             organ: OrganControls::INITIAL,
             poly_keys: [PolyKey::EMPTY; POLYPHONY],
             voice_envelope: match assignment.part {
@@ -318,6 +318,18 @@ impl Track {
             panel_hits: HitLog::EMPTY,
             midi_hits: HitLog::EMPTY,
         }
+    }
+
+    #[cfg(test)]
+    #[expect(
+        clippy::panic,
+        reason = "Test helper checks the factory insert invariant"
+    )]
+    fn bass_fx(&mut self) -> &mut BassFx {
+        let Insert::Compressor(fx) = &mut self.inserts[0] else {
+            panic!("factory bass insert");
+        };
+        fx
     }
 
     #[cfg(test)]
@@ -672,7 +684,7 @@ pub(super) enum Message {
     Drum(DrumMessage),
     DrumLamps([DrumLamp; 6]),
     Insert(Channel, Part),
-    BassInsert(Channel, BassFx),
+    ChannelInserts(Channel, [Insert; INSERT_SLOTS]),
     Master(MasterControls),
     GainReduction(u8),
     Cue(Cue),
@@ -1238,9 +1250,9 @@ impl Instrument<'_> {
                     .push(at(Message::Insert(Channel::ALL[i], part)))
                     .map_err(|_| Error::Capacity)?;
             }
-            if part == Part::Bass && old.is_none_or(|t| t.bass_fx != track.bass_fx) {
+            if old.is_none_or(|t| t.inserts != track.inserts) {
                 inserts
-                    .push(at(Message::BassInsert(Channel::ALL[i], track.bass_fx)))
+                    .push(at(Message::ChannelInserts(Channel::ALL[i], track.inserts)))
                     .map_err(|_| Error::Capacity)?;
             }
             // Each synth's live gate takes over its own sequencer lane.
@@ -1676,7 +1688,7 @@ mod tests {
         let mut reverb = FxNode(Reverb::new(&mut storage));
         let mut line = [0; 44_118];
         let mut delay = FxNode(Delay::new(&mut line, rate_hz).expect("delay sample clock"));
-        let mut inserts = crate::inserts::BassInserts::new(rate_hz);
+        let mut inserts = crate::inserts::ChannelInserts::new(rate_hz);
         let mut nodes: [&mut AudioProcess<'_>; 9] = [
             one,
             two,
@@ -2361,8 +2373,8 @@ mod tests {
         ] {
             with_instrument(44_118, |instrument| {
                 let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
-                parts[2].bass_fx.edit([turn, 25, 4, 0], false);
-                let fx = parts[2].bass_fx;
+                parts[2].bass_fx().edit([turn, 25, 4, 0], false);
+                let fx = *parts[2].bass_fx();
                 assert_eq!(fx.key, key);
                 assert_eq!((fx.depth, fx.split_hz), (100, 200));
                 assert!(fx.enabled);
@@ -2400,8 +2412,8 @@ mod tests {
                     );
                 }
                 assert!(detector_sounded);
-                parts[2].bass_fx.edit([0; 4], true);
-                assert!(!parts[2].bass_fx.enabled);
+                parts[2].bass_fx().edit([0; 4], true);
+                assert!(!parts[2].bass_fx().enabled);
                 instrument.render(parts, &mut buses)?;
                 assert_eq!(
                     &buses[BASS_INSERT][64..],
@@ -2484,15 +2496,15 @@ mod tests {
         use crate::fx::KeySource;
         with_instrument(44_118, |instrument| {
             let mut tracks = Track::rack(Navigation::INITIAL.assignments);
-            tracks[0].bass_fx.edit([0, 25, 0, 0], true);
-            tracks[1].bass_fx.key = KeySource::Kick808;
+            tracks[0].bass_fx().edit([0, 25, 0, 0], true);
+            tracks[1].bass_fx().key = KeySource::Kick808;
             tracks[1].voice.gate.note = Some(note(48, 120));
             tracks[0].voice.gate.note = Some(note(36, 120));
             tracks[2].midi_hits.push(Drum::Kick, 127);
             let mut reference =
                 SidechainDucker::<2>::new(44_118, 32, 176).expect("insert settings");
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
-            let fx = tracks[1].bass_fx;
+            let fx = *tracks[1].bass_fx();
             let controls = [
                 FxMessage::SidechainDepth(fx.depth),
                 FxMessage::SidechainHz(fx.split_hz),
@@ -2884,7 +2896,7 @@ mod tests {
                 (KeySource::Kit808, 4),
                 (KeySource::Kit, 6),
             ] {
-                tracks[1].bass_fx.key = key;
+                tracks[1].bass_fx().key = key;
                 instrument.render(tracks, &mut buses)?;
                 assert_eq!(buses[12], buses[source]);
                 assert_ne!(buses[4], buses[6]);

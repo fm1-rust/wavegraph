@@ -2,6 +2,7 @@
 
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
+    fx::InsertKind,
     instrument::Part,
     panel::{CHANNELS, Channel},
     scope::Window,
@@ -50,6 +51,7 @@ pub(super) enum Menu {
         focus: Channel,
     },
     Instruments(Part),
+    Effects(InsertKind),
 }
 
 pub(super) struct Selector {
@@ -92,6 +94,22 @@ impl Selector {
             let (parts, active, numbered): (&[Part], _, _) = match &menu {
                 Menu::Channels { parts, focus } => (parts, focus.index(), true),
                 Menu::Instruments(part) => (&Part::ALL, *part as usize, false),
+                Menu::Effects(active) => {
+                    let offset = (HEIGHT - InsertKind::ALL.len() * ROW_HEIGHT) / 2;
+                    for (row, kind) in InsertKind::ALL.into_iter().enumerate() {
+                        let y = (offset + row * ROW_HEIGHT) as i32;
+                        if kind == *active {
+                            highlight(y)
+                                .into_styled(selected)
+                                .draw(&mut self.mask)
+                                .expect("infallible framebuffer");
+                        }
+                        Text::with_baseline(kind.name(), Point::new(8, y + 3), text, Baseline::Top)
+                            .draw(&mut self.mask)
+                            .expect("infallible framebuffer");
+                    }
+                    return true;
+                }
             };
             let offset = (HEIGHT - parts.len() * ROW_HEIGHT) / 2;
             for (row, part) in parts.iter().enumerate() {
@@ -207,6 +225,13 @@ impl Selector {
         let (x, y) = (x - LEFT, y - TOP);
         if marked(self.mask.data(), x, y) {
             return Some(palette::WHITE);
+        }
+        if let Menu::Effects(_) = self.menu? {
+            let height = InsertKind::ALL.len() * ROW_HEIGHT;
+            let top = (HEIGHT - height) / 2;
+            if !(top..top + height).contains(&y) {
+                return None;
+            }
         }
         if let Menu::Channels { focus, .. } = self.menu? {
             let top = (HEIGHT - CHANNELS * ROW_HEIGHT) / 2 + focus.index() * ROW_HEIGHT;

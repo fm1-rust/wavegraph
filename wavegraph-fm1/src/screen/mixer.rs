@@ -464,7 +464,7 @@ impl<'a> Band<'a> {
         );
     }
 
-    fn compose(&mut self, list: &Selector) {
+    pub(super) fn compose(&mut self, list: &Selector) {
         if !list.visible() {
             return;
         }
