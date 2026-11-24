@@ -690,13 +690,13 @@ start a fresh trace. The trace labels travel with the samples. The cutoff
 readout follows the knob even while the scope waits for a trigger.
 
 The splash uses [fm1-graphics] to draw a waveform on a 24-pixel grid. The
-boot illustration combines two harmonics with phase modulation. When the green
-WaveGraph title finishes bouncing, the pink FM-1 lettering rises from the bottom. A 750 ms cue starts on that landing. The
-303 quotes the pattern's two low Ds and A–C slide, then climbs G–A–D.
-It holds the accented A into the upper tonic using the voice's pitch slide
-and a continuous filter envelope. Two quiet 909 knocks lead into the landing. MASTER controls the cue throughout.
-Turning it fully down skips the rest of the cue for that boot. The firmware
-version beneath the logo comes from the `wavegraph-fm1` Cargo package.
+boot illustration combines two harmonics with phase modulation. The green WaveGraph title drops on the first low D
+of the 750 ms acid cue, bounces on the accented A and settles on the first
+909 knock. The pink FM-1 lettering then rises and lands on the high D and
+closed hat. The firmware version from the `wavegraph-fm1` Cargo package appears
+in bold white beneath the logo and stays on screen for 500 ms.
+MASTER controls the cue throughout. Turning it fully down skips the rest
+of the cue for that boot.
 
 The TB-303, TR-808, TR-909 and JP-8080 panels use Orbitron Bold. Their model
 marks and the temporary channel digits are rasterized on the host at their LCD

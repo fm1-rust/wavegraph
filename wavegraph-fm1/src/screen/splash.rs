@@ -1,13 +1,17 @@
 //! Boot artwork composited over the scope in buffered LCD strips.
 
+#[path = "../../assets/boot_timing.rs"]
+mod boot_timing;
+
 use super::{STYLE, Screen, paper};
-use crate::assets::fonts::FONT_6X9;
+use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
     capture::{Trace, WIDTH},
     scope::segment,
 };
 use embedded_graphics::{
     Drawable,
+    draw_target::DrawTarget,
     framebuffer::{Framebuffer, buffer_size},
     geometry::Point,
     mono_font::MonoTextStyle,
@@ -34,8 +38,15 @@ const BOOT_STYLE: WaveformStyle = WaveformStyle {
 const TITLE_Y: i16 = (SIZE as i16 - TITLE.height()) / 2;
 const MODEL_Y: i16 = TITLE_Y + TITLE.height() + 4;
 const VERSION_Y: i16 = MODEL_Y + MODEL.height() + 5;
-const DROP_TICKS: u32 = 52;
-const RISE_TICKS: u32 = 30;
+// Round score times to the nearest 100 Hz display tick.
+const fn cue_tick(ms: u16) -> u32 {
+    (ms as u32 + 5) / 10
+}
+
+const IMPACT: u32 = cue_tick(boot_timing::ACCENT_A);
+const REBOUND: u32 = cue_tick(boot_timing::SLIDE_C);
+const TITLE_SETTLED: u32 = cue_tick(boot_timing::FIRST_KNOCK);
+const MODEL_LANDED: u32 = cue_tick(boot_timing::HIGH_D);
 
 struct Sprite<'a> {
     width: usize,
@@ -70,10 +81,14 @@ fn ease(from: i16, to: i16, elapsed: u32, duration: u32) -> i16 {
 
 fn title_y(tick: u32) -> i16 {
     match tick {
-        0..26 => ease(-TITLE.height(), TITLE_Y + 24, tick, 26),
-        26..39 => ease(TITLE_Y + 24, TITLE_Y - 10, tick - 26, 13),
-        39..47 => ease(TITLE_Y - 10, TITLE_Y + 3, tick - 39, 8),
-        47..DROP_TICKS => ease(TITLE_Y + 3, TITLE_Y, tick - 47, DROP_TICKS - 47),
+        0..IMPACT => ease(-TITLE.height(), TITLE_Y + 18, tick, IMPACT),
+        IMPACT..REBOUND => ease(TITLE_Y + 18, TITLE_Y - 9, tick - IMPACT, REBOUND - IMPACT),
+        REBOUND..TITLE_SETTLED => ease(
+            TITLE_Y - 9,
+            TITLE_Y,
+            tick - REBOUND,
+            TITLE_SETTLED - REBOUND,
+        ),
         _ => TITLE_Y,
     }
 }
@@ -83,7 +98,7 @@ impl Screen {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
-        title_landed: impl FnOnce(),
+        start_cue: impl FnOnce(),
     ) -> Result<(), Error> {
         // A phase-modulated sine with a second harmonic. One sample per LCD column.
         let trace: Trace = core::array::from_fn(|x| {
@@ -94,16 +109,36 @@ impl Screen {
         self.plot
             .paint(lcd, clock, self.strip, (0, 0), BOOT_STYLE, &trace)
             .await?;
-        TITLE
-            .animate(lcd, clock, self.strip, &trace, DROP_TICKS, title_y)
-            .await?;
-        title_landed();
-        MODEL
-            .animate(lcd, clock, self.strip, &trace, RISE_TICKS, |t| {
-                ease(SIZE as i16, MODEL_Y, t, RISE_TICKS)
-            })
-            .await?;
+        let start = ticks();
+        start_cue();
+        let mut title = -TITLE.height();
+        let mut model = SIZE as i16;
+        loop {
+            let tick = ticks().wrapping_sub(start).min(MODEL_LANDED);
+            let y = title_y(tick);
+            if title != y {
+                TITLE.draw(lcd, clock, self.strip, &trace, title, y).await?;
+                title = y;
+            }
+            if tick >= TITLE_SETTLED {
+                let y = ease(
+                    SIZE as i16,
+                    MODEL_Y,
+                    tick - TITLE_SETTLED,
+                    MODEL_LANDED - TITLE_SETTLED,
+                );
+                if model != y {
+                    MODEL.draw(lcd, clock, self.strip, &trace, model, y).await?;
+                    model = y;
+                }
+            }
+            if tick == MODEL_LANDED {
+                break;
+            }
+            Clock::delay(10.millis()).await;
+        }
         draw_version(lcd, clock, self.strip, &trace).await?;
+        Clock::delay(500.millis()).await;
         Ok(())
     }
 }
@@ -111,31 +146,6 @@ impl Screen {
 impl Sprite<'_> {
     const fn height(&self) -> i16 {
         (self.data.len() / (self.width / 4)) as i16
-    }
-
-    async fn animate(
-        &self,
-        lcd: &mut Display,
-        clock: &mut Clock,
-        strip: &mut [[u8; 2]],
-        trace: &Trace,
-        duration: u32,
-        position: fn(u32) -> i16,
-    ) -> Result<(), Error> {
-        let mut previous = position(0);
-        let start = ticks();
-        loop {
-            let elapsed = ticks().wrapping_sub(start).min(duration);
-            let top = position(elapsed);
-            if top != previous {
-                self.draw(lcd, clock, strip, trace, previous, top).await?;
-                previous = top;
-            }
-            if elapsed == duration {
-                return Ok(());
-            }
-            Clock::delay(10.millis()).await;
-        }
     }
 
     // Rebuild the trace under the old and new positions in the live scope's scratch strip.
@@ -200,8 +210,8 @@ async fn draw_version(
     trace: &Trace,
 ) -> Result<(), Error> {
     const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
-    const GLYPH_W: usize = FONT_6X9.character_size.width as usize;
-    const GLYPH_H: usize = FONT_6X9.character_size.height as usize;
+    const GLYPH_W: usize = FONT_9X15_BOLD.character_size.width as usize;
+    const GLYPH_H: usize = FONT_9X15_BOLD.character_size.height as usize;
     // The packed sprite needs complete bytes. Longer versions wrap at the LCD edge.
     const LINE_W: usize = {
         let width = (VERSION.len() * GLYPH_W).next_multiple_of(4);
@@ -215,13 +225,14 @@ async fn draw_version(
         GLYPH_H,
         { buffer_size::<Gray2>(LINE_W, GLYPH_H) },
     >;
-    let style = MonoTextStyle::new(&FONT_6X9, Gray2::new(3));
+    let style = MonoTextStyle::new(&FONT_9X15_BOLD, Gray2::new(3));
     for (i, chunk) in VERSION.as_bytes().chunks(LINE_W / GLYPH_W).enumerate() {
         let y = VERSION_Y as usize + i * (GLYPH_H + 1);
         if y + GLYPH_H > SIZE as usize {
             break;
         }
         let mut line = Line::new();
+        line.clear(Gray2::new(1)).expect("infallible framebuffer");
         let x = (LINE_W - chunk.len() * GLYPH_W) / 2;
         let text = core::str::from_utf8(chunk).expect("Cargo versions are ASCII");
         Text::with_baseline(text, Point::new(x as i32, 0), style, Baseline::Top)
@@ -230,7 +241,7 @@ async fn draw_version(
         let label = Sprite {
             width: LINE_W,
             data: line.data(),
-            inks: [palette::MUTED; 3],
+            inks: [BOOT_STYLE.background, BOOT_STYLE.background, palette::WHITE],
         };
         label
             .draw(lcd, clock, strip, trace, y as i16, y as i16)
