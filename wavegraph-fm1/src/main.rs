@@ -24,8 +24,6 @@ mod firmware;
 #[cfg(any(target_os = "none", test))]
 mod fx;
 #[cfg(any(target_os = "none", test))]
-mod handoff;
-#[cfg(any(target_os = "none", test))]
 mod inserts;
 #[cfg(any(target_os = "none", test))]
 mod instrument;
@@ -43,8 +41,6 @@ mod organ;
 mod overload;
 #[cfg(any(target_os = "none", test))]
 mod panel;
-#[cfg(target_os = "none")]
-mod peer;
 #[cfg(any(target_os = "none", test))]
 mod scope;
 #[cfg(target_os = "none")]
@@ -57,5 +53,5 @@ mod wavetable;
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    peer::download()
+    wavegraph_fm1_core::peer::download()
 }

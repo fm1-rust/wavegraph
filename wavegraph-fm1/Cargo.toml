@@ -35,12 +35,12 @@ wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
-wavegraph-audio = { version = "0.1", path = "../wavegraph-audio", features = ["fm1"] }
+wavegraph-fm1-core = { path = "../wavegraph-fm1-core" }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 futures-util = { version = "0.3", default-features = false }
 fm1-controls = "0.2.0-rc.0"
 fm1-graphics = { workspace = true, features = ["async-display"] }
-fm1-rticx = { version = "0.2.0-rc.1", features = ["audio", "async-display", "async-usb", "cpu1-probe", "usb-log"] }
+fm1-rticx = { workspace = true, features = ["async-display", "async-usb", "usb-log"] }
 static_cell = "2.1.1"
 
 [target.'cfg(not(target_os = "none"))'.dev-dependencies]

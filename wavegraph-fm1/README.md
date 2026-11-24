@@ -557,6 +557,13 @@ it picks the instrument for the highlighted slot. The picker highlights the
 active row, applies each detent immediately and closes one second after the
 last turn.
 
+## Building your own FM-1 app
+
+This firmware uses [wavegraph-fm1-core](../wavegraph-fm1-core/) for CPU1
+startup, graph handoff and DAC deadlines. The instruments, MIDI, mixer and
+panel tasks live here. For a smaller starting point, see the
+[one-oscillator firmware](../wavegraph-fm1-core/examples/tone.rs).
+
 ## Audio timing and stack measurements
 
 Hold **SAVE** to read measurements since boot. Release it to return to the page

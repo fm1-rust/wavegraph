@@ -941,8 +941,8 @@ dependencies = [
  "wavegraph-909",
  "wavegraph-adsr",
  "wavegraph-arp",
- "wavegraph-audio",
  "wavegraph-dsp",
+ "wavegraph-fm1-core",
  "wavegraph-fx",
  "wavegraph-lfo",
  "wavegraph-monosynth",
@@ -950,6 +950,21 @@ dependencies = [
  "wavegraph-sample",
  "wavegraph-supersaw",
  "wavegraph-wavetable",
+]
+
+[[package]]
+name = "wavegraph-fm1-core"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "fm1-assets",
+ "fm1-audio",
+ "fm1-rticx",
+ "heapless",
+ "static_cell",
+ "wavegraph-audio",
+ "wavegraph-dsp",
+ "wavegraph-monosynth",
 ]
 
 [[package]]
