@@ -104,7 +104,7 @@ enum Stage {
 }
 
 /// The gain and gate state of one voice. Advance once per audio frame.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Envelope {
     stage: Stage,
     level: f32,

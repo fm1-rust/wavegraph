@@ -11,6 +11,8 @@ description = "Four assignable WaveGraph channels with synths, 808 and 909 kits,
 [features]
 default = ["packed-cymbals"]
 late-block-probe = []
+# Opt in on hardware. The browser emulator currently lacks the paired 32-bit add.
+pi32v2-simd = ["wavegraph-supersaw/pi32v2-simd"]
 # Store the factory 909 cymbals as losslessly packed PCM16.
 packed-cymbals = ["dep:fm1-assets", "dep:wavegraph-sampler"]
 # A/B the master compressor detector on the same board and factory patch.

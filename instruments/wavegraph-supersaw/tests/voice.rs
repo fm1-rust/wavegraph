@@ -287,6 +287,42 @@ fn seventh_chord_matches_four_independent_stacks_and_releases_by_root() {
 }
 
 #[test]
+fn synchronized_voices_can_diverge_after_a_restrike_or_release() {
+    let tuning = Tuning::new(24_000_000, 544).expect("clock");
+    let pitches = [48, 55, 60, 67];
+    let events = [
+        at(0, on(48, 85)),
+        at(0, on(55, 85)),
+        at(0, on(60, 85)),
+        at(0, on(67, 85)),
+        at(31, on(55, 127)),
+        at(64, Message::NoteOff(48)),
+        at(83, Message::CutoffHz(820)),
+        at(181, on(67, 40)),
+        at(193, Message::FilterEnvelope(Adsr::GATE)),
+        at(220, Message::NoteOff(60)),
+    ];
+    let mut actual = [0.0_f32; 320];
+    let mut expected = [0.0_f32; 320];
+    render(&mut Supersaw::new(&tuning), &mut actual, &events);
+    for pitch in pitches {
+        let solo_events: Vec<_> = events
+            .into_iter()
+            .filter(|event| match event.message {
+                Message::NoteOn { note, .. } | Message::NoteOff(note) => note == pitch,
+                _ => true,
+            })
+            .collect();
+        let mut solo = [0.0_f32; 320];
+        render(&mut Supersaw::new(&tuning), &mut solo, &solo_events);
+        for (sum, sample) in expected.iter_mut().zip(solo) {
+            *sum += sample;
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn unison_returns_to_held_root_and_stale_off_cannot_release_stolen_voice() {
     use wavegraph_supersaw::VoiceMode;
     let tuning = Tuning::new(44_118, 1).expect("clock");

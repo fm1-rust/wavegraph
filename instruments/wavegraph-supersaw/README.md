@@ -36,6 +36,11 @@ response and fixed center level here follow [Joakim's JE-8086 traces] and
 [control measurements]. The phase seeds, filter implementations, output
 headroom, resonant low-pass and envelope settings are WaveGraph choices.
 
+To compare the native Super Saw mixer on an FM-1, build from the workspace root with
+`./wavegraph-fm1/build.sh --features pi32v2-simd`. It sums the full 24-bit
+ramps in hardware loops using the paired 32-bit saturating add. The default
+build uses portable Rust and also runs in the browser emulator.
+
 ## Play a note
 
 ```rust
