@@ -1,4 +1,4 @@
-//! Two-bit foreground mask over the live scope. Zero leaves the instrument visible.
+//! A one-bit ink mask over the live scope, with a shared mask for the selected row.
 
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
@@ -11,11 +11,11 @@ use embedded_graphics::{
     framebuffer::{Framebuffer, buffer_size},
     mono_font::MonoTextStyle,
     pixelcolor::{
-        Gray2, RgbColor,
-        raw::{BigEndian, RawU2, ToBytes},
+        BinaryColor, RgbColor,
+        raw::{BigEndian, RawU1, ToBytes},
     },
     prelude::{DrawTarget, Point, Primitive, Size},
-    primitives::{PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
     text::{Baseline, Text},
 };
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
@@ -28,8 +28,20 @@ pub(super) const RIGHT: usize = LEFT + WIDTH;
 pub(super) const TOP: usize = (crate::capture::WIDTH - HEIGHT) / 2;
 pub(super) const BOTTOM: usize = TOP + HEIGHT;
 
-type Mask =
-    Framebuffer<Gray2, RawU2, BigEndian, WIDTH, HEIGHT, { buffer_size::<Gray2>(WIDTH, HEIGHT) }>;
+type Mask<const H: usize, const BYTES: usize> =
+    Framebuffer<BinaryColor, RawU1, BigEndian, WIDTH, H, BYTES>;
+
+fn highlight(y: i32) -> RoundedRectangle {
+    RoundedRectangle::with_equal_corners(
+        Rectangle::new(Point::new(0, y), Size::new(WIDTH as u32, ROW_HEIGHT as u32)),
+        Size::new(4, 4),
+    )
+}
+
+fn marked(mask: &[u8], x: usize, y: usize) -> bool {
+    let i = y * WIDTH + x;
+    mask[i / 8] & (0x80 >> (i % 8)) != 0
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Menu {
@@ -42,15 +54,22 @@ pub(super) enum Menu {
 
 pub(super) struct Selector {
     menu: Option<Menu>,
-    mask: Mask,
+    mask: Mask<HEIGHT, { buffer_size::<BinaryColor>(WIDTH, HEIGHT) }>,
+    row: Mask<ROW_HEIGHT, { buffer_size::<BinaryColor>(WIDTH, ROW_HEIGHT) }>,
     pub(super) badge: super::badge::ChannelBadge,
 }
 
 impl Selector {
-    pub(super) const fn new() -> Self {
+    pub(super) fn new() -> Self {
+        let mut row = Mask::new();
+        highlight(0)
+            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
+            .draw(&mut row)
+            .expect("infallible framebuffer");
         Self {
             menu: None,
             mask: Mask::new(),
+            row,
             badge: super::badge::ChannelBadge::new(),
         }
     }
@@ -62,12 +81,12 @@ impl Selector {
         self.menu = menu;
         if let Some(menu) = menu {
             self.mask
-                .clear(Gray2::new(u8::from(matches!(menu, Menu::Instruments(_)))))
+                .clear(BinaryColor::Off)
                 .expect("infallible framebuffer");
-            let text = MonoTextStyle::new(&FONT_9X15_BOLD, Gray2::new(3));
-            let highlight = PrimitiveStyleBuilder::new()
-                .fill_color(Gray2::new(1))
-                .stroke_color(Gray2::new(3))
+            let text = MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On);
+            let selected = PrimitiveStyleBuilder::new()
+                .fill_color(BinaryColor::Off)
+                .stroke_color(BinaryColor::On)
                 .stroke_width(2)
                 .build();
             let (parts, active, numbered): (&[Part], _, _) = match &menu {
@@ -78,16 +97,10 @@ impl Selector {
             for (row, part) in parts.iter().enumerate() {
                 let y = (offset + row * ROW_HEIGHT) as i32;
                 if row == active {
-                    RoundedRectangle::with_equal_corners(
-                        Rectangle::new(
-                            Point::new(0, y),
-                            Size::new(WIDTH as u32, ROW_HEIGHT as u32),
-                        ),
-                        Size::new(4, 4),
-                    )
-                    .into_styled(highlight)
-                    .draw(&mut self.mask)
-                    .expect("infallible framebuffer");
+                    highlight(y)
+                        .into_styled(selected)
+                        .draw(&mut self.mask)
+                        .expect("infallible framebuffer");
                 }
                 if numbered {
                     Text::with_baseline(
@@ -171,11 +184,17 @@ impl Selector {
     }
 
     fn ink(&self, x: usize, y: usize) -> Option<Rgb565> {
-        let i = (y - TOP) * WIDTH + x - LEFT;
-        match (self.mask.data()[i / 4] >> (6 - 2 * (i % 4))) & 3 {
-            0 => None,
-            1 => Some(Rgb565::BLACK),
-            _ => Some(palette::WHITE),
+        let (x, y) = (x - LEFT, y - TOP);
+        if marked(self.mask.data(), x, y) {
+            return Some(palette::WHITE);
         }
+        if let Menu::Channels { focus, .. } = self.menu? {
+            let top = (HEIGHT - CHANNELS * ROW_HEIGHT) / 2 + focus.index() * ROW_HEIGHT;
+            let row = y.checked_sub(top)?;
+            if row >= ROW_HEIGHT || !marked(self.row.data(), x, row) {
+                return None;
+            }
+        }
+        Some(Rgb565::BLACK)
     }
 }

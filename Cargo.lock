@@ -874,6 +874,7 @@ version = "0.1.0"
 name = "wavegraph-fm1"
 version = "0.0.0"
 dependencies = [
+ "critical-section",
  "embedded-graphics",
  "fm1-audio",
  "fm1-controls",

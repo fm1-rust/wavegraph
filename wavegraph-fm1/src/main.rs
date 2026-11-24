@@ -24,6 +24,8 @@ mod firmware;
 #[cfg(any(target_os = "none", test))]
 mod fx;
 #[cfg(any(target_os = "none", test))]
+mod handoff;
+#[cfg(any(target_os = "none", test))]
 mod inserts;
 #[cfg(any(target_os = "none", test))]
 mod instrument;

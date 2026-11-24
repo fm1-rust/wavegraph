@@ -11,7 +11,7 @@ export CARGO_TARGET_PI32V2_NONE_LINKER="$PI32V2_BIN/ld.lld"
 export RUSTFLAGS="-C link-arg=-Twavegraph-fm1.ld"
 out=${CARGO_TARGET_DIR:-"$root/target"}
 cargo build --manifest-path "$root/Cargo.toml" --locked -p wavegraph-fm1 --profile firmware \
-    --target "$PI32V2_TARGET" --target-dir "$out" \
+    --target "$PI32V2_TARGET" --target-dir "$out" "$@" \
     -Zbuild-std=core,compiler_builtins -Zbuild-std-features=compiler-builtins-mem -Zjson-target-spec
 image="$out/pi32v2-none/firmware/wavegraph-fm1"
 PYTHONPATH="$PI32V2_ISA/tools/hwtest" python3 "$root/wavegraph-fm1/assets/package.py" "$image"

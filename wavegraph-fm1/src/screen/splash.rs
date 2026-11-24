@@ -91,8 +91,9 @@ impl Screen {
             let phase = 1.8 * t + 0.14 * (3.0 * t).sin_turns();
             (120.0 - 61.0 * phase.sin_turns() - 15.0 * (2.0 * phase).sin_turns()) as u8
         });
-        self.plot.set_style(BOOT_STYLE);
-        self.plot.paint_async(lcd, &trace, clock).await?;
+        self.plot
+            .paint(lcd, clock, self.strip, (0, 0), BOOT_STYLE, &trace)
+            .await?;
         TITLE
             .animate(lcd, clock, self.strip, &trace, DROP_TICKS, title_y)
             .await?;

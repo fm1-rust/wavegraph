@@ -8,7 +8,7 @@ type Packet = [u8; 4];
 
 #[derive(Default)]
 pub(super) struct Batch {
-    packets: Vec<(usize, Packet), 96>,
+    packets: Vec<(u8, Packet), 96>,
     lost: bool,
 }
 
@@ -17,10 +17,11 @@ impl Batch {
         if let Some([status, key, value]) = event.message.encode(channel as u8) {
             // Clip and arp producers each emit in frame order. USB drains one
             // merged batch, retaining insertion order for pairs at the same frame.
-            let i = self.packets.partition_point(|(at, _)| *at <= event.frame);
+            let frame = u8::try_from(event.frame).expect("event in a 128-frame block");
+            let i = self.packets.partition_point(|(at, _)| *at <= frame);
             self.lost |= self
                 .packets
-                .insert(i, (event.frame, [status >> 4, status, key, value]))
+                .insert(i, (frame, [status >> 4, status, key, value]))
                 .is_err();
         }
     }
@@ -40,8 +41,8 @@ pub struct OutputQueue {
 }
 
 impl OutputQueue {
-    pub(super) fn active(&self) -> bool {
-        self.active
+    pub(super) fn session(&self) -> Option<u32> {
+        self.active.then_some(self.revision)
     }
 
     pub(super) fn connect(&mut self, active: bool) {
@@ -156,11 +157,11 @@ mod tests {
         batch.push(Channel::Two, at(0, MidiMessage::Control(74, 89)));
         batch.push(Channel::Two, at(0, MidiMessage::Off(45)));
         let mut packets = [[0; 4]; 16];
-        assert!(!out.active());
+        assert!(out.session().is_none());
         out.append(&batch);
         assert_eq!(out.peek(&mut packets).1, 0);
         out.connect(true);
-        assert!(out.active());
+        assert!(out.session().is_some());
         out.append(&batch);
         let (revision, n) = out.peek(&mut packets);
         assert_eq!(
@@ -171,7 +172,7 @@ mod tests {
         assert_eq!(out.peek(&mut packets).1, 2);
         assert_eq!(packets[0], [11, 0xb1, 74, 89]);
         out.connect(false);
-        assert!(!out.active());
+        assert!(out.session().is_none());
         out.connect(true);
         batch.clear();
         batch.push(Channel::Four, at(0, MidiMessage::Off(51)));
