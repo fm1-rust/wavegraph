@@ -28,6 +28,11 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | Control | Action |
 | --- | --- |
 | PLAY/STOP | Start all enabled patterns on beat one from any page (green). Press again to release sequenced notes, silence the kit and stop (red). Live held keys keep sounding. |
+| LFO on a TB-303 | Open the channel’s modulation page. LFO or HOME returns to the instrument. |
+| SEL in LFO | Enable or bypass modulation. Each 303 starts bypassed with a 5 Hz sine routed to pitch at 25% depth. |
+| KNOBS 1–4 in LFO | Set waveform, rate, depth and destination. Pitch gives up to ±2 semitones of vibrato around the tuning knob. The other destinations are cutoff, resonance, env mod, decay, accent, attack and overdrive. |
+| SELECT in LFO | Clockwise selects tempo divisions from two bars to a sixteenth. Playback start resets the synced waveform. Counterclockwise selects 0.1–20 Hz. |
+| MIDI CC1 | The mod wheel sets the same depth as knob 3 on the addressed 303, from zero to full. SEL remains the bypass switch. USB MIDI uses the existing `qualified-usb` build. |
 | ARP on an instrument | Open that channel’s arpeggiator. ARP or HOME returns to the instrument. PRESETS browses channels while the editor is open. |
 | SEL in ARP | Enable or bypass the displayed channel’s arpeggiator. Each channel starts bypassed. |
 | KNOBS 1–4 in ARP | Set order (up, down, up/down, as played, random), rate (1/4 through 1/32, including triplets), octave range (1–4), and gate (1–100%). |

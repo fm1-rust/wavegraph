@@ -36,6 +36,7 @@ mod envelope_plot;
 mod grid;
 mod jp8080;
 mod lettering;
+mod lfo;
 use grid::TextGrid;
 mod master_fx;
 mod microwave;
@@ -91,10 +92,10 @@ type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
 
-// Keep the envelope DMA state machine out of paint_page's poll function.
+// Keep large panel DMA state machines out of paint_page's poll function.
 // The combined function exceeds the pi32v2 conditional branch range.
 #[inline(never)]
-fn poll_envelope<F: Future>(page: Pin<&mut F>, cx: &mut Context<'_>) -> Poll<F::Output> {
+fn poll_page<F: Future>(page: Pin<&mut F>, cx: &mut Context<'_>) -> Poll<F::Output> {
     page.poll(cx)
 }
 
@@ -113,6 +114,7 @@ enum Page {
     Timing,
     Scope(Channel, Part),
     Arp(Channel, Part),
+    Lfo(Channel, crate::lfo::Controls),
     Fx(Channel, Part),
     MasterFx,
     Mixer,
@@ -654,6 +656,30 @@ impl Screen {
                 )
                 .await;
         }
+        if labels.view == View::Lfo {
+            let page = Page::Lfo(labels.channel, labels.lfo);
+            if self.page == Some(page) {
+                return Ok(());
+            }
+            let previous = match self.page {
+                Some(Page::Lfo(channel, c)) if channel == labels.channel => Some(c),
+                _ => {
+                    self.change_view(SILVER);
+                    None
+                }
+            };
+            let mut draw = pin!(lfo::paint(
+                lcd,
+                clock,
+                self.strip,
+                labels.channel,
+                labels.lfo,
+                previous
+            ));
+            poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+            self.page = Some(page);
+            return Ok(());
+        }
         if labels.view == View::Arp {
             let page = Page::Arp(labels.channel, labels.focus);
             let entering = self.page.replace(page) != Some(page);
@@ -759,7 +785,7 @@ impl Screen {
                         controls,
                         show_mode_hint
                     ));
-                    return poll_fn(|cx| poll_envelope(page.as_mut(), cx)).await;
+                    return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
                 }
                 Part::Tr808 | Part::Tr909 => (),
             }

@@ -32,6 +32,8 @@ mod instrument;
 #[cfg(any(target_os = "none", test))]
 mod keys;
 #[cfg(any(target_os = "none", test))]
+mod lfo;
+#[cfg(any(target_os = "none", test))]
 mod midi_out;
 #[cfg(any(target_os = "none", test))]
 mod mixer;

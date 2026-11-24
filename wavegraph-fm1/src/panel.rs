@@ -76,6 +76,7 @@ pub(super) enum View {
     Scope,
     Envelope,
     Arp,
+    Lfo,
     Fx,
     Mixer,
     Channel,
@@ -92,7 +93,12 @@ impl View {
         match self {
             Self::Scope | Self::Fx => true,
             Self::Envelope => part.is_kit(), // Drum kits fall back to their scope.
-            Self::Arp | Self::Mixer | Self::Channel | Self::MasterFx(_) | Self::Sequencer => false,
+            Self::Lfo
+            | Self::Arp
+            | Self::Mixer
+            | Self::Channel
+            | Self::MasterFx(_)
+            | Self::Sequencer => false,
         }
     }
 }
@@ -100,6 +106,7 @@ impl View {
 pub(super) enum PageButton {
     Home,
     Arp,
+    Lfo,
     Env,
     Fx,
     Glo,
@@ -200,6 +207,8 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
+            PageButton::Lfo if self.view == View::Scope && self.part() == Part::Bass => View::Lfo,
+            PageButton::Lfo if self.view != View::Lfo => self.view,
             PageButton::Arp if self.view == View::Scope => View::Arp,
             PageButton::Arp if self.view != View::Arp => self.view,
             PageButton::Fx if self.view != View::Fx => View::Fx,
@@ -283,7 +292,8 @@ impl Navigation {
             if self.focus != previous_channel || self.view == View::Envelope {
                 self.bass_slot = None;
             }
-            if self.view == View::Envelope {
+            if self.view == View::Envelope || (self.view == View::Lfo && self.part() != Part::Bass)
+            {
                 self.view = View::Scope;
             }
         }

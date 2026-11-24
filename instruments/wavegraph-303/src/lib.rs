@@ -17,7 +17,7 @@ pub use drive::Drive;
 pub use drum_fx::{DrumFx, DrumFxSettings};
 pub use effects::{Effects, EffectsSettings, LengthMismatch, StereoFrame};
 pub use envelopes::{EnvelopeLevels, Envelopes};
-pub use instrument::{Message, Tb303, Waveform};
+pub use instrument::{Destination, Message, Tb303, Waveform};
 pub use reverb::Reverb;
 pub use voice::{Voice, VoiceParams};
 

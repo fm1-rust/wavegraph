@@ -944,6 +944,7 @@ dependencies = [
  "wavegraph-audio",
  "wavegraph-dsp",
  "wavegraph-fx",
+ "wavegraph-lfo",
  "wavegraph-monosynth",
  "wavegraph-organ",
  "wavegraph-sample",
@@ -958,6 +959,13 @@ dependencies = [
  "libm",
  "wavegraph-core",
  "wavegraph-sample",
+]
+
+[[package]]
+name = "wavegraph-lfo"
+version = "0.1.0"
+dependencies = [
+ "wavegraph-core",
 ]
 
 [[package]]

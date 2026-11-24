@@ -60,6 +60,7 @@ impl Settings {
             channel,
             assignments: self.nav.assignments.map(|assignment| assignment.part),
             voice: track.voice,
+            lfo: track.lfo,
             arp: track.arp,
             focus: track.assignment.part,
             bass: track.bass,
@@ -85,6 +86,7 @@ impl Settings {
 
     fn sel_lamp(&self) -> bool {
         match self.nav.view {
+            View::Lfo => self.tracks[self.nav.focus.index()].lfo.enabled,
             View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
             View::Fx => self.nav.insert_slot().is_some_and(|slot| {
                 self.tracks[self.nav.focus.index()].inserts[usize::from(slot)].enabled()
@@ -107,6 +109,7 @@ pub(super) struct Labels {
     pub(super) channel: Channel,
     pub(super) assignments: [Part; CHANNELS],
     pub(super) voice: Voice,
+    pub(super) lfo: crate::lfo::Controls,
     pub(super) arp: crate::arp::Controls,
     pub(super) focus: Part,
     pub(super) bass: Controls,
@@ -589,6 +592,7 @@ mod app {
                 (Button::Glo, PageButton::Glo),
                 (Button::Fx, PageButton::Fx),
                 (Button::Env, PageButton::Env),
+                (Button::Lfo, PageButton::Lfo),
                 (Button::Arp, PageButton::Arp),
                 (Button::Seq, PageButton::Seq),
             ]
@@ -702,6 +706,7 @@ mod app {
                 matches!(self.nav.view, View::Fx | View::MasterFx(_)),
             );
             self.leds.set(Button::Env, self.nav.view == View::Envelope);
+            self.leds.set(Button::Lfo, self.nav.view == View::Lfo);
             self.leds.set(Button::Arp, self.nav.view == View::Arp);
             let now = cycles();
             // Time the recovery chord against the crystal even if scan interrupts run late.
@@ -906,6 +911,9 @@ mod app {
             match view {
                 View::Mixer => self.settings.mixer.turn_faders(knobs),
                 View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
+                View::Lfo => self.settings.tracks[channel.index()]
+                    .lfo
+                    .edit(select, knobs, sel),
                 View::Arp => self.settings.tracks[channel.index()]
                     .arp
                     .edit(select, knobs, sel),
