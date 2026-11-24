@@ -72,6 +72,14 @@ impl View {
     pub(super) fn is_mixer(self) -> bool {
         matches!(self, Self::Mixer | Self::Channel)
     }
+
+    pub(super) fn shows_trace(self, part: Part) -> bool {
+        match self {
+            Self::Scope | Self::Fx => true,
+            Self::Envelope => part.is_kit(), // Drum kits fall back to their scope.
+            Self::Arp | Self::Mixer | Self::Channel | Self::MasterFx(_) | Self::Sequencer => false,
+        }
+    }
 }
 
 pub(super) enum PageButton {
@@ -218,6 +226,29 @@ impl Navigation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_waveform_pages_request_audio_samples() {
+        for view in [
+            View::Scope,
+            View::Fx,
+            View::Envelope,
+            View::Arp,
+            View::Mixer,
+            View::Channel,
+            View::MasterFx(None),
+            View::Sequencer,
+        ] {
+            assert_eq!(
+                view.shows_trace(Part::Bass),
+                matches!(view, View::Scope | View::Fx)
+            );
+            assert_eq!(
+                view.shows_trace(Part::Tr909),
+                matches!(view, View::Scope | View::Fx | View::Envelope)
+            );
+        }
+    }
 
     #[test]
     fn preset_feedback_expires_after_150_ticks_across_clock_wrap() {

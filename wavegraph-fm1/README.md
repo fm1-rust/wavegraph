@@ -565,10 +565,9 @@ WaveGraph workspace root run
 
 Both files are written to `target/pi32v2-none/firmware/`. The build reports the
 linked application size, the space available for code, and the end of the install.
-The FM-1 SDK dependencies use 0.2.0-rc.0. The workspace pins `fm1` to the
-merged [safe USB-MIDI startup change](https://github.com/fm1-rust/fm1-rust/pull/90).
-CI uses the same SDK release’s shared pi32v2 build workflow to package
-the flashable image.
+Cargo.lock selects the published `fm1` and `fm1-rticx` 0.2.0-rc.1 crates
+and `fm1-audio`, `fm1-controls` and `fm1-graphics` 0.2.0-rc.0.
+CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 tag.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
@@ -626,7 +625,7 @@ or the [MIT License](LICENSE-MIT).
 [flasher-install]: https://github.com/jvitkauskas/m-flasher/blob/8fbece7348d758ac284325eed455781675ac95ff/src/ops.rs#L360-L405
 [flash-layout]: https://sbegueria.github.io/fm1-dev-wiki/Flash-Storage.html
 [fm1-emu]: https://github.com/joakimeriksson/fm1-emu
-[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/d57cac3a09f51274d2fddb4ccead99222e6f2850/fm1/README.md#build-and-flash
+[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/f360cf357a71b9a3f59ed0f68c8e33a3ac3aa0d7/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
 

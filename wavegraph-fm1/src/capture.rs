@@ -9,6 +9,31 @@ const CENTER: u8 = LAST_ROW / 2 + 1;
 pub(super) type Trace = [u8; WIDTH];
 pub(super) const FLAT: Trace = [CENTER; WIDTH];
 
+#[derive(Default)]
+pub(super) struct ScopeUpdates {
+    last_labels: Option<(u32, bool)>,
+    gap: bool,
+}
+
+impl ScopeUpdates {
+    /// A visible trace needs every contiguous block. Other pages only need
+    /// settings and graph gain changes. Retry until the observer accepts one.
+    pub(super) fn publish(
+        &mut self,
+        labels: (u32, bool),
+        visible: bool,
+        send: impl FnOnce(bool) -> bool,
+    ) {
+        if visible || self.last_labels != Some(labels) {
+            let sent = send(self.gap);
+            self.gap = !visible || !sent;
+            if sent {
+                self.last_labels = Some(labels);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum Scale {
     Fixed,
@@ -145,6 +170,28 @@ impl Capture {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_pages_retry_labels_and_resume_with_a_fresh_trace() {
+        let mut updates = ScopeUpdates::default();
+        let mut offer = |revision, gain, visible, room| {
+            let mut offered = None;
+            updates.publish((revision, gain), visible, |gap| {
+                offered = Some(gap);
+                room
+            });
+            offered
+        };
+        assert_eq!(offer(0, false, true, true), Some(false));
+        assert_eq!(offer(1, false, false, false), Some(false)); // queue full on exit
+        assert_eq!(offer(1, false, false, true), Some(true)); // retry
+        assert_eq!(offer(1, false, false, true), None);
+        assert_eq!(offer(1, true, false, true), Some(true)); // graph edit only
+        assert_eq!(offer(2, true, true, true), Some(true)); // scope reopens
+        assert_eq!(offer(2, true, true, true), Some(false));
+        assert_eq!(offer(3, true, false, false), Some(false));
+        assert_eq!(offer(4, true, true, true), Some(true)); // hidden page never delivered
+    }
 
     #[test]
     fn triggers_across_blocks_and_rearms_after_a_gap() {

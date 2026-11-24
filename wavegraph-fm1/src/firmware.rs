@@ -24,6 +24,7 @@ use wavegraph_arp::Chord;
 // channels copy chord storage between the input and audio tasks.
 pub struct Performance {
     settings: Settings,
+    revision: u32,
     chords: &'static mut [Chord; CHANNELS],
 }
 
@@ -142,7 +143,7 @@ mod app {
     use super::{Frame, Labels, Motion, Performance, Settings};
     use crate::{
         bumper::Bumper,
-        capture::{Capture, FLAT, Scale},
+        capture::{Capture, FLAT, Scale, ScopeUpdates},
         inserts::BassInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
@@ -204,7 +205,7 @@ mod app {
     const RATE_HZ: u32 = (FRAME_RATE.0 + FRAME_RATE.1 / 2) / FRAME_RATE.1;
 
     pub struct ScopeBlock {
-        samples: [i32; OUTPUT_FRAMES],
+        samples: Option<[i32; OUTPUT_FRAMES]>,
         bass_cycle: Option<usize>,
         labels: Labels,
         gap: bool,
@@ -324,6 +325,7 @@ mod app {
             Shared {
                 settings: Performance {
                     settings: Settings::INITIAL,
+                    revision: 0,
                     chords: CHORDS.take(),
                 },
                 bumper: Bumper::default(),
@@ -340,14 +342,14 @@ mod app {
             TaskInits {
                 audio: Audio {
                     wire: Batch::default(),
-                    wake_usb,
+                    wake_usb: usb.as_ref().map(|_| wake_usb),
                     output: Output::start(board.audio).expect("audio clock"),
                     instrument,
                     host,
                     buses: BUSES.take(),
                     first_frame: 0,
                     tap,
-                    gap: false,
+                    scope_updates: ScopeUpdates::default(),
                     stats: Stats::default(),
                     last_start: None,
                     meter: Meter::default(),
@@ -705,6 +707,7 @@ mod app {
                             }
                         }
                         current.settings = settings;
+                        current.revision = current.revision.wrapping_add(1);
                     });
                 }
                 let sel_lamp = self.settings.sel_lamp();
@@ -726,14 +729,14 @@ mod app {
     #[task(binds = ALNK0, priority = 3, shared = [settings, overloads, motion, bumper, outbox])]
     struct Audio {
         wire: Batch,
-        wake_usb: Sender<'static, (), 1>,
+        wake_usb: Option<Sender<'static, (), 1>>,
         output: Output,
         instrument: &'static mut Instrument<'static>,
         buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
         host: Host<'static, bool>,
         first_frame: u64,
         tap: Sender<'static, ScopeBlock, 2>,
-        gap: bool,
+        scope_updates: ScopeUpdates,
         stats: Stats,
         last_start: Option<u32>,
         meter: Meter,
@@ -743,17 +746,25 @@ mod app {
     impl RticTask for Audio {
         fn exec(&mut self) {
             let started = cycles();
-            let settings = self.shared().settings.lock(|s| {
+            let (settings, settings_revision) = self.shared().settings.lock(|s| {
                 for channel in Channel::ALL {
                     let i = channel.index();
                     self.instrument
                         .sync_chord(channel, &s.settings.tracks[i], &s.chords[i]);
                 }
-                s.settings
+                (s.settings, s.revision)
             });
             let mut bumper = self.shared().bumper;
             let mut revision = None;
-            self.wire.clear();
+            let mut outbox = self.shared().outbox;
+            // The lower-priority USB task cannot change sessions during this interrupt.
+            let usb = self
+                .wake_usb
+                .as_mut()
+                .filter(|_| outbox.lock(|q| q.active()));
+            if usb.is_some() {
+                self.wire.clear();
+            }
             let result = self.output.render(settings.master, |out| {
                 revision = Some(
                     self.host
@@ -771,16 +782,22 @@ mod app {
                 self.instrument.cue = bumper.lock(|b| b.take(out.len(), settings.master.raw()));
                 let mono = self
                     .instrument
-                    .render_with_midi(settings.tracks, self.buses, |c, e| self.wire.push(c, e))
+                    .render_with_midi(settings.tracks, self.buses, |channel, event| {
+                        if usb.is_some() {
+                            self.wire.push(channel, event);
+                        }
+                    })
                     .expect("fixed patch");
                 for (frame, sample) in out.iter_mut().zip(mono) {
                     *frame = [sample.inner(); 2];
                 }
             });
             let Some(revision) = revision else { return };
-            if self.shared().outbox.lock(|queue| queue.append(&self.wire)) {
-                let _ = self.wake_usb.try_send(());
-            } // No DMA half was ready.
+            if let Some(wake) = usb
+                && outbox.lock(|queue| queue.append(&self.wire))
+            {
+                let _ = wake.try_send(());
+            }
             if result == Refill::Written {
                 self.host.submitted(revision, self.first_frame);
                 // Keep metering and the visual clock current even when scope capture drops a block.
@@ -816,28 +833,28 @@ mod app {
                 });
             }
             self.first_frame = self.first_frame.wrapping_add(OUTPUT_FRAMES as u64);
-            if result == Refill::Written && !self.tap.is_full() {
+            let visible = settings.nav.view.shows_trace(settings.nav.part());
+            let labels_revision = (settings_revision, self.instrument.half_gain);
+            self.scope_updates.publish(labels_revision, visible, |gap| {
+                if result != Refill::Written || self.tap.is_full() {
+                    return false;
+                }
                 let labels = settings.labels(self.instrument.half_gain);
                 let block = ScopeBlock {
-                    samples: match (labels.view, labels.voice_tap) {
-                        (View::Arp | View::Mixer | View::Channel | View::MasterFx(_), _) => {
-                            [0; OUTPUT_FRAMES]
-                        }
+                    samples: visible.then(|| match (labels.view, labels.voice_tap) {
                         (View::Fx, _) | (View::Scope, true) => {
                             labels
                                 .channel
                                 .scope_samples(labels.focus, labels.view, self.buses)
                         }
                         _ => core::array::from_fn(|i| self.output.block()[i][0]),
-                    },
+                    }),
                     bass_cycle: self.instrument.bass_cycles[labels.channel.index()],
                     labels,
-                    gap: self.gap,
+                    gap,
                 };
-                self.gap = self.tap.try_send(block).is_err();
-            } else {
-                self.gap = true;
-            }
+                self.tap.try_send(block).is_ok()
+            });
             let previous = self.last_start.replace(started);
             if self.stats.record(started, result) {
                 let work = cycles().wrapping_sub(started);
@@ -879,16 +896,18 @@ mod app {
                 {
                     self.capture.reset();
                 }
-                let trace = if bass_scope {
-                    self.capture.push_bass(&block.samples, block.bass_cycle)
-                } else {
-                    let scale = if voice_scope && labels.focus == Part::Wavetable {
-                        Scale::Auto
+                let trace = block.samples.as_ref().and_then(|samples| {
+                    if bass_scope {
+                        self.capture.push_bass(samples, block.bass_cycle)
                     } else {
-                        Scale::Fixed
-                    };
-                    self.capture.push(&block.samples, scale)
-                };
+                        let scale = if voice_scope && labels.focus == Part::Wavetable {
+                            Scale::Auto
+                        } else {
+                            Scale::Fixed
+                        };
+                        self.capture.push(samples, scale)
+                    }
+                });
                 if changed || trace.is_some() {
                     self.shared().frame.lock(|frame| {
                         // Publish the new page even while waiting for its first trigger.

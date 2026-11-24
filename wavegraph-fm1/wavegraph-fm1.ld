@@ -13,4 +13,4 @@ SECTIONS {
   } > assets
 }
 __sstack_top = __stack_top - 16K;
-ASSERT(__bss_end <= __sstack_top - 24K, "WaveGraph statics overlap the interrupt stack")
+ASSERT(__fm1_statics_end <= __sstack_top - 24K, "WaveGraph statics overlap the interrupt stack")
