@@ -1457,6 +1457,69 @@ mod tests {
     }
 
     #[test]
+    fn skipped_factory_slide_off_reaches_the_midi_receiver() -> Result<(), Error> {
+        use crate::{
+            bass::CC_SLIDE,
+            midi_out::{Batch, OutputQueue},
+        };
+        use fm1_audio::OUTPUT_FRAMES;
+
+        const SKIPPED_BLOCKS: usize = 6;
+        for gap in [false, true] {
+            with_instrument(44_118, |engine| {
+                let tracks = Track::rack(Navigation::INITIAL.assignments);
+                let mut buses = [[I24::default(); OUTPUT_FRAMES]; BUS_COUNT];
+                let mut out = OutputQueue::default();
+                out.connect(true);
+                let session = out.session().expect("connected");
+                let mut batch = Batch::default();
+                let mut slide = None;
+                let mut render = |engine: &mut Instrument<'_>, out: &mut OutputQueue| {
+                    batch.begin(session);
+                    engine.render_with_midi(&tracks, &mut buses, |c, e| batch.push(c, e))?;
+                    out.append(&batch);
+                    let mut packets = [[0; 4]; 16];
+                    loop {
+                        let (revision, count) = out.peek(&mut packets);
+                        if count == 0 {
+                            break;
+                        }
+                        for &[_, status, cc, value] in &packets[..count] {
+                            if (status, cc) == (0xb0, CC_SLIDE) {
+                                slide = Some(value);
+                            }
+                        }
+                        out.sent(revision, count);
+                    }
+                    Ok::<_, Error>(slide)
+                };
+                engine.transport.toggle();
+                let mut receiver = None;
+                for _ in 0..1000 {
+                    receiver = render(engine, &mut out)?;
+                    if receiver == Some(127) {
+                        break;
+                    }
+                }
+                assert_eq!(receiver, Some(127), "first factory slide on channel 1");
+
+                // The clip releases slide during these six blocks at the factory tempo.
+                if gap {
+                    out.silence();
+                    engine.skip_frames(SKIPPED_BLOCKS * OUTPUT_FRAMES)?;
+                } else {
+                    for _ in 0..SKIPPED_BLOCKS {
+                        render(engine, &mut out)?;
+                    }
+                }
+                assert_eq!(render(engine, &mut out)?, Some(0), "gap = {gap}");
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn dropped_time_keeps_the_next_factory_kick_and_note_on_the_dac_timeline() -> Result<(), Error>
     {
         extern crate alloc;
