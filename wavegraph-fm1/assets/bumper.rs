@@ -105,24 +105,25 @@ fn main() {
             "cargo:rustc-link-arg=-Map={}",
             out.join("wavegraph-fm1.map").display()
         );
-        for source in ["start.S", "hold.c"] {
-            let object = out.join(source).with_extension("o");
-            let status = std::process::Command::new(&clang)
-                .args([
-                    "--target=pi32v2",
-                    "-mcpu=ac791n",
-                    "-O2",
-                    "-ffreestanding",
-                    "-c",
-                ])
-                .arg(PathBuf::from("runtime").join(source))
-                .arg("-o")
-                .arg(&object)
-                .status()
-                .expect("pi32v2 clang");
-            assert!(status.success(), "compiling {source}");
-            println!("cargo:rustc-link-arg={}", object.display());
-        }
+        // The BSP reset prefix holds CPU1, then branches to _start. Insert
+        // the application's NOLOAD initialization there, before the BSP CRT.
+        println!("cargo:rustc-link-arg=--wrap=_start");
+        let object = out.join("start.o");
+        let status = std::process::Command::new(&clang)
+            .args([
+                "--target=pi32v2",
+                "-mcpu=ac791n",
+                "-O2",
+                "-ffreestanding",
+                "-c",
+            ])
+            .arg("runtime/start.S")
+            .arg("-o")
+            .arg(&object)
+            .status()
+            .expect("pi32v2 clang");
+        assert!(status.success(), "compiling startup");
+        println!("cargo:rustc-link-arg={}", object.display());
         println!("cargo:rerun-if-changed=wavegraph-fm1.ld");
         println!("cargo:rustc-link-search={}", env!("CARGO_MANIFEST_DIR"));
     }

@@ -475,8 +475,26 @@ impl Screen {
             self.selector.select(None);
             self.change_view(STYLE);
             lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
-            self.text.text(0, 0, b"CPU0 / CPU1 HELD", palette::GREEN);
         }
+        let title = match t.boot {
+            0 => "CPU1 BOOT TIMEOUT   ",
+            1 => "CPU0 UI / CPU1 DSP  ",
+            2 => "CPU1 BAD CONTEXT    ",
+            3 => "CPU1 BAD REPLY      ",
+            4 => "CPU1 FAULT          ",
+            5 => "CPU1 STALLED        ",
+            _ => "CPU1 UNKNOWN STATUS ",
+        };
+        self.text.text(
+            0,
+            0,
+            title,
+            if t.boot == 1 {
+                palette::GREEN
+            } else {
+                palette::RED
+            },
+        );
         for (i, (label, value)) in [
             ("USP FREE B", wavegraph_usp_free()),
             ("SSP FREE B", wavegraph_ssp_free()),
@@ -496,6 +514,12 @@ impl Screen {
         {
             self.text.text(0, 2 + i, label, palette::MUTED);
             self.text.number(10, 2 + i, 10, value, palette::GREEN);
+        }
+        self.text.text(0, 14, "C1 FREE B", palette::MUTED);
+        if let Some(bytes) = t.worker_stack {
+            self.text.number(10, 14, 10, bytes, palette::GREEN);
+        } else {
+            self.text.text(10, 14, "         -", palette::GREEN);
         }
         self.text.paint_async(lcd, clock).await
     }

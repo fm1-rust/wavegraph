@@ -8,3 +8,5 @@ pub mod bytecode;
 #[cfg(feature = "async")]
 pub mod control;
 pub mod dsp;
+#[cfg(target_has_atomic = "ptr")]
+pub mod mailbox;

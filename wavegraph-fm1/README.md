@@ -17,8 +17,8 @@ including the [monosynth](../instruments/wavegraph-monosynth/),
 [Super Saw](../instruments/wavegraph-supersaw/) and
 [wavetable synth](../instruments/wavegraph-wavetable/).
 The transport starts stopped. You can play the panel keys immediately.
-WaveGraph tries to start USB MIDI at boot. The current AC791N BSP returns
-`DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
+The default build tries to start USB MIDI at boot. The current AC791N BSP
+returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 `fm1 log` offline. The firmware updater remains available through the bootloader.
 
 | Monosynth | 303 direct knobs | 303 editing Drive |
@@ -395,8 +395,18 @@ A seven-pixel dot in the upper-right corner turns amber on a missed audio
 deadline and red on a second miss within one second. It disappears after one
 second without a miss. The synth scope’s `V` readout is the current note velocity.
 
-On a build with USB MIDI active, connect USB and run `fm1 log` from the
-[FM-1 CLI][cli]. For example,
+On a build with USB MIDI active, hold SAVE while running `fm1 log` from the
+[FM-1 CLI][cli] for the timing snapshot. The example
+`B1 D02400 F00080 W00076 O00000000 S00000002` means CPU1 started successfully
+(`B1`), peak DSP render took 2,400 µs, peak refill took 80 µs and peak
+successful DMA write took 76 µs. The last two fields count BSP overruns and
+silent fallback blocks in hexadecimal. Times round up to microseconds and
+saturate at 99,999 µs in the USB reply. The display shows the full range.
+After a CPU1 failure, a log request returns the timing snapshot even with SAVE released.
+`B0` is a boot timeout, `B2` a context mismatch, `B3` a reply mismatch,
+`B4` a fault and `B5` a renderer that stopped returning blocks.
+
+Release SAVE and run `fm1 log` for recent overload events. For example,
 `XR12 T4870 W3070 G2902 DMA` reports the 12th miss, 4,870 ms after boot,
 with 3,070 µs of interrupt work and 2,902 µs since the previous audio IRQ.
 `DMA` means the refill crossed a DMA boundary. The nominal 128-frame budget
@@ -410,6 +420,15 @@ Held notes, VCA release tails and both shared effects keep running when you
 change presets. The 303 still discharges its accent capacitor while silent.
 
 [cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
+
+Normal USB MIDI requires a board and host setup qualified for the BSP's
+[`UsbPort::assume_midi_dma` contract][usb-dma]. That covers receive writes
+staying in their programmed arenas, stable ownership across acknowledgements,
+and quiescent transfers through reset, suspend, detach and reconnect.
+For such a bench, build with `./wavegraph-fm1/build.sh --features qualified-usb`.
+The default build exposes the same timing measurements on the LCD.
+
+[usb-dma]: https://docs.rs/fm1/0.2.0-rc.1/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
 
 ## Four-track mixer and effects
 
@@ -508,15 +527,17 @@ it picks the instrument for the highlighted slot. The picker highlights the
 active row, applies each detent immediately and closes one second after the
 last turn.
 
-## CPU0 measurements
+## Audio timing and stack measurements
 
 Hold **SAVE** to read measurements since boot. Release it to return to the page
 you were using. Press PLAY, switch between the instrument, SEQ, GLO, FX and ENV
 pages, change a pattern and turn a knob before reading the display.
 
 - **USP FREE B** and **SSP FREE B** are contiguous untouched bytes at the bottom
-  of the 16 KiB user and 26 KiB supervisor stacks. The reset prefix paints both
+  of CPU0's 16 KiB user and 20 KiB supervisor stacks. The reset prefix paints both
   before Rust starts. The display scans the paint with interrupts enabled.
+- **C1 FREE B** is the watermark of the 12 KiB CPU1 user stack. The worker samples
+  its own painted stack and sends the result with a completed block.
 - **REFILL US** is the maximum time from ALNK0 entry through a serviced refill,
   including a late return. **PLAY US** tracks the same peak while the transport
   is running. **WRITE US** shows the peak for successful DMA writes and **ALNK US** also
@@ -524,22 +545,47 @@ pages, change a pattern and turn a knob before reading the display.
   Compare them with the 69,632-tick (2,901.3 µs) half-buffer period.
   **OVERRUNS** counts the BSP's late DMA, interrupt duration and service gap checks.
 
-The startup prefix holds CPU1 before the CRT touches RAM. The linker reserves a
-32-byte-aligned 4,672-byte mailbox, an 8 KiB CPU1 user stack, a 1 KiB CPU1
-supervisor stack and at least 1 KiB of spare SRAM below the CPU0 stacks. The
-CPU1 sizes are provisional until that core runs the real renderer on hardware.
-Envelope plots retain their previous traces and share the display's pixel strip.
-The selector stores its white ink and reuses one backing mask for every highlighted row.
+CPU0 opens the timing page when it detects a boot timeout, invalid context
+or reply, CPU1 fault, or stalled renderer. Hold both OCT buttons for two
+seconds to return to the bootloader. If the panel stops responding, hold
+REC while powering on to enter the bootloader directly.
 
-### CPU0 render worker
+To compare this firmware with the CPU0 renderer in `0f0f38b`, cold-boot each
+image on the same FM-1 at the same MASTER level. Press PLAY on the factory
+arrangement (two 303s, 808 and 909 at 122 BPM). Leave the default effects
+enabled. Play for 32 bars, sweep the first 303's cutoff and cycle through GLO,
+FX and the instrument scope at the same bars on both runs. Hold SAVE at the
+end and compare **WORKER US**, **REFILL US**, **OVERRUNS**, **SILENCES** and
+**DISCARDS**. The prep image exposes these fields on its LCD.
 
-ALNK0 pulls completed PCM from one CPU0 render task, one 128-frame period
-ahead. The renderer owns its graph and scratch buses. Its job carries the
-settings, changed chords, cue and USB session snapshot. The result includes
-mono Q23 PCM, a first-frame tag and the WaveGraph edit revision. CPU0 owns
-MASTER gain, DMA, USB, the display and both edit-queue endpoints. The RTICX
-channels transfer an exclusive slot reference between CPU0 tasks. A future
-CPU1 transport will need its own publication protocol on the reserved lines.
+### The CPU1 render worker
+
+CPU1 owns all four instruments, their sequencers, the mixer, sends, effects
+and scratch buses for the lifetime of the renderer. It renders one 128-frame
+block synchronously while CPU0 runs the panel, display and USB tasks under
+RTICX. The board-specific startup and mailbox follow the FM-1 BSP’s [CPU1
+bring-up][cpu1-probe] and [RTICX audio demo][cpu1-demo].
+
+The mailbox assumes reliable, coherent SRAM. The BSP demo verifies each
+sample of a known test waveform. WaveGraph renders arbitrary programs, so
+its successful boot handshake cannot rule out the [load-dependent SRAM
+misreads observed on one FM-1][cpu1-sram].
+
+CPU0's ALNK0 interrupt consumes a finished mono Q23 block, applies physical
+MASTER and refills the stereo DMA half. This keeps the existing one-block
+lookahead (about 2.90 ms). CPU0 publishes settings, changed chords, startup cue
+and USB session to the slot. Only the core holding the slot can access its
+payload. Scope and playhead updates follow a successful DMA write. Graph
+edits use WaveGraph's async controller on CPU0 and the receipt names the
+first frame accepted under the new revision.
+
+Factory-pattern and arpeggiator events retain their offsets within each block.
+Live panel and USB MIDI input still update CPU0's key-state snapshot. Pressing
+and releasing a note within a single snapshot interval can coalesce both edges.
+
+[cpu1-probe]: https://github.com/fm1-rust/fm1-rust/pull/83
+[cpu1-demo]: https://github.com/fm1-rust/fm1-rust/pull/84
+[cpu1-sram]: https://github.com/charlesvestal/fm1-x0x/issues/10
 
 The default build applies FX gain edits at the next available block. To exercise
 the late-block fallback on the board, build with

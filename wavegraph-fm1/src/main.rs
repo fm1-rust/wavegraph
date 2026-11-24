@@ -41,6 +41,8 @@ mod organ;
 mod overload;
 #[cfg(any(target_os = "none", test))]
 mod panel;
+#[cfg(target_os = "none")]
+mod peer;
 #[cfg(any(target_os = "none", test))]
 mod scope;
 #[cfg(target_os = "none")]
@@ -53,5 +55,5 @@ mod wavetable;
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
-    fm1_rticx::bsp::enter_download_mode()
+    peer::download()
 }
