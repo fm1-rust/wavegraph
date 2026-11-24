@@ -105,6 +105,20 @@ impl Clock {
         (index, (i + 1) % cycle)
     }
 
+    /// Advance over inaudible frames, preserving the next step and its fractional
+    /// timing. Return the previously sounding pitch so the caller can release it.
+    pub fn skip(&mut self, chord: &Chord, config: Config, bpm: u16, frames: usize) -> Option<u8> {
+        if frames == 0 {
+            return None;
+        }
+        let sounding = self.active;
+        let Ok(()) = self.render(chord, config, bpm, frames, |_| {
+            Ok::<_, core::convert::Infallible>(())
+        });
+        self.active = None;
+        sounding
+    }
+
     /// Emit events at offsets within this block. An empty chord immediately
     /// releases its output. The first step of a new chord sounds at frame zero.
     /// Rate and gate edits apply to the next step. A zero-frame call delivers

@@ -13,7 +13,7 @@ use embedded_graphics::{
 };
 use fm1_graphics::Rgb565;
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Display, Error},
+    bsp::display::{AsyncDisplay, Error},
     time::Clock,
 };
 use wavegraph_808::Controls;
@@ -23,8 +23,8 @@ const RIM: Rgb565 = Rgb565::new(15, 29, 13);
 const RUBBER: Rgb565 = Rgb565::new(5, 10, 5);
 const PANEL: Rgb565 = STYLE_808.background;
 
-pub(super) fn status(
-    lcd: &mut Display,
+pub(super) async fn status(
+    lcd: &mut AsyncDisplay<'_, Clock>,
     pixels: &mut [[u8; 2]],
     selector: &Selector,
     (channel, kit_scope, transport): (Channel, bool, &str),
@@ -52,10 +52,11 @@ pub(super) fn status(
     window.rect(Point::new(58, 6), Size::new(5, 4), selector.shade(lamp));
     window.label(transport, Point::new(69, 3), left, ink);
     lcd.write_rect_buffered(8, 34, 103, 15, window.pixels.as_flattened())
+        .await
 }
 
-pub(super) fn controls(
-    lcd: &mut Display,
+pub(super) async fn controls(
+    lcd: &mut AsyncDisplay<'_, Clock>,
     pixels: &mut [[u8; 2]],
     selector: &Selector,
     c: Controls,
@@ -67,7 +68,8 @@ pub(super) fn controls(
         for (x, title) in [(114, "BASS DRUM"), (174, "SNARE")] {
             let mut group = Band::new(pixels, 0, 0, 60, 10, paper);
             group.label(title, Point::new(30, 0), Alignment::Center, ink);
-            lcd.write_rect_buffered(x, 0, 60, 10, group.pixels.as_flattened())?;
+            lcd.write_rect_buffered(x, 0, 60, 10, group.pixels.as_flattened())
+                .await?;
         }
     }
     let knobs = |c: Controls| [c.kick_tone, c.kick_decay, c.snare_tone, c.snappy];
@@ -99,7 +101,8 @@ pub(super) fn controls(
             Alignment::Center,
             selector.shade(HOT),
         );
-        lcd.write_rect_buffered(114 + 30 * i as u16, 10, 30, 41, dial.pixels.as_flattened())?;
+        lcd.write_rect_buffered(114 + 30 * i as u16, 10, 30, 41, dial.pixels.as_flattened())
+            .await?;
     }
     Ok(())
 }
@@ -159,7 +162,7 @@ pub(super) async fn switches(
         lcd.write_rect_buffered(x, 202, 54, 33, cap.pixels.as_flattened())
             .await?;
     }
-    lcd.flush().await
+    Ok(())
 }
 
 fn shadow(c: Rgb565) -> Rgb565 {

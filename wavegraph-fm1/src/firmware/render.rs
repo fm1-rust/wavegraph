@@ -27,6 +27,8 @@ pub(super) struct RenderBlock {
     pub(super) bass_cycle: Option<usize>,
     pub(super) midi: Batch,
     pub(super) work: u32,
+    pub(super) issued_at: u32,
+    pub(super) ready_at: u32,
     pub(super) stack_free: Option<u32>,
 }
 
@@ -47,6 +49,8 @@ impl RenderBlock {
             bass_cycle: None,
             midi: Batch::default(),
             work: 0,
+            issued_at: 0,
+            ready_at: 0,
             stack_free: None,
         }
     }
@@ -67,6 +71,7 @@ impl RenderBlock {
 pub(super) struct Renderer {
     instrument: &'static mut Instrument<'static>,
     buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
+    next_frame: u64,
     meter: Meter,
     assignments: [Assignment; CHANNELS],
 }
@@ -79,6 +84,7 @@ impl Renderer {
         Self {
             instrument,
             buses,
+            next_frame: 0,
             meter: Meter::default(),
             assignments: Navigation::INITIAL.assignments,
         }
@@ -86,10 +92,17 @@ impl Renderer {
 
     // Keep the DSP call frame out of the RTICX dispatcher's frame.
     #[inline(never)]
-    pub(super) fn render(&mut self, block: &mut RenderBlock) {
+    pub(super) fn render(&mut self, first_frame: u64, block: &mut RenderBlock) {
         let settings = &block.settings;
         let nav = settings.nav;
         let graph = &mut *self.instrument;
+        let skipped = first_frame.wrapping_sub(self.next_frame);
+        if skipped != 0 {
+            // CPU0 stops an unresponsive worker after one second.
+            let frames = usize::try_from(skipped).expect("one outstanding render slot");
+            graph.skip_frames(frames).expect("bounded recovery events");
+        }
+        self.next_frame = first_frame.wrapping_add(OUTPUT_FRAMES as u64);
         if graph.half_gain != block.half_gain {
             graph
                 .set_half_gain(block.half_gain)

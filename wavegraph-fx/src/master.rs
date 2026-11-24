@@ -37,7 +37,11 @@ pub enum MasterControls {
 }
 
 const FULL: f32 = 8_388_608.0;
-const WINDOW: u8 = 16;
+const WINDOW: u8 = if cfg!(feature = "short-detector-probe") {
+    4
+} else {
+    16
+};
 
 fn gain(db: i8) -> f32 {
     libm::powf(10.0, f32::from(db) / 20.0)
@@ -46,7 +50,7 @@ fn gain(db: i8) -> f32 {
 /// Mono master insert. EQ, compression, makeup and limiting all operate
 /// before the final Q23 conversion. Use [`Self::process_sample`] to pass a
 /// wide bus sum directly without first clipping it to a signal port.
-/// The compressor observes consecutive 16-sample peaks. The independent
+/// The compressor observes consecutive 16-sample peaks (four in the detector probe). The independent
 /// zero-lookahead limiter acts on every sample, including the first transient.
 #[derive(Clone, Copy, Debug)]
 pub struct MasterBus {

@@ -1077,6 +1077,7 @@ impl Programs {
             bass_cycles: [None; CHANNELS],
             reduction: 0,
             previous: None,
+            gap_events: false,
         })
     }
 }
@@ -1101,6 +1102,7 @@ pub(super) struct Instrument<'a> {
     pub(super) bass_cycles: [Option<usize>; CHANNELS],
     pub(super) reduction: u8,
     previous: Option<[Track; CHANNELS]>,
+    gap_events: bool,
 }
 
 impl Instrument<'_> {
@@ -1153,6 +1155,60 @@ impl Instrument<'_> {
         self.player.requested = slots;
     }
 
+    /// Advance the clip and arp clocks without rendering inaudible DSP blocks.
+    /// Parking the clip lanes releases their old gates; re-enabling them in
+    /// the next render chases the controllers at the new playhead.
+    pub(super) fn skip_frames(&mut self, frames: usize) -> Result<(), Error> {
+        let Some(tracks) = &self.previous else {
+            return Ok(());
+        };
+        if frames == 0 {
+            return Ok(());
+        }
+        for events in self.events.iter_mut() {
+            events.clear();
+        }
+        self.player.render(
+            frames,
+            self.transport,
+            tracks,
+            [false; CHANNELS],
+            |c, event| {
+                // A held synth gate needs a release. Drum one-shots and FX tails
+                // can resume from their current state when the DAC catches up.
+                if !matches!(event.message, Message::Drum(DrumMessage::Stop)) {
+                    self.events[c.index()]
+                        .push(event)
+                        .map_err(|_| Error::Capacity)?;
+                }
+                Ok(())
+            },
+            |_, _| {},
+        )?;
+        for (i, arp) in self.arps.iter_mut().enumerate() {
+            let track = &tracks[i];
+            if track.arp.enabled
+                && !arp.chord.is_empty()
+                && let Some(note) =
+                    arp.clock
+                        .skip(&arp.chord, track.arp.config, self.transport.bpm, frames)
+            {
+                arp::route(
+                    track,
+                    Event {
+                        frame: 0,
+                        port: 0,
+                        message: MidiMessage::Off(note),
+                    },
+                    &mut self.events[i],
+                    |_| {},
+                )?;
+            }
+        }
+        self.gap_events = true;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(super) fn render<'b, const N: usize>(
         &mut self,
@@ -1171,6 +1227,7 @@ impl Instrument<'_> {
         let mut inserts = Vec::<_, 8>::new();
         let mut enabled = self.sequences;
         let mut live_counts = [0; CHANNELS];
+        let recovering = core::mem::take(&mut self.gap_events);
         for (i, events) in self.events.iter_mut().enumerate() {
             let track = tracks[i];
             let part = track.assignment.part;
@@ -1204,7 +1261,9 @@ impl Instrument<'_> {
                     _ => true,
                 });
             }
-            events.clear();
+            if !recovering || old.is_none() {
+                events.clear();
+            }
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
@@ -1395,6 +1454,68 @@ mod tests {
 
     fn note(number: u8, velocity: u8) -> Note {
         Note { number, velocity }
+    }
+
+    #[test]
+    fn dropped_time_keeps_the_next_factory_kick_and_note_on_the_dac_timeline() -> Result<(), Error>
+    {
+        extern crate alloc;
+        use alloc::vec::Vec as TestVec;
+        type Playback = (TestVec<(usize, Channel, u8)>, TestVec<Option<Position>>);
+        fn run(gap: bool) -> Result<Playback, Error> {
+            let mut attacks = TestVec::new();
+            let mut positions = TestVec::new();
+            with_instrument(44_118, |engine| {
+                let tracks = Track::rack(Navigation::INITIAL.assignments);
+                let mut buses = [[I24::default(); 128]; BUS_COUNT];
+                engine.transport.toggle();
+                engine.render(tracks, &mut buses)?;
+                // This span contains a gate release and a kick. Discard their
+                // output and compare the following bar to uninterrupted playback.
+                const BLOCKS: usize = 350;
+                if gap {
+                    engine.skip_frames(BLOCKS * 128)?;
+                    assert!(
+                        engine
+                            .events
+                            .iter()
+                            .flatten()
+                            .any(|e| matches!(e.message, Message::Bass(BassMessage::NoteOff(_))))
+                    );
+                } else {
+                    let (mut off, mut kick) = (false, false);
+                    for _ in 0..BLOCKS {
+                        engine.render_with_midi(&tracks, &mut buses, |c, e| match e.message {
+                            MidiMessage::Off(_) => off = true,
+                            MidiMessage::On(n) if c == Channel::Three && n.number == 36 => {
+                                kick = true
+                            }
+                            _ => (),
+                        })?;
+                    }
+                    assert!(off && kick);
+                }
+                for block in 0..400 {
+                    engine.render_with_midi(&tracks, &mut buses, |c, e| {
+                        if let MidiMessage::On(n) = e.message {
+                            attacks.push((block * 128 + e.frame, c, n.number));
+                        }
+                    })?;
+                    positions.push(engine.position);
+                }
+                Ok(())
+            })?;
+            Ok((attacks, positions))
+        }
+        let continuous = run(false)?;
+        assert!(
+            continuous
+                .0
+                .iter()
+                .any(|&(_, c, n)| c == Channel::Four && n == 36)
+        );
+        assert_eq!(run(true)?, continuous);
+        Ok(())
     }
 
     #[test]

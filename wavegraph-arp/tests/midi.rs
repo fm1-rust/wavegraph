@@ -1,5 +1,5 @@
 //! Exercise the public patch object at event, gate and DMA boundaries.
-use wavegraph_arp::{Arpeggiator, Config, Division, Mode};
+use wavegraph_arp::{Arpeggiator, Chord, Clock, Config, Division, Mode};
 use wavegraph_core::{
     Event, Port, Process, ProcessContext,
     midi::{MidiMessage, Note},
@@ -300,4 +300,29 @@ fn crossing_a_tempo_edit_finishes_the_current_step_and_a_release_wins_at_the_nex
         block(&mut arp, 500, &[at(150, MidiMessage::Off(57))]),
         [at(25, MidiMessage::Off(57))]
     );
+}
+
+#[test]
+fn skipped_steps_release_the_old_gate_and_preserve_the_next_attack() {
+    let mut chord = Chord::new();
+    for n in [60, 64, 67] {
+        chord.input(on(n, 88), false);
+    }
+    let mut clock = Clock::new(1000, 1).expect("test sample clock");
+    let config = Config::INITIAL;
+    clock
+        .render(&chord, config, 120, 10, |_| Ok::<_, ()>(()))
+        .expect("first attack");
+    assert_eq!(clock.skip(&chord, config, 120, 0), None);
+    assert_eq!(clock.sounding(), Some(60));
+    assert_eq!(clock.skip(&chord, config, 120, 260), Some(60));
+    assert_eq!(clock.sounding(), None);
+    let mut events = Vec::new();
+    clock
+        .render(&chord, config, 120, 108, |e| {
+            events.push(e);
+            Ok::<_, ()>(())
+        })
+        .expect("next step");
+    assert_eq!(events, [at(105, on(60, 88))]);
 }

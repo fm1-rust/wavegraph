@@ -35,13 +35,21 @@ pub(super) enum Severity {
     Red,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum Cause {
+    #[default]
+    Service,
+    Dma,
+    Worker,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Overrun {
     pub(super) number: u32,
     at: u32,
     work: u32,
     gap: u32,
-    dma_late: bool,
+    cause: Cause,
 }
 
 impl Overrun {
@@ -59,9 +67,12 @@ impl Overrun {
             micros(self.gap)
         )
         .expect("bounded decimal fields");
-        if self.dma_late {
-            line.push_str(" DMA").expect("fits one log line");
-        }
+        let suffix = match self.cause {
+            Cause::Dma => " DMA",
+            Cause::Worker => " DSP",
+            Cause::Service => "",
+        };
+        line.push_str(suffix).expect("fits one log line");
         line
     }
 }
@@ -74,7 +85,8 @@ pub struct Overloads {
 }
 
 impl Overloads {
-    pub(super) fn record(&mut self, number: u32, at: u32, work: u32, gap: u32, dma_late: bool) {
+    pub(super) fn record(&mut self, at: u32, work: u32, gap: u32, cause: Cause) {
+        let number = self.recent[1].number.saturating_add(1);
         self.recent = [
             self.recent[1],
             Overrun {
@@ -82,7 +94,7 @@ impl Overloads {
                 at,
                 work,
                 gap,
-                dma_late,
+                cause,
             },
         ];
     }
@@ -124,22 +136,23 @@ mod tests {
     fn dot_expires_and_repeated_misses_turn_it_red_across_tick_wrap() {
         let mut health = Overloads::default();
         assert_eq!(health.severity(0), None);
-        health.record(1, u32::MAX - 10, 48_000, 69_632, false);
+        health.record(u32::MAX - 10, 48_000, 69_632, Cause::Service);
         assert_eq!(health.severity(0), Some(Severity::Amber));
-        health.record(2, 1, 70_000, 69_700, true);
+        health.record(1, 70_000, 69_700, Cause::Dma);
         assert_eq!(health.severity(50), Some(Severity::Red));
         assert_eq!(health.severity(101), None);
-        health.record(3, 150, 48_000, 69_632, false);
+        health.record(150, 48_000, 69_632, Cause::Worker);
         assert_eq!(health.severity(150), Some(Severity::Amber));
         let mut events = health.events();
         assert_eq!(events.next().unwrap().line(), "XR2 T10 W2916 G2904 DMA");
-        assert_eq!(events.next().unwrap().line(), "XR3 T1500 W2000 G2901");
+        assert_eq!(events.next().unwrap().line(), "XR3 T1500 W2000 G2901 DSP");
     }
 
     #[test]
     fn worst_case_record_fits_one_usb_log_line() {
         let mut health = Overloads::default();
-        health.record(u32::MAX, u32::MAX, u32::MAX, u32::MAX, true);
+        health.recent[1].number = u32::MAX - 1;
+        health.record(u32::MAX, u32::MAX, u32::MAX, Cause::Dma);
         assert_eq!(
             health.events().last().unwrap().line(),
             "XR4294967295 T42949672950 W99999 G99999 DMA"

@@ -1,6 +1,6 @@
 //! Blue rack face, red position dial and a green readout around the live scope.
 
-use super::{BAND, GRID, mixer::Band, selector::Selector};
+use super::{GRID, mixer::Band, selector::Selector};
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{envelope::EnvelopeTarget, firmware::Labels, panel::Channel, wavetable::Program};
 use embedded_graphics::{
@@ -151,9 +151,31 @@ impl Panel {
                 ),
                 (180, "4 MODE", mode, true),
             ] {
+                if !entering
+                    && self.controls.is_some_and(|old| {
+                        let old_env = old.scan.mode == Mode::Envelope;
+                        let old_moving = matches!(old.scan.mode, Mode::OneShot | Mode::PingPong);
+                        match x {
+                            0 => old.scan.start == scan.start,
+                            60 => old.scan.end == scan.end && enabled == (old_moving || old_env),
+                            120 => {
+                                old_env == env
+                                    && enabled == (old_moving || old_env)
+                                    && if env {
+                                        old.position_envelope.adsr().attack_us == us
+                                    } else {
+                                        old.scan.travel_ms == scan.travel_ms
+                                    }
+                            }
+                            _ => old.scan.mode == scan.mode,
+                        }
+                    })
+                {
+                    continue;
+                }
                 let left = i32::from(x);
-                for y in (200..240).step_by(BAND) {
-                    let mut band = Band::new(pixels, x, y, 60, 8, ink(FACE));
+                for y in [200, 220] {
+                    let mut band = Band::new(pixels, x, y, 60, 20, ink(FACE));
                     band.rect(Point::new(left, 200), Size::new(60, 2), ink(SHADOW));
                     band.label(name, Point::new(left + 30, 204), Center, ink(PRINT));
                     band.rect(Point::new(left + 3, 217), Size::new(54, 17), ink(SHADOW));
@@ -168,7 +190,7 @@ impl Panel {
                         Center,
                         ink(if enabled { INK } else { PRINT }),
                     );
-                    lcd.write_rect_buffered(x, y, 60, 8, band.pixels.as_flattened())
+                    lcd.write_rect_buffered(x, y, 60, 20, band.pixels.as_flattened())
                         .await?;
                 }
             }

@@ -9,6 +9,9 @@ keywords = ["audio", "dsp", "reverb", "no-alloc"]
 edition = "2024"
 rust-version.workspace = true
 
+[features]
+short-detector-probe = []
+
 [dependencies]
 libm = "0.2"
 wavegraph-core.workspace = true

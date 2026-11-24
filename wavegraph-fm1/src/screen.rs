@@ -13,14 +13,15 @@ use crate::{
 };
 use core::{
     future::{Future, poll_fn},
+    ops::Range,
     pin::{Pin, pin},
     task::{Context, Poll},
 };
-use embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
+use embedded_graphics::pixelcolor::raw::ToBytes;
 use fm1_graphics::{Rgb565, TextGrid, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
-        display::{Display, Error, SIZE},
+        display::{AsyncDisplay, Display, Error, SIZE},
         time::ticks,
     },
     time::Clock,
@@ -86,6 +87,27 @@ const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
+
+// Reuse the raster strip for the whole fill. Each buffered write copies its
+// pixels into the BSP's DMA staging area before the strip can be reused.
+async fn fill_rows(
+    lcd: &mut AsyncDisplay<'_, Clock>,
+    strip: &mut [[u8; 2]],
+    left: u16,
+    rows: Range<u16>,
+    color: Rgb565,
+) -> Result<(), Error> {
+    let width = SIZE - left;
+    let pixels = &mut strip[..usize::from(width) * rows.len().min(BAND)];
+    pixels.fill(color.to_be_bytes());
+    for y in rows.clone().step_by(BAND) {
+        let height = (rows.end - y).min(BAND as u16);
+        let count = usize::from(width) * usize::from(height);
+        lcd.write_rect_buffered(left, y, width, height, pixels[..count].as_flattened())
+            .await?;
+    }
+    lcd.flush().await
+}
 
 // Keep the envelope DMA state machine out of paint_page's poll function.
 // The combined function exceeds the pi32v2 conditional branch range.
@@ -251,9 +273,9 @@ impl Screen {
                 .await?;
             if entering {
                 // The curve's dirty tiles stay between the two label bands.
-                let background = face.into_storage();
-                lcd.fill_rect(0, 0, SIZE, header, background)?;
-                lcd.fill_rect(0, 192, SIZE, SIZE - 192, background)?;
+                let mut lcd = lcd.as_async(clock)?;
+                fill_rows(&mut lcd, self.strip, 0, 0..header, face).await?;
+                fill_rows(&mut lcd, self.strip, 0, 192..SIZE, face).await?;
             }
             if entering
                 || !matches!(previous, Some(Page::Envelope(_, old, _, hint)) if old == target && hint == show_mode_hint)
@@ -321,7 +343,14 @@ impl Screen {
         if previous != Some(page) {
             if !matches!(previous, Some(Page::BassEnvelope(..))) {
                 self.change_view(SILVER);
-                lcd.fill_rect(0, 0, SIZE, SIZE, SILVER.background.into_storage())?;
+                fill_rows(
+                    &mut lcd.as_async(clock)?,
+                    self.strip,
+                    0,
+                    0..SIZE,
+                    SILVER.background,
+                )
+                .await?;
                 for lane in &mut *self.lanes {
                     lane.invalidate();
                 }
@@ -392,7 +421,13 @@ impl Screen {
             self.change_view(style);
             self.selector
                 .badge
-                .fill_rows(lcd, 0, SIZE, style.background)?;
+                .fill_rows(
+                    &mut lcd.as_async(clock)?,
+                    self.strip,
+                    0..SIZE,
+                    style.background,
+                )
+                .await?;
             self.text.text(
                 12,
                 0,
@@ -474,10 +509,18 @@ impl Screen {
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
             self.selector.select(None);
             self.change_view(STYLE);
-            lcd.fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())?;
+            fill_rows(
+                &mut lcd.as_async(clock)?,
+                self.strip,
+                0,
+                0..SIZE,
+                STYLE.background,
+            )
+            .await?;
         }
         let title = match t.boot {
             0 => "CPU1 BOOT TIMEOUT   ",
+            1 if t.starving => "AUDIO STARVATION    ",
             1 => "CPU0 UI / CPU1 DSP  ",
             2 => "CPU1 BAD CONTEXT    ",
             3 => "CPU1 BAD REPLY      ",
@@ -489,12 +532,36 @@ impl Screen {
             0,
             0,
             title,
-            if t.boot == 1 {
+            if t.boot == 1 && !t.starving {
                 palette::GREEN
             } else {
                 palette::RED
             },
         );
+        // Peak request-to-ready time, then minimum slack on ordinary and scanned blocks.
+        self.text.text(0, 1, "R", palette::MUTED);
+        self.text
+            .number(1, 1, 5, t.ready.div_ceil(24).min(99_999), palette::GREEN);
+        for (x, label, value) in [(7, "N", t.margin), (14, "W", t.scan_margin)] {
+            self.text.text(x, 1, label, palette::MUTED);
+            if let Some(ticks) = value {
+                let color = if ticks < 0 {
+                    palette::RED
+                } else {
+                    palette::GREEN
+                };
+                // Floor toward a miss, including a result one TIMER4 tick late.
+                self.text.signed_number(
+                    x + 1,
+                    1,
+                    5,
+                    ticks.div_euclid(24).clamp(-9999, 9999),
+                    color,
+                );
+            } else {
+                self.text.text(x + 1, 1, "    -", palette::MUTED);
+            }
+        }
         for (i, (label, value)) in [
             ("USP FREE B", wavegraph_usp_free()),
             ("SSP FREE B", wavegraph_ssp_free()),
@@ -551,7 +618,10 @@ impl Screen {
                     .to_be_bytes()
                 })
             });
-            lcd.write_rect_buffered(SIZE - 10, 4, 7, 7, pixels.as_flattened().as_flattened())?;
+            let mut lcd = lcd.as_async(clock)?;
+            lcd.write_rect_buffered(SIZE - 10, 4, 7, 7, pixels.as_flattened().as_flattened())
+                .await?;
+            lcd.flush().await?;
             self.dot = severity;
         }
         Ok(())
@@ -568,12 +638,16 @@ impl Screen {
         let elapsed = labels
             .preset_since
             .and_then(|since| preset_age(since, ticks()));
-        self.selector.badge.select(
-            lcd,
-            self.strip,
-            self.text,
-            (labels.view == View::Scope && elapsed.is_some()).then_some(labels.channel),
-        )?;
+        self.selector
+            .badge
+            .select(
+                lcd,
+                clock,
+                self.strip,
+                self.text,
+                (labels.view == View::Scope && elapsed.is_some()).then_some(labels.channel),
+            )
+            .await?;
         let menu = if elapsed.is_some_and(|age| age < MENU_TICKS) {
             match labels.view {
                 View::Scope => Some(Menu::Channels {
@@ -796,14 +870,19 @@ impl Screen {
             } else if wave {
                 self.dot_background = self.selector.shade(microwave::FACE);
             }
+            let mut lcd = lcd.as_async(clock)?;
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 self.selector
                     .badge
-                    .fill_rows(lcd, y, height, self.dot_background)?;
+                    .fill_rows(&mut lcd, self.strip, y..y + height, self.dot_background)
+                    .await?;
             }
             if bass {
                 for y in [header - 1, SIZE - footer] {
-                    self.selector.badge.fill_rows(lcd, y, 1, muted)?;
+                    self.selector
+                        .badge
+                        .fill_rows(&mut lcd, self.strip, y..y + 1, muted)
+                        .await?;
                 }
             }
         }
@@ -856,10 +935,10 @@ impl Screen {
                 .await;
         }
         if drums {
+            let mut display = lcd.as_async(clock)?;
             self.drums
                 .paint(
-                    lcd,
-                    clock,
+                    &mut display,
                     self.strip,
                     self.selector,
                     changed_page,
@@ -870,20 +949,24 @@ impl Screen {
             let status = transport_status(&labels);
             let source = if labels.voice_tap { b"KIT" } else { b"DAC" };
             if labels.focus == Part::Tr808 {
-                self.drums.controls(
-                    lcd,
-                    self.strip,
-                    self.selector,
-                    labels.drums808,
-                    changed_page,
-                )?;
-                self.drums.status808(
-                    lcd,
-                    self.strip,
-                    self.selector,
-                    (labels.channel, labels.voice_tap, status),
-                    changed_page,
-                )?;
+                self.drums
+                    .controls(
+                        &mut display,
+                        self.strip,
+                        self.selector,
+                        labels.drums808,
+                        changed_page,
+                    )
+                    .await?;
+                self.drums
+                    .status808(
+                        &mut display,
+                        self.strip,
+                        self.selector,
+                        (labels.channel, labels.voice_tap, status),
+                        changed_page,
+                    )
+                    .await?;
             } else {
                 self.text
                     .number(12, 1, 3, u32::from(labels.seq.transport.bpm), muted);
@@ -894,6 +977,8 @@ impl Screen {
                 self.text.text(7, 2, source, muted);
                 self.text.text(15, 2, status.as_bytes(), ink);
             }
+            display.flush().await?;
+            drop(display);
             return self.text.paint_async(lcd, clock).await;
         }
         let part = labels.focus;
@@ -1029,7 +1114,7 @@ impl Screen {
         sweep: Sweep,
         style: WaveformStyle,
         track: Part,
-        (rows, center): (core::ops::Range<u16>, u16),
+        (rows, center): (Range<u16>, u16),
     ) -> Result<(), Error> {
         if self.sweep.as_ref() == Some(&sweep) {
             return Ok(());
@@ -1050,7 +1135,13 @@ impl Screen {
             )
         });
         let damage = if let Some(old) = self.sweep.take() {
-            sweep.damage(&old, palette)
+            use crate::scope::Stripes;
+            let stripes = match track {
+                Part::Bass | Part::Organ | Part::Supersaw => Stripes::Fine,
+                Part::Tr808 | Part::Tr909 => Stripes::Wide,
+                Part::Mono | Part::Wavetable => Stripes::Normal,
+            };
+            sweep.damage(&old, palette, stripes)
         } else {
             Damage::full(
                 usize::from(rows.start)..usize::from(rows.end),

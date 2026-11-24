@@ -45,130 +45,183 @@ pub(super) enum Scale {
     Auto,
 }
 
-pub(super) struct Capture {
-    samples: [i32; WIDTH],
+// Two half-sized sample arrays fit in the space previously used for one i32 sweep.
+// Q15 is ample for a 192-row trace. Triggering still observes the original Q23.
+struct SweepBuffer {
+    samples: [i16; WIDTH],
     filled: usize,
-    previous: Option<i32>,
-    holdoff: u8,
-    column_sum: i32,
-    column_len: u8,
-    silence_reported: bool,
+    sum: i32,
+    count: u8,
+    active: bool,
 }
 
-impl Capture {
-    pub(super) const fn new() -> Self {
+impl SweepBuffer {
+    const fn new() -> Self {
         Self {
             samples: [0; WIDTH],
             filled: 0,
-            previous: None,
-            holdoff: 0,
-            column_sum: 0,
-            column_len: 0,
-            silence_reported: false,
+            sum: 0,
+            count: 0,
+            active: false,
         }
     }
 
-    pub(super) fn reset(&mut self) {
+    fn reset(&mut self) {
         self.filled = 0;
-        self.previous = None;
-        self.holdoff = 0;
-        self.column_sum = 0;
-        self.column_len = 0;
-        self.silence_reported = false;
+        self.sum = 0;
+        self.count = 0;
+        self.active = false;
     }
 
-    /// An actual silent output also acquires, so stopping clears the last note.
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "The x coordinate resets at WIDTH; the holdoff decrements only when positive."
+        reason = "The sum of five shifted Q23 samples fits i32 and the column count resets at WIDTH."
     )]
-    pub(super) fn push(&mut self, samples: &[i32], scale: Scale) -> Option<Trace> {
-        let silent = samples.iter().all(|&sample| sample == 0);
-        if self.holdoff > 0 && !silent {
-            self.holdoff -= 1;
-            self.previous = samples.last().copied();
+    fn bass_sample(&mut self, sample: i32) -> Option<Trace> {
+        if !self.active {
             return None;
         }
-        for &sample in samples {
-            let previous = self.previous.replace(sample);
-            if self.filled == 0 && !silent && !previous.is_some_and(|p| p < 0 && sample >= 0) {
-                continue;
-            }
-            self.samples[self.filled] = sample >> 7;
-            self.filled += 1;
-            if self.filled == WIDTH {
-                self.filled = 0;
-                self.holdoff = 8;
-                self.previous = samples.last().copied();
-                return Some(self.trace(scale));
-            }
+        self.sum += sample >> 7;
+        self.count += 1;
+        if self.count != BASS_SAMPLES_PER_COLUMN {
+            return None;
         }
-        None
+        let mean = self.sum / i32::from(BASS_SAMPLES_PER_COLUMN);
+        self.sum = 0;
+        self.count = 0;
+        self.column(mean >> 1, Scale::Auto)
     }
 
-    /// Trigger on a real oscillator wrap and average five filtered samples per column.
     #[allow(
         clippy::arithmetic_side_effects,
-        reason = "Five shifted Q23 samples fit in i32. Both counters reset at their bounds."
+        reason = "The column count resets at WIDTH."
     )]
-    pub(super) fn push_bass(&mut self, samples: &[i32], cycle: Option<usize>) -> Option<Trace> {
-        let mut active = self.filled != 0 || self.column_len != 0;
-        if !active && cycle.is_none() {
-            if !self.silence_reported && !samples.is_empty() && samples.iter().all(|&s| s == 0) {
-                self.silence_reported = true;
-                return Some(FLAT);
-            }
+    fn column(&mut self, value: i32, scale: Scale) -> Option<Trace> {
+        self.samples[self.filled] = i16::try_from(value).expect("Q23 tap reduced to Q15");
+        self.filled += 1;
+        if self.filled != WIDTH {
             return None;
         }
-
-        let mut trace = None;
-        for (frame, &sample) in samples.iter().enumerate() {
-            if !active {
-                if cycle != Some(frame) {
-                    continue;
-                }
-                active = true;
-                self.silence_reported = false;
-            }
-            self.column_sum += sample >> 7;
-            self.column_len += 1;
-            if self.column_len == BASS_SAMPLES_PER_COLUMN {
-                self.samples[self.filled] = self.column_sum / i32::from(BASS_SAMPLES_PER_COLUMN);
-                self.column_sum = 0;
-                self.column_len = 0;
-                self.filled += 1;
-                if self.filled == WIDTH {
-                    trace = Some(self.trace(Scale::Auto));
-                    self.filled = 0;
-                    // A low D can wrap again just two samples after this sweep.
-                    // Keep the rest of the DMA block available to the next trigger.
-                    active = false;
-                }
-            }
-        }
-        trace
+        self.filled = 0;
+        self.active = false;
+        Some(self.trace(scale))
     }
 
     #[allow(
         clippy::arithmetic_side_effects,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
-        reason = "Fixed gain fits shifted PCM in i32. Auto gain times the measured peak is at most 88 << 16. Rows are clamped before conversion."
+        reason = "The peak bounds the normalized offset. Rows are clamped before conversion."
     )]
     fn trace(&self, scale: Scale) -> Trace {
         let (gain, shift) = match scale {
-            Scale::Fixed => (21, 10),
+            Scale::Fixed => (21, 9),
             Scale::Auto => {
-                // At most 88 capture rows either side of zero. Below -36 dBFS
-                // freeze the gain so a decaying note still shrinks to silence.
-                let peak = self.samples.iter().fold(1024, |p, &s| p.max(s.abs()));
+                let peak = self
+                    .samples
+                    .iter()
+                    .map(|&s| i32::from(s).abs())
+                    .fold(512, i32::max);
                 ((88 << 16) / peak, 16)
             }
         };
-        core::array::from_fn(|x| {
-            let offset = (self.samples[x] * gain) >> shift;
+        self.samples.map(|s| {
+            let offset = (i32::from(s) * gain) >> shift;
             (i32::from(CENTER) - offset).clamp(0, i32::from(LAST_ROW)) as u8
         })
+    }
+}
+
+pub(super) struct Capture {
+    primary: SweepBuffer,
+    overlap: SweepBuffer,
+    previous: Option<i32>,
+    silence_reported: bool,
+}
+
+impl Capture {
+    pub(super) const fn new() -> Self {
+        Self {
+            primary: SweepBuffer::new(),
+            overlap: SweepBuffer::new(),
+            previous: None,
+            silence_reported: false,
+        }
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.primary.reset();
+        self.overlap.reset();
+        self.previous = None;
+        self.silence_reported = false;
+    }
+
+    /// Rearm on the next rising crossing. A flat input publishes once, even when
+    /// the DAC continues to accept hundreds of silent blocks per second.
+    pub(super) fn push(&mut self, samples: &[i32], scale: Scale) -> Option<Trace> {
+        if samples.is_empty() {
+            return None;
+        }
+        let silent = samples.iter().all(|&s| s == 0);
+        if silent && self.silence_reported {
+            return None;
+        }
+        let mut onset = !silent && self.silence_reported;
+        if !silent {
+            self.silence_reported = false;
+        }
+        let mut latest = None;
+        for &sample in samples {
+            let previous = self.previous.replace(sample);
+            if !self.primary.active {
+                if !silent
+                    && !(onset && sample != 0 || previous.is_some_and(|p| p < 0 && sample >= 0))
+                {
+                    continue;
+                }
+                self.primary.active = true;
+                onset = false;
+            }
+            if let Some(trace) = self.primary.column(sample >> 8, scale) {
+                self.silence_reported = silent && trace == FLAT;
+                latest = Some(trace);
+                if self.silence_reported {
+                    break;
+                }
+            }
+        }
+        latest
+    }
+
+    /// Start a second wrap-locked sweep once the first is at least half full.
+    /// Both retain the same 1,200 consecutive frames and the same slide time scale.
+    pub(super) fn push_bass(&mut self, samples: &[i32], cycle: Option<usize>) -> Option<Trace> {
+        if !self.primary.active && !self.overlap.active && cycle.is_none() {
+            if !self.silence_reported && !samples.is_empty() && samples.iter().all(|&s| s == 0) {
+                self.silence_reported = true;
+                return Some(FLAT);
+            }
+            return None;
+        }
+        let mut latest = None;
+        for (i, &sample) in samples.iter().enumerate() {
+            if cycle == Some(i) {
+                self.silence_reported = false;
+                if !self.primary.active
+                    && (!self.overlap.active || self.overlap.filled >= WIDTH / 2)
+                {
+                    self.primary.active = true;
+                } else if !self.overlap.active && self.primary.filled >= WIDTH / 2 {
+                    self.overlap.active = true;
+                }
+            }
+            let a = self.primary.bass_sample(sample);
+            let b = self.overlap.bass_sample(sample);
+            if let Some(trace) = a.or(b) {
+                latest = Some(trace);
+            }
+        }
+        latest
     }
 }
 
@@ -219,6 +272,19 @@ mod tests {
     }
 
     #[test]
+    fn silence_sleeps_until_the_first_attack_even_without_a_zero_crossing() {
+        let mut scope = Capture::new();
+        assert_eq!(scope.push(&[0; WIDTH], Scale::Fixed), Some(FLAT));
+        assert_eq!(scope.push(&[0; WIDTH], Scale::Fixed), None);
+        assert_eq!(scope.push(&[0, 0, 1 << 18], Scale::Fixed), None);
+        let trace = scope
+            .push(&[1 << 18; WIDTH - 1], Scale::Fixed)
+            .expect("complete attack");
+        assert_ne!(trace, FLAT);
+        assert!(trace.iter().all(|y| *y == trace[0]));
+    }
+
+    #[test]
     fn auto_range_preserves_shape_and_lets_quiet_tails_fade() {
         let sweep = |peak: i32| {
             let mut scope = Capture::new();
@@ -251,7 +317,7 @@ mod tests {
                 completed.push(block);
             }
         }
-        assert_eq!(completed, [10, 19]);
+        assert_eq!(completed, [10, 15, 19]);
 
         // Drop a partial column at a queue gap and wait for a fresh wrap.
         scope.reset();

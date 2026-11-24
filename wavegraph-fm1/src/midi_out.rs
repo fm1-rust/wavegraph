@@ -51,6 +51,22 @@ impl OutputQueue {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Retire partial writes and release every channel on the current USB session.
+    pub(super) fn silence(&mut self) -> bool {
+        if !self.active {
+            return false;
+        }
+        self.connect(true);
+        for channel in Channel::ALL {
+            for cc in [123, CC_SLIDE] {
+                self.queue
+                    .push_back([11, 0xb0 | channel as u8, cc, 0])
+                    .expect("four channels");
+            }
+        }
+        true
+    }
+
     pub(super) fn append(&mut self, batch: &Batch) -> bool {
         if !self.active || (batch.packets.is_empty() && !batch.lost) {
             return false;
@@ -58,15 +74,7 @@ impl OutputQueue {
         if batch.lost
             || self.queue.capacity().saturating_sub(self.queue.len()) < batch.packets.len()
         {
-            self.connect(true);
-            // The host may have missed a release. Silence each channel before resuming.
-            for channel in Channel::ALL {
-                for cc in [123, CC_SLIDE] {
-                    self.queue
-                        .push_back([11, 0xb0 | channel as u8, cc, 0])
-                        .expect("four channels");
-                }
-            }
+            self.silence();
         }
         if !batch.lost {
             for &(_, packet) in &batch.packets {
@@ -180,6 +188,47 @@ mod tests {
         out.sent(revision, 2);
         assert_eq!(out.peek(&mut packets).1, 1);
         assert_eq!(packets[0], [8, 0x83, 51, 64]);
+    }
+
+    #[test]
+    fn silence_retires_a_partial_usb_batch_and_releases_an_already_delivered_note() {
+        let mut out = OutputQueue::default();
+        assert!(!out.silence());
+        out.connect(true);
+        let mut batch = Batch::default();
+        batch.push(
+            Channel::One,
+            at(
+                0,
+                MidiMessage::On(Note {
+                    number: 60,
+                    velocity: 90,
+                }),
+            ),
+        );
+        batch.push(Channel::One, at(12, MidiMessage::Off(60)));
+        assert!(out.append(&batch));
+        let mut packets = [[0; 4]; 8];
+        let (old, count) = out.peek(&mut packets);
+        assert_eq!(count, 2);
+        assert_eq!(packets[0], [9, 0x90, 60, 90]);
+        out.sent(old, 1);
+        // USB has peeked the unsent suffix when CPU0 declares the fault.
+        assert_eq!(out.peek(&mut packets), (old, 1));
+        assert!(out.silence());
+        out.sent(old, 1);
+        let (current, count) = out.peek(&mut packets);
+        assert_ne!(current, old);
+        assert_eq!(count, 8);
+        for (pair, channel) in packets.as_chunks::<2>().0.iter().zip(Channel::ALL) {
+            assert_eq!(
+                *pair,
+                [
+                    [11, 0xb0 | channel as u8, 123, 0],
+                    [11, 0xb0 | channel as u8, CC_SLIDE, 0]
+                ]
+            );
+        }
     }
 
     #[test]

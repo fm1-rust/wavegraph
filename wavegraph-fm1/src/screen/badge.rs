@@ -1,23 +1,31 @@
 //! Temporary channel number in the upper-left corner of the LCD.
 
-use super::mixer::Band;
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::panel::Channel;
+use core::ops::Range;
 use embedded_graphics::{
     Drawable,
+    framebuffer::Framebuffer,
     mono_font::MonoTextStyle,
-    pixelcolor::{IntoStorage, RgbColor, raw::ToBytes},
+    pixelcolor::{
+        BinaryColor,
+        raw::{BigEndian, RawU1, ToBytes},
+    },
     prelude::Point,
     text::{Baseline, Text},
 };
 use fm1_graphics::{Rgb565, TextGrid, palette};
-use fm1_rticx::bsp::display::{Display, Error, SIZE};
+use fm1_rticx::{
+    bsp::display::{AsyncDisplay, Display, Error},
+    time::Clock,
+};
 
 // Two 12 × 16 text cells in each direction, anchored at LCD pixel (0, 0).
 const W: usize = 24;
 const H: usize = 32;
 type Pixel = [u8; 2];
-type Glyph = [[Pixel; W / 2]; H / 2];
+// The badge is monochrome. Pad the 12-pixel glyph to a two-byte scanline.
+type Glyph = Framebuffer<BinaryColor, RawU1, BigEndian, 16, 16, 32>;
 
 pub(super) struct ChannelBadge {
     channel: Option<Channel>,
@@ -29,14 +37,15 @@ impl ChannelBadge {
     pub(super) const fn new() -> Self {
         Self {
             channel: None,
-            glyph: [[[0; 2]; W / 2]; H / 2],
+            glyph: Glyph::new(),
             underneath: [[[0; 2]; W]; H],
         }
     }
 
-    pub(super) fn select(
+    pub(super) async fn select(
         &mut self,
         lcd: &mut Display,
+        clock: &mut Clock,
         strip: &mut [Pixel],
         grid: &mut TextGrid,
         channel: Option<Channel>,
@@ -44,29 +53,24 @@ impl ChannelBadge {
         if self.channel == channel {
             return Ok(());
         }
+        let mut lcd = lcd.as_async(clock)?;
         self.channel = channel;
         if let Some(channel) = channel {
-            let mut glyph = Band::new(
-                self.glyph.as_flattened_mut(),
-                0,
-                0,
-                (W / 2) as u16,
-                (H / 2) as u16,
-                Rgb565::BLACK,
-            );
+            self.glyph = Glyph::new();
             Text::with_baseline(
                 ["1", "2", "3", "4"][channel.index()],
                 Point::new(2, 1),
-                MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE),
+                MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On),
                 Baseline::Top,
             )
-            .draw(&mut glyph)
+            .draw(&mut self.glyph)
             .expect("infallible tile");
             let pixels = &mut strip[..W * H];
             for (y, row) in pixels.chunks_exact_mut(W).enumerate() {
                 self.draw_row(0, y, row);
             }
-            lcd.write_rect_buffered(0, 0, W as u16, H as u16, pixels.as_flattened())?;
+            lcd.write_rect_buffered(0, 0, W as u16, H as u16, pixels.as_flattened())
+                .await?;
         } else {
             // Invalidate the covered text so TextGrid rewrites the current header.
             for row in 0..2 {
@@ -78,9 +82,10 @@ impl ChannelBadge {
                 W as u16,
                 H as u16,
                 self.underneath.as_flattened().as_flattened(),
-            )?;
+            )
+            .await?;
         }
-        Ok(())
+        lcd.flush().await
     }
 
     pub(super) fn change_view(&mut self, background: Rgb565) {
@@ -89,30 +94,25 @@ impl ChannelBadge {
             .fill(background.to_be_bytes());
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "The covered rows are inside the fill rectangle"
-    )]
-    pub(super) fn fill_rows(
+    pub(super) async fn fill_rows(
         &mut self,
-        lcd: &mut Display,
-        y: u16,
-        height: u16,
+        lcd: &mut AsyncDisplay<'_, Clock>,
+        strip: &mut [Pixel],
+        mut rows: Range<u16>,
         color: Rgb565,
     ) -> Result<(), Error> {
-        let start = usize::from(y).min(H);
-        let end = usize::from(y.saturating_add(height)).min(H);
+        let start = usize::from(rows.start).min(H);
+        let end = usize::from(rows.end).min(H);
         self.underneath[start..end]
             .as_flattened_mut()
             .fill(color.to_be_bytes());
-        let covered = (end - start) as u16;
-        let ink = color.into_storage();
-        if covered == 0 || self.channel.is_none() {
-            return lcd.fill_rect(0, y, SIZE, height, ink);
+        if self.channel.is_some() && start < end {
+            let below = end as u16;
+            super::fill_rows(lcd, strip, W as u16, rows.start..below, color).await?;
+            rows.start = below;
         }
-        lcd.fill_rect(W as u16, y, SIZE - W as u16, covered, ink)?;
-        if covered < height {
-            lcd.fill_rect(0, y + covered, SIZE, height - covered, ink)?;
+        if !rows.is_empty() {
+            super::fill_rows(lcd, strip, 0, rows, color).await?;
         }
         Ok(())
     }
@@ -145,9 +145,14 @@ impl ChannelBadge {
     }
 
     fn draw_row(&self, x: usize, y: usize, pixels: &mut [Pixel]) {
-        let source = &self.glyph[y / 2];
+        let source = &self.glyph.data()[y / 2 * 2..];
         for (x, pixel) in (x..).zip(pixels) {
-            *pixel = source[x / 2];
+            let bit = x / 2;
+            *pixel = if source[bit / 8] & (0x80 >> (bit % 8)) != 0 {
+                [255; 2]
+            } else {
+                [0; 2]
+            };
         }
     }
 }

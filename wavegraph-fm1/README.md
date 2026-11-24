@@ -544,9 +544,20 @@ pages, change a pattern and turn a knob before reading the display.
   includes the subsequent interrupt work. Times round up from the 24 MHz clock.
   Compare them with the 69,632-tick (2,901.3 µs) half-buffer period.
   **OVERRUNS** counts the BSP's late DMA, interrupt duration and service gap checks.
+- **WORKER US** times graph rendering on CPU1. On the row above the stack
+  counters, **R** is peak microseconds from CPU0 issuing a job to CPU1 being
+  ready to publish it. **N** and **W** are minimum estimated microseconds left
+  until the next nominal refill, on ordinary jobs and jobs that scan the stack
+  watermark. CPU1 takes the timestamp before publishing. The estimate includes
+  dispatch and scanning, uses CPU0's interrupt entry as the deadline anchor,
+  and excludes the final mailbox send. Negative values indicate lateness.
+  The cold priming job is excluded from these three measurements.
 
 CPU0 opens the timing page when it detects a boot timeout, invalid context
-or reply, CPU1 fault, or stalled renderer. Hold both OCT buttons for two
+or reply, CPU1 fault, or stalled renderer. One second without a current DAC
+write opens **AUDIO STARVATION** even when the worker keeps returning expired
+jobs. The controls remain live and a timely write clears the alarm. A silent
+fallback also lights the overload dot and records a **DSP** event for USB logs. Hold both OCT buttons for two
 seconds to return to the bootloader. If the panel stops responding, hold
 REC while powering on to enter the bootloader directly.
 
@@ -577,7 +588,13 @@ lookahead (about 2.90 ms). CPU0 publishes settings, changed chords, startup cue
 and USB session to the slot. Only the core holding the slot can access its
 payload. Scope and playhead updates follow a successful DMA write. Graph
 edits use WaveGraph's async controller on CPU0 and the receipt names the
-first frame accepted under the new revision.
+first frame accepted under the new revision. A separate CPU0 task waits for
+the receipt, so other controls and USB MIDI continue while an edit is pending.
+On a missed half, CPU0 retires the outgoing MIDI batch and queues All Notes
+Off and slide reset for each channel. It also does this on terminal CPU1
+failure. Only accepted blocks can send new attacks. The next render advances
+clip and arpeggiator clocks across skipped frames and chases clip automation.
+Drums and effect tails resume from their existing DSP state.
 
 Factory-pattern and arpeggiator events retain their offsets within each block.
 Live panel and USB MIDI input still update CPU0's key-state snapshot. Pressing
@@ -597,6 +614,12 @@ fresh job. In an otherwise clean run **SILENCES** rises by two, **DISCARDS**
 by one, and **EDIT BLOCK** is two greater than **DROP BLOCK**. Both block
 numbers show the low 32 bits. **WORKER US** measures the longest render, excluding the
 test gate. A DMA miss or a written fallback leaves the edit receipt pending.
+
+For a separate dynamics comparison, build with `--features short-detector-probe`.
+The master compressor then updates its target every four samples instead of
+sixteen. The limiter still runs every sample. Compare the same four-track
+passage, MASTER setting and page changes, checking both the sound and the
+ordinary and watermark-scan margins on SAVE.
 
 ## Audio and display
 
@@ -621,8 +644,11 @@ FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
 
-The 303 SRC scope averages five consecutive audio samples per pixel. Other
-scope taps capture 240 consecutive samples starting at a rising zero crossing.
+Both 303 SRC scopes average five consecutive samples per pixel. A second
+wrap-locked sweep can start once the first is half full, preserving the
+1,200-frame time window for slides. Other scope taps capture 240 consecutive
+samples and rearm on the next rising zero crossing or first attack after
+silence. A silent tap publishes its flat line once.
 A two-block queue feeds an async observer. Missing blocks and routing changes
 start a fresh trace. The trace labels travel with the samples. The cutoff
 readout follows the knob even while the scope waits for a trigger.
@@ -641,9 +667,17 @@ artwork. Both draw in buffered RGB565 strips. The scope stays live while the tra
 narrow phosphor pulse crosses the trace once per quarter note, starting at
 the left edge with the kick. It follows the audio master clock across tempo
 changes and clears on STOP. The live scope compares the old and new trace and
-pulse in 12-column strips. It restores the grid and composites the new ink
+pulse in six-column strips for the basses, organ and Super Saw, 24-column
+strips for the drum kits and 12-column strips for mono and wavetable. It restores the grid and composites the new ink
 and preset list in the same LCD write. A jump between notes leaves the clean
-rows between them alone. Painting counts toward the 30 ms display interval.
+rows between them alone. A changed trace or label wakes the display, and
+changes during painting coalesce into the next frame. Startup, panel, audio
+and scope tasks on CPU0 each own a sender for that single redraw wake. Only
+time-driven animations use a 20 ms fallback. Static pages wait for a change.
+Page clears and solid bands reuse the eight-row raster strip. The display
+task yields while SPI1 DMA sends pixels, including during full-screen clears.
+Sequencer labels and pattern buttons, drum faceplates and controls, and the
+temporary channel badge use the same interrupt-driven writer.
 Display DMA runs below audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
 or `assets/fm1.png` and run
 `python3 wavegraph-fm1/assets/pack_logo.py` with Pillow installed.
