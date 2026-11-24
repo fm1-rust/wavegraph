@@ -2328,14 +2328,14 @@ mod tests {
         let mut track = Track::new(nav.assignments[0]);
         track.voice.gate.note = Some(note(53, 100));
         for (knob, message) in [
+            (Knob::Attack, BassMessage::AttackSeconds(0.002)),
+            (Knob::Overdrive, BassMessage::OverdriveDb(1.0)),
             (Knob::Tuning, BassMessage::TuningSemitones(0.1)),
             (Knob::Cutoff, BassMessage::CutoffHz(561.0)),
             (Knob::Resonance, BassMessage::Resonance(0.51)),
             (Knob::EnvMod, BassMessage::EnvOctaves(25.0 / 12.0)),
             (Knob::Decay, BassMessage::DecaySeconds(0.61)),
             (Knob::Accent, BassMessage::Accent(0.51)),
-            (Knob::Attack, BassMessage::AttackSeconds(0.002)),
-            (Knob::Overdrive, BassMessage::OverdriveDb(1.0)),
         ] {
             let before = track;
             nav.turn(1, 0);
@@ -2356,9 +2356,9 @@ mod tests {
                 at(BassMessage::DecaySeconds(0.65)),
             ]
         );
-        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        assert_eq!(nav.bass_knob(), Some(Knob::Accent));
         track.turn_algorithm(nav.bass_knob(), -1);
-        assert_eq!(track.bass.detent(Knob::Overdrive), 0);
+        assert_eq!(track.bass.detent(Knob::Accent), 50);
         let before = track;
         nav.press(crate::panel::PageButton::Home);
         track.turn_algorithm(nav.bass_knob(), 1);
