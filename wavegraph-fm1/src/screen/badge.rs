@@ -3,10 +3,10 @@
 use super::TextGrid;
 use crate::panel::Channel;
 use core::ops::Range;
-use embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
+use embedded_graphics::pixelcolor::{IntoStorage, RgbColor, raw::ToBytes};
 use fm1_graphics::{Rgb565, palette};
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Display, Error},
+    bsp::display::{AsyncDisplay, Display, Error, SIZE},
     time::Clock,
 };
 
@@ -74,7 +74,6 @@ impl ChannelBadge {
     pub(super) async fn fill_rows(
         &mut self,
         lcd: &mut AsyncDisplay<'_, Clock>,
-        strip: &mut [Pixel],
         mut rows: Range<u16>,
         color: Rgb565,
     ) -> Result<(), Error> {
@@ -85,11 +84,25 @@ impl ChannelBadge {
             .fill(color.to_be_bytes());
         if self.channel.is_some() && start < end {
             let below = end as u16;
-            super::fill_rows(lcd, strip, W as u16, rows.start..below, color).await?;
+            lcd.fill_rect(
+                W as u16,
+                rows.start,
+                SIZE - W as u16,
+                below - rows.start,
+                color.into_storage(),
+            )
+            .await?;
             rows.start = below;
         }
         if !rows.is_empty() {
-            super::fill_rows(lcd, strip, 0, rows, color).await?;
+            lcd.fill_rect(
+                0,
+                rows.start,
+                SIZE,
+                rows.end - rows.start,
+                color.into_storage(),
+            )
+            .await?;
         }
         Ok(())
     }

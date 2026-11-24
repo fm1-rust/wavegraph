@@ -4,14 +4,14 @@ use super::{mixer::Band, selector::Selector, tr808};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
 use embedded_graphics::{
     Drawable,
-    pixelcolor::raw::ToBytes,
+    pixelcolor::{IntoStorage, raw::ToBytes},
     prelude::{Point, Primitive, Size},
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
     text::Alignment,
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error},
+    bsp::display::{AsyncDisplay, Error, SIZE},
     time::Clock,
 };
 use wavegraph_909::Voice;
@@ -182,7 +182,7 @@ impl Panel {
             Self::title(lcd, strip, selector, part).await?;
             let rule = selector.shade(ORANGE);
             for y in [52, 185] {
-                super::fill_rows(lcd, strip, 0, y..y + 2, rule).await?;
+                lcd.fill_rect(0, y, SIZE, 2, rule.into_storage()).await?;
             }
         }
         if part == Part::Tr808 {

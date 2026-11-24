@@ -16,7 +16,7 @@ short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 qualified-usb = []
 
 [dependencies]
-fm1-audio = "0.2.0-rc.0"
+fm1-audio = "0.2.0-rc.1"
 heapless.workspace = true
 micromath = "2.2"
 wavegraph = { path = "../wavegraph", features = ["async"] }

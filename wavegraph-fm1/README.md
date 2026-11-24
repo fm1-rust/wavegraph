@@ -428,7 +428,7 @@ and quiescent transfers through reset, suspend, detach and reconnect.
 For such a bench, build with `./wavegraph-fm1/build.sh --features qualified-usb`.
 The default build exposes the same timing measurements on the LCD.
 
-[usb-dma]: https://docs.rs/fm1/0.2.0-rc.1/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
+[usb-dma]: https://docs.rs/fm1/0.2.0-rc.2/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
 
 ## Four-track mixer and effects
 
@@ -592,7 +592,10 @@ first frame accepted under the new revision. A separate CPU0 task waits for
 the receipt, so other controls and USB MIDI continue while an edit is pending.
 On a missed half, CPU0 retires the outgoing MIDI batch and queues All Notes
 Off and slide reset for each channel. It also does this on terminal CPU1
-failure. Only accepted blocks can send new attacks. The next render advances
+failure. The first accepted block resends the session’s latched 303 controls,
+slide and TB-03 delay settings before its own MIDI events. This also covers
+an ambiguous refill where the next render begins at the adjacent logical frame.
+Only accepted blocks can send new attacks. The next render advances
 clip and arpeggiator clocks across skipped frames and chases clip automation.
 Drums and effect tails resume from their existing DSP state.
 
@@ -688,8 +691,9 @@ rows between them alone. A changed trace or label wakes the display, and
 changes during painting coalesce into the next frame. Startup, panel, audio
 and scope tasks on CPU0 each own a sender for that single redraw wake. Only
 time-driven animations use a 20 ms fallback. Static pages wait for a change.
-Page clears and solid bands reuse the eight-row raster strip. The display
-task yields while SPI1 DMA sends pixels, including during full-screen clears.
+Page clears and solid bands use the BSP’s async rectangle fill. It sets one
+panel window and stages the color once, then SPI1 repeats the strip while the
+display task yields.
 Sequencer labels and pattern buttons, drum faceplates and controls, and the
 temporary channel badge use the same interrupt-driven writer.
 Display DMA runs below audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
@@ -711,8 +715,8 @@ WaveGraph workspace root run
 
 Both files are written to `target/pi32v2-none/firmware/`. The build reports the
 linked application size, the space available for code, and the end of the install.
-Cargo.lock selects the published `fm1` and `fm1-rticx` 0.2.0-rc.1 crates
-and `fm1-audio`, `fm1-controls` and `fm1-graphics` 0.2.0-rc.0.
+Cargo.lock selects the published `fm1` 0.2.0-rc.2, `fm1-audio` and
+`fm1-rticx` 0.2.0-rc.1, and `fm1-controls` and `fm1-graphics` 0.2.0-rc.0.
 CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 tag.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
