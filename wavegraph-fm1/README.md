@@ -40,7 +40,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
 | REC | Start live recording on the current channel. REC ends recording and keeps the loop playing. PLAY stops both. |
-| EDIT on the organ or wavetable scope | Open the voice mode page. Press SEL to cycle Poly → Chord → Unison. In Chord, turn knob 1 to select the displayed chord. EDIT or HOME returns to the scope. |
+| EDIT on an organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
 | SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
@@ -103,11 +103,11 @@ Hold a bass note on channel one, turn PRESETS to channel two, and play the
 upper voice. Each key keeps the channel it was pressed on. The 303 and
 monosynth use last-note priority. On the 303, velocity 96+ triggers accent,
 overlapping notes slide, and a fresh strike after release restarts the
-envelopes. On the organ and wavetable synth, the latest four physical keys take priority.
+envelopes. On the organ, Super Saw and wavetable synths, the latest four physical keys take priority.
 Releasing a newer key restores an older held key.
 
-Both instruments start in **Poly**, with one voice per key. **Chord** plays the
-selected voicing from a single root. **Unison** spreads all four oscillators
+All three scopes show the mode or the selected chord symbol. These instruments start in **Poly**, with one voice per key. **Chord** plays the
+selected voicing from a single root. **Unison** spreads all four voices
 around one pitch (approximately ±2 and ±7 cents). In either stacked mode the
 newest held root wins. Releasing it recalls the previous held root and its
 velocity. Changes on the EDIT page apply immediately to held notes, including
@@ -136,7 +136,9 @@ last turn.
 Press **GLO**, turn **SELECT** to highlight a strip, then turn **PRESETS** to
 **SUPER SAW**, the entry after TR-808. Press **GLO** again to play it.
 The strip keeps its MIDI channel, level and sends. Each assigned instance has
-its own seven oscillators and panel settings.
+four independently gated voices and its own panel settings. Each note has seven
+oscillators, a pitch-tracking high-pass, a resonant low-pass and both envelopes.
+A seventh chord or Unison uses all 28 oscillators on that strip.
 
 On the blue JP-8080-style panel, knob 1 (**CUTOFF**) sweeps the low-pass in
 six detents per octave. Knob 2 (**RESO**) emphasizes frequencies around the
@@ -359,7 +361,7 @@ take while the loop continues. Leaving REC or changing channels also disarms it.
 
 Press **EDIT** in SEQ for a stationary cursor. Turn **KNOB 1** for steps 1–16
 and **KNOB 2** for the bar, even during playback. Tap a key to audition and
-write there. A melodic edit replaces the factory notes at that step. Organ
+write there. A melodic edit replaces the factory notes at that step. Organ, Super Saw
 and wavetable accept up to four pitches per step. On kits, each pad edits its
 own voice, so adding a hat preserves the kick and snare. Factory controller
 automation continues through edits.

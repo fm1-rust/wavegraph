@@ -404,7 +404,7 @@ impl<const PANEL: usize> Keys<PANEL> {
             note: notes[0].note,
             phrase: keys.phrase,
         };
-        if matches!(track.assignment.part, Part::Organ | Part::Wavetable) {
+        if track.assignment.part.is_polyphonic() {
             track.poly_keys = notes;
         }
     }

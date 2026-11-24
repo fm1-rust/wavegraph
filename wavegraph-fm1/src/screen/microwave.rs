@@ -94,20 +94,26 @@ impl Panel {
         }
         let status = (labels.channel, labels.voice_tap);
         if entering || self.status != Some(status) {
-            let mut side = Band::new(pixels, 190, 2, 34, 27, ink(FACE));
+            let mut side = Band::new(pixels, 188, 2, 42, 27, ink(FACE));
             side.label(
-                ["CH1", "CH2", "CH3", "CH4"][labels.channel.index()],
-                Point::new(207, 4),
+                ["1", "2", "3", "4"][labels.channel.index()],
+                Point::new(193, 4),
                 Center,
                 ink(PRINT),
             );
             side.label(
                 if labels.voice_tap { "OSC" } else { "DAC" },
-                Point::new(207, 16),
+                Point::new(212, 4),
                 Center,
                 ink(LIME),
             );
-            lcd.write_rect_buffered(190, 2, 34, 27, side.pixels.as_flattened())
+            side.label(
+                crate::panel::Polyphony::label(labels.mode),
+                Point::new(209, 16),
+                Center,
+                ink(PRINT),
+            );
+            lcd.write_rect_buffered(188, 2, 42, 27, side.pixels.as_flattened())
                 .await?;
             self.status = Some(status);
         }

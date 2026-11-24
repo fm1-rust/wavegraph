@@ -1,14 +1,15 @@
 # wavegraph-supersaw
 
-A monophonic instrument inspired by the Roland JP-8000/8080 Super Saw. One note drives a
+A four-note polyphonic instrument inspired by the Roland JP-8000/8080 Super Saw. One note drives a
 center saw and six detuned saws through a pitch-tracking high-pass and a
-resonant two-pole low-pass. Each voice
+resonant two-pole low-pass. Each note has independent filters and envelopes. The instrument
 has one message inlet and one mono signal outlet. It supports `f32` and
 signed 24-bit PCM, runs without a heap, and accepts frame-timed events.
 
 | Message | Action |
 | --- | --- |
-| `NoteOn { note, velocity }` | Gate both envelopes and set the peak amplitude from velocity. Overlapping notes play legato. |
+| `NoteOn { note, velocity }` | Gate both envelopes and set the peak amplitude from velocity. Allocate one seven-saw voice per key in Poly mode. |
+| `VoiceMode(mode)` | Poly plays independent keys. Chord plays the selected intervals, and Unison spreads all four stacks around one pitch. Both follow the newest held root. |
 | `NoteOff(note)` | Release the matching note. Zero-velocity note-on does the same. |
 | `Detune(0..=127)` | Spread three saws above and three below the center. The last few steps open up rapidly. |
 | `Mix(0..=127)` | Raise the six side saws together. A little of them is audible even at zero. |
@@ -18,7 +19,7 @@ signed 24-bit PCM, runs without a heap, and accepts frame-timed events.
 | `FilterEnvelope(Adsr)` | Sweep from the base cutoff to two octaves above it. The factory contour has an 8 ms attack, 250 ms decay, 35% sustain and 125 ms release. |
 
 Create a `Supersaw::new(&tuning)` with a `Tuning` at the physical output rate.
-One tuning table can serve the monosynth and supersaw. The seven 32-bit phase
+One tuning table can serve the monosynth and supersaw. Each voice’s seven 32-bit phase
 accumulators run at twice that rate. Their phases continue across notes, knob
 changes and rests. A key-tracking one-pole high-pass shapes the sum, and a
 31-tap half-band filter removes high-frequency energy before decimation.

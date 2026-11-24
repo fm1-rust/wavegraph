@@ -596,8 +596,9 @@ mod app {
                 self.nav.press(button);
             }
             let presets = scan.encoder_delta(Encoder::Presets);
-            if !home {
-                self.nav.turn(scan.encoder_delta(Encoder::Select), presets);
+            let select = scan.encoder_delta(Encoder::Select);
+            if !home && (select != 0 || presets != 0) {
+                self.nav.turn(select, presets);
             }
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
@@ -896,7 +897,7 @@ mod app {
             match view {
                 View::VoiceMode => self.settings.tracks[channel.index()]
                     .polyphony
-                    .edit(sel, knobs[0]),
+                    .edit(select, algorithm, sel, knobs[0]),
                 View::Mixer => self.settings.mixer.turn_faders(knobs),
                 View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
                 View::Lfo => self.settings.tracks[channel.index()]

@@ -53,7 +53,14 @@ impl Panel {
             for y in (0..32).step_by(BAND) {
                 let mut band = Band::new(pixels, 0, y, SIZE, 8, ink(FACE)).with_panel_type(true);
                 band.label("SUPER SAW", Point::new(9, 18), Alignment::Left, ink(PRINT));
-                band.rect(Point::new(66, 23), Size::new(49, 1), ink(EDGE));
+                // Use the regular font for case-sensitive chord symbols.
+                band = band.with_panel_type(false);
+                band.label(
+                    crate::panel::Polyphony::label(labels.mode),
+                    Point::new(92, 18),
+                    Alignment::Center,
+                    ink(AMBER),
+                );
                 band.rect(Point::new(0, 30), Size::new(240, 1), ink(EDGE));
                 band.rect(Point::new(0, 31), Size::new(240, 1), ink(BLACK));
                 band.compose_badge(&mut selector.badge);

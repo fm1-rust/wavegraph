@@ -479,7 +479,7 @@ impl Lane {
             MidiMessage::Off(_) if part.is_kit() => None,
             MidiMessage::On(n) => {
                 let legato = self.slide || self.held.iter().any(Option::is_some);
-                if matches!(part, Part::Organ | Part::Wavetable) {
+                if part.is_polyphonic() {
                     if !self.held.contains(&Some(n.number)) {
                         let slot = self
                             .held

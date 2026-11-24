@@ -81,6 +81,10 @@ impl Part {
         matches!(self, Self::Tr808 | Self::Tr909)
     }
 
+    pub(super) const fn is_polyphonic(self) -> bool {
+        matches!(self, Self::Organ | Self::Supersaw | Self::Wavetable)
+    }
+
     pub(super) const fn has_envelope(self) -> bool {
         matches!(
             self,
@@ -474,7 +478,12 @@ impl Track {
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
         let mut events = match self.assignment.part {
-            Part::Mono | Part::Supersaw => self.oscillator_events(old),
+            Part::Mono => self.oscillator_events(old),
+            Part::Supersaw => {
+                let mut events = self.saw_controls(old);
+                self.poly_events(old, &mut events);
+                events
+            }
             Part::Organ => self.organ_events(old),
             Part::Wavetable => self.wave_events(old),
             Part::Bass => {
@@ -561,11 +570,7 @@ impl Track {
 
     fn oscillator_events(self, previous: Option<Self>) -> EventBatch {
         let part = self.assignment.part;
-        let mut events = if part == Part::Mono {
-            self.mono_controls(previous)
-        } else {
-            self.saw_controls(previous)
-        };
+        let mut events = self.mono_controls(previous);
         let before = previous.and_then(|p| p.voice.sounding());
         let next = self.voice.sounding();
         let fresh = previous.is_some_and(|p| p.voice.gate.phrase != self.voice.gate.phrase);
@@ -638,6 +643,7 @@ impl Track {
             let msg = match self.assignment.part {
                 Part::Organ => Message::Organ(OrganMessage::VoiceMode(mode)),
                 Part::Wavetable => Message::Wavetable(WaveMessage::VoiceMode(mode)),
+                Part::Supersaw => Message::Supersaw(SawMessage::VoiceMode(mode)),
                 _ => unreachable!("polyphonic instrument"),
             };
             events.push(at(msg)).expect("one voice mode");
@@ -747,7 +753,7 @@ pub(super) fn at(message: impl Into<Message>) -> Event<Message> {
     }
 }
 
-// Four organ note-offs, four note-ons, four panel values and both voice mode and harmonic recipe.
+// Up to eight polyphonic gate edges, six Super Saw controls and one voice mode.
 const MAX_EVENTS: usize = 16;
 pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 // The 909 accepts nine MIDI pitches across six voices. Clip strikes on alternate
@@ -1525,29 +1531,36 @@ mod tests {
     fn edit_page_cycles_each_polysynth_and_recalls_its_chord() {
         use crate::panel::PageButton;
         use wavegraph_organ::{Chord, VoiceMode};
-        for part in [Part::Organ, Part::Wavetable] {
+        for part in [Part::Organ, Part::Wavetable, Part::Supersaw] {
             let mut nav = Navigation::INITIAL;
             nav.assignments[0] = Assignment::new(part);
             let mut track = Track::new(nav.assignments[0]);
             nav.press(PageButton::Edit);
             assert_eq!(nav.view, View::VoiceMode);
             let old = track;
-            track.polyphony.edit(true, 2);
+            track.polyphony.edit(1, 2, false, 0);
             let mode = VoiceMode::Chord(Chord::MAJOR.turn(2));
-            let msg = if part == Part::Organ {
-                at(OrganMessage::VoiceMode(mode))
-            } else {
-                at(WaveMessage::VoiceMode(mode))
+            let msg = match part {
+                Part::Organ => at(OrganMessage::VoiceMode(mode)),
+                Part::Supersaw => at(SawMessage::VoiceMode(mode)),
+                _ => at(WaveMessage::VoiceMode(mode)),
             };
             assert_eq!(
                 track.events(Some(old)).expect("mode edit").as_slice(),
                 &[msg]
             );
-            track.polyphony.edit(true, 0);
+            track.polyphony.edit(0, 0, true, 0);
             assert_eq!(track.polyphony.mode, VoiceMode::Unison);
-            track.polyphony.edit(true, 0);
+            track.polyphony.edit(0, 0, true, 0);
             assert_eq!(track.polyphony.mode, VoiceMode::Poly);
-            track.polyphony.edit(true, 0);
+            track.polyphony.edit(0, 0, true, 0);
+            assert_eq!(track.polyphony.mode, mode);
+            assert_eq!(crate::panel::Polyphony::label(mode), "Maj7");
+            track.polyphony.edit(-2, 9, false, 0);
+            assert_eq!(track.polyphony.mode, VoiceMode::Unison);
+            track.polyphony.edit(-1, 0, false, 1);
+            assert_eq!(crate::panel::Polyphony::label(track.polyphony.mode), "m7");
+            track.polyphony.edit(0, -1, false, 0);
             assert_eq!(track.polyphony.mode, mode);
             nav.press(PageButton::Edit);
             assert_eq!(nav.view, View::Scope);
