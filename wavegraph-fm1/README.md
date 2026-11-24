@@ -279,7 +279,8 @@ to the same live view.
 
 Press **SEQ**, turn **PRESETS** to the instrument you want, and press one of the
 eight lit white keys. **F, G, A, B, C, D, E, F** select the numbered slots from left
-to right, even after an octave change. The active key flashes. While stopped,
+to right, even after an octave change. The pressed key and its on-screen button
+blink off and back on once to acknowledge the press. While stopped,
 a selection immediately previews bar one. During playback, the grid and flashing
 key follow the sounding clip. An underline and **QUEUED** identify the incoming
 slot. Press another key to replace the request or the active key to cancel it.

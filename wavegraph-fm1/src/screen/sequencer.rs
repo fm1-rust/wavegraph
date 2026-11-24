@@ -288,9 +288,16 @@ impl Roll {
     }
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct BankButton {
+    selected: bool,
+    queued: bool,
+    dark: bool,
+}
+
 pub(super) struct Grid {
     previous: Option<(Slot, u8, bool)>,
-    buttons: Option<(Slot, Slot)>,
+    buttons: [Option<BankButton>; SLOTS],
     head: Option<u8>,
     roll: Roll,
 }
@@ -299,7 +306,7 @@ impl Grid {
     pub(super) const fn new() -> Self {
         Self {
             previous: None,
-            buttons: None,
+            buttons: [None; SLOTS],
             head: None,
             roll: Roll {
                 cells: [[Cell {
@@ -314,7 +321,7 @@ impl Grid {
 
     pub(super) fn invalidate(&mut self) {
         self.previous = None;
-        self.buttons = None;
+        self.buttons = [None; SLOTS];
         self.head = None;
     }
 
@@ -376,37 +383,44 @@ impl Grid {
     }
 
     fn buttons(
+        &mut self,
         lcd: &mut Display,
         strip: &mut [[u8; 2]],
         part: Part,
         active: Slot,
         next: Slot,
+        pressed_off: bool,
     ) -> Result<(), Error> {
         const LABELS: [&str; SLOTS] = ["1 F", "2 G", "3 A", "4 B", "5 C", "6 D", "7 E", "8 F"];
         const WIDTH: u16 = 240 / SLOTS as u16;
         let skin = style(part);
         for (i, label) in LABELS.into_iter().enumerate() {
             let number = i as u8 + 1;
-            let selected = number == active.number();
-            let pending = number == next.number() && next != active;
-            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background);
-            let cap = if selected {
-                if part == Part::Tr909 {
-                    drums::GRAPHITE
-                } else {
-                    palette::WHITE
-                }
-            } else {
-                skin.grid
+            let requested = number == next.number();
+            let state = BankButton {
+                selected: number == active.number(),
+                queued: requested && next != active,
+                dark: requested && pressed_off,
             };
-            button.rect(Point::new(1, 2), Size::new(u32::from(WIDTH - 4), 14), cap);
-            button.label(
-                label,
-                Point::new(i32::from(WIDTH / 2), 4),
-                Alignment::Center,
-                if selected { skin.background } else { ink(part) },
-            );
-            if pending {
+            if self.buttons[i] == Some(state) {
+                continue;
+            }
+            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background);
+            if !state.dark {
+                let (cap, text) = if state.selected {
+                    (ink(part), skin.background)
+                } else {
+                    (skin.grid, ink(part))
+                };
+                button.rect(Point::new(1, 2), Size::new(u32::from(WIDTH - 4), 14), cap);
+                button.label(
+                    label,
+                    Point::new(i32::from(WIDTH / 2), 4),
+                    Alignment::Center,
+                    text,
+                );
+            }
+            if state.queued {
                 button.rect(
                     Point::new(2, 14),
                     Size::new(u32::from(WIDTH - 6), 2),
@@ -420,6 +434,7 @@ impl Grid {
                 16,
                 button.pixels.as_flattened(),
             )?;
+            self.buttons[i] = Some(state);
         }
         Ok(())
     }
@@ -447,10 +462,7 @@ impl Grid {
         let enabled = seq.enabled[seq.channel.index()];
         let key = (slot, bar, enabled);
         let changed = self.previous != Some(key);
-        if self.buttons != Some((slot, next)) {
-            Self::buttons(lcd, strip, part, slot, next)?;
-            self.buttons = Some((slot, next));
-        }
+        self.buttons(lcd, strip, part, slot, next, seq.pressed_key_dark)?;
         text.number(16, 0, 1, u32::from(bar) + 1, ink(part));
         text.text(17, 0, [b'/', b'0' + clip.bars], ink(part));
         if let Some(head) = head {
