@@ -1157,9 +1157,11 @@ mod tests {
     #[test]
     fn every_bank_key_has_a_distinct_clip_and_reassignment_recalls_the_slot() {
         let mut seq = Sequencer::INITIAL;
-        for (key, (&expected, number)) in Slot::KEYS.iter().zip([0, 2, 4, 6].iter().zip(1..=4)) {
-            assert_eq!((key.0, key.1.number()), (expected, number));
-        }
+        assert_eq!(Slot::KEYS.map(|(key, _)| key), [0, 2, 4, 6, 7, 9, 11, 12]);
+        assert_eq!(
+            Slot::KEYS.map(|(_, slot)| slot.number()),
+            [1, 2, 3, 4, 5, 6, 7, 8]
+        );
         for (part, channel) in Part::ALL
             .into_iter()
             .map(|part| (part, Channel::One))
@@ -1169,13 +1171,16 @@ mod tests {
             for (_, slot) in Slot::KEYS {
                 let clip = slot.clip(part, channel);
                 assert!(!clip.pitches.is_empty());
+                if part.is_kit() {
+                    assert!(clip.pitches.iter().all(|&note| part.drum(note).is_some()));
+                }
                 assert!(!previous.contains(&clip.events));
                 previous.push(clip.events);
             }
         }
-        seq.choose(Part::Bass, Slot::KEYS[2].1);
+        seq.choose(Part::Bass, Slot::KEYS[7].1);
         seq.choose(Part::Tr808, Slot::KEYS[1].1);
-        assert_eq!(seq.slot(Channel::One, Part::Bass).number(), 3);
+        assert_eq!(seq.slot(Channel::One, Part::Bass).number(), 8);
         assert_eq!(seq.slot(Channel::One, Part::Tr808).number(), 2);
         assert_eq!(seq.slot(Channel::Two, Part::Bass), Slot::FIRST);
     }
@@ -1205,7 +1210,7 @@ mod tests {
         player.requested[0] = Slot::KEYS[1].1;
         player.requested[2] = Slot::KEYS[2].1;
         tick(&mut player, 999);
-        player.requested[0] = Slot::KEYS[3].1;
+        player.requested[0] = Slot::KEYS[6].1;
         player.requested[2] = Slot::FIRST; // cancel the pending drum switch
         tick(&mut player, 999);
         assert!(player.banks().iter().all(|b| b.slot == Slot::FIRST));
@@ -1213,12 +1218,12 @@ mod tests {
         assert!(events.iter().any(|(c, e)| *c == Channel::One
             && e.frame == 1
             && e.message == MidiMessage::Control(123, 0)));
-        assert_eq!(player.banks().map(|b| b.slot.number()), [4, 1, 1, 1]);
+        assert_eq!(player.banks().map(|b| b.slot.number()), [7, 1, 1, 1]);
         assert_eq!(player.banks().map(|b| b.bar), [0, 1, 1, 1]);
         player.requested[1] = Slot::KEYS[1].1;
-        player.requested[2] = Slot::KEYS[2].1;
+        player.requested[2] = Slot::KEYS[7].1;
         tick(&mut player, 2000);
-        assert_eq!(player.banks().map(|b| b.slot.number()), [4, 2, 3, 1]);
+        assert_eq!(player.banks().map(|b| b.slot.number()), [7, 2, 8, 1]);
         assert_eq!(player.banks().map(|b| b.bar), [1, 0, 0, 2]);
         tick(&mut player, 2000);
         assert_eq!(player.banks().map(|b| b.bar), [0, 1, 0, 3]);

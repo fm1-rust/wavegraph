@@ -45,6 +45,7 @@ for (const [path, extension] of [
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
     ["../assets/", ".2bpp"],
     ["../assets/fonts/", ".raw"],
+    ["../patterns/", ".txt"],
 ]) {
     const dir = new URL(path, import.meta.url);
     const names = readdirSync(dir).filter(name => name.endsWith(extension));

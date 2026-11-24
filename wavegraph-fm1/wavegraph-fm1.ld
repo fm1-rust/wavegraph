@@ -7,7 +7,10 @@ MEMORY {
   assets (r) : ORIGIN = ORIGIN(flash) + LENGTH(flash), LENGTH = 0x4D000
 }
 SECTIONS {
-  .wavegraph_assets : ALIGN(4) { *(.wavegraph_assets) } > assets
+  .wavegraph_assets : ALIGN(4) {
+    *(.wavegraph_assets)
+    KEEP(*(.wavegraph_assets.notices))
+  } > assets
 }
 __sstack_top = __stack_top - 16K;
 ASSERT(__bss_end <= __sstack_top - 24K, "WaveGraph statics overlap the interrupt stack")

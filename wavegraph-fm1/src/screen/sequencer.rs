@@ -12,7 +12,7 @@ use crate::{
     instrument::Part,
     sequencer::{
         BankPosition, Position, Sequencer,
-        pattern::{BAR, Clip, Slot},
+        pattern::{BAR, Clip, SLOTS, Slot},
     },
 };
 use embedded_graphics::{
@@ -382,12 +382,14 @@ impl Grid {
         active: Slot,
         next: Slot,
     ) -> Result<(), Error> {
+        const LABELS: [&str; SLOTS] = ["1 F", "2 G", "3 A", "4 B", "5 C", "6 D", "7 E", "8 F"];
+        const WIDTH: u16 = 240 / SLOTS as u16;
         let skin = style(part);
-        for (i, label) in ["1", "2", "3", "4"].into_iter().enumerate() {
+        for (i, label) in LABELS.into_iter().enumerate() {
             let number = i as u8 + 1;
             let selected = number == active.number();
             let pending = number == next.number() && next != active;
-            let mut button = Band::new(strip, 0, 0, 60, 16, skin.background);
+            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background);
             let cap = if selected {
                 if part == Part::Tr909 {
                     drums::GRAPHITE
@@ -397,17 +399,27 @@ impl Grid {
             } else {
                 skin.grid
             };
-            button.rect(Point::new(1, 2), Size::new(56, 14), cap);
+            button.rect(Point::new(1, 2), Size::new(u32::from(WIDTH - 4), 14), cap);
             button.label(
                 label,
-                Point::new(30, 4),
+                Point::new(i32::from(WIDTH / 2), 4),
                 Alignment::Center,
                 if selected { skin.background } else { ink(part) },
             );
             if pending {
-                button.rect(Point::new(2, 14), Size::new(54, 2), drums::HOT);
+                button.rect(
+                    Point::new(2, 14),
+                    Size::new(u32::from(WIDTH - 6), 2),
+                    drums::HOT,
+                );
             }
-            lcd.write_rect_buffered(i as u16 * 60, 208, 60, 16, button.pixels.as_flattened())?;
+            lcd.write_rect_buffered(
+                i as u16 * WIDTH,
+                208,
+                WIDTH,
+                16,
+                button.pixels.as_flattened(),
+            )?;
         }
         Ok(())
     }
@@ -450,7 +462,7 @@ impl Grid {
             text.text(0, 14, b"QUEUED   / NEXT BAR ", ink(part));
             text.number(7, 14, 1, u32::from(next.number()), ink(part));
         } else {
-            text.text(0, 14, b"F G A B  /  PATTERNS", ink(part));
+            text.text(0, 14, b"WHITE KEYS  / SELECT", ink(part));
         }
         if !changed && head == self.head {
             return Ok(());
