@@ -1,7 +1,7 @@
 //! Dry outlets, independently patchable voices and sample-timed kit behavior.
 
-use wavegraph::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_808::{BassDrum, Controls, HiHat, Message, Metal, SnareDrum, Tr808, Voice, Voice::*};
+use wavegraph_dsp::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_sample::{I24, Sample};
 
 const RATE: (u32, u32) = (24_000_000, 544);

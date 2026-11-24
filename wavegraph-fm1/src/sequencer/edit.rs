@@ -2,7 +2,7 @@
 use super::pattern::Slot;
 use crate::{instrument::Part, panel::Channel};
 use core::sync::atomic::{AtomicU8, AtomicU16, Ordering};
-use wavegraph::midi::{MidiMessage, Note};
+use wavegraph_dsp::midi::{MidiMessage, Note};
 
 const VOICES: usize = 6;
 const EDITED: u8 = 1 << 7;

@@ -6,7 +6,7 @@ on:
       - 'instruments/wavegraph-303/**'
       - 'wavegraph-core/**'
       - 'wavegraph-sample/**'
-      - 'wavegraph/**'
+      - 'wavegraph-dsp/**'
       - Cargo.toml
       - Cargo.lock
       - '.cargo/**'

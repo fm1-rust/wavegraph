@@ -1,6 +1,6 @@
 //! One owned DSP slot. ALNK0 is the sole owner of the deadline and the edit host.
 use fm1_audio::{OUTPUT_FRAMES, OutputBlock, Refill, RefillInterval};
-use wavegraph::control::{Host, Revision};
+use wavegraph_dsp::control::{Host, Revision};
 
 pub(super) struct Job<S> {
     first_frame: u64,
@@ -150,7 +150,7 @@ mod tests {
         pin::pin,
         task::{Context, Poll, Waker},
     };
-    use wavegraph::control::EditQueue;
+    use wavegraph_dsp::control::EditQueue;
 
     #[test]
     fn coalesced_or_ambiguous_release_rejects_ready_pcm_and_defers_its_edit() {
@@ -290,7 +290,7 @@ mod tests {
             } else {
                 assert_eq!(
                     receipt.as_mut().poll(&mut cx),
-                    Poll::Ready(Ok(wavegraph::control::Applied {
+                    Poll::Ready(Ok(wavegraph_dsp::control::Applied {
                         revision,
                         first_frame
                     })),

@@ -3,7 +3,7 @@ name: Publish to crates.io
 on:
   push:
     tags:
-      - 'wavegraph/v*'
+      - 'wavegraph-dsp/v*'
       - 'wavegraph-adsr/v*'
       - 'wavegraph-core/v*'
       - 'wavegraph-monosynth/v*'

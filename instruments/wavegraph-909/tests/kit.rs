@@ -1,7 +1,7 @@
 //! Exercise the kit and its dry outlets through the patch interpreter.
 
-use wavegraph::{Event, Process, ProcessContext, bytecode::Program, dsp::Software};
 use wavegraph_909::{HandClap, Samples, Tr909, Voice, Voice::*};
+use wavegraph_dsp::{Event, Process, ProcessContext, bytecode::Program, dsp::Software};
 use wavegraph_sample::{I24, Sample};
 
 const SAMPLES: Samples<'_> = Samples {

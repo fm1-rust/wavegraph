@@ -27,8 +27,8 @@ use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
 };
-use wavegraph::midi::MidiMessage;
 use wavegraph_909::Voice;
+use wavegraph_dsp::midi::MidiMessage;
 
 const LEFT: usize = 48;
 const TOP: usize = 48;

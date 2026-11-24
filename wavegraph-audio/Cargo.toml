@@ -19,7 +19,7 @@ fm1-audio = { workspace = true, optional = true }
 sdl3 = { version = "0.22.1", features = ["use-pkg-config"], optional = true }
 
 [dev-dependencies]
-wavegraph = { version = "0.1", path = "../wavegraph" }
+wavegraph-dsp = { version = "0.1", path = "../wavegraph-dsp" }
 wavegraph-monosynth = { version = "0.1", path = "../instruments/wavegraph-monosynth" }
 wavegraph-sample.workspace = true
 

@@ -13,7 +13,7 @@ It renders directly to the FM-1's signed 24-bit PCM format. An `f32` patch
 can use the same instrument and messages.
 
 ```rust
-use wavegraph::{Event, Process, bytecode::Program, dsp::Software};
+use wavegraph_dsp::{Event, Process, bytecode::Program, dsp::Software};
 use wavegraph_303::{Message, Tb303};
 use wavegraph_sample::I24;
 
@@ -28,7 +28,7 @@ let notes = [
 let mut buses = [[I24::default(); 128]; 1];
 patch.render(&mut Software, &mut buses, &[&notes], |_, e| Err(e))?;
 # assert!(buses[0].iter().any(|s| s.inner() != 0));
-# Ok::<(), wavegraph::bytecode::Error>(())
+# Ok::<(), wavegraph_dsp::bytecode::Error>(())
 ```
 
 Set `Tb303::params` before binding to customize the voice calibration. During

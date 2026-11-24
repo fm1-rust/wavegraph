@@ -5,7 +5,7 @@ use crate::{
     panel::{CHANNELS, Channel},
 };
 use heapless::{Deque, Vec};
-use wavegraph::{Event, midi::MidiMessage};
+use wavegraph_dsp::{Event, midi::MidiMessage};
 
 type Packet = [u8; 4];
 
@@ -175,7 +175,7 @@ impl OutputQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wavegraph::midi::Note;
+    use wavegraph_dsp::midi::Note;
 
     fn at(frame: usize, message: MidiMessage) -> Event<MidiMessage> {
         Event {

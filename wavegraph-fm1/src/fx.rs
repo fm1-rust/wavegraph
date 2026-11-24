@@ -2,7 +2,7 @@
 
 use crate::instrument::{Message, Part, at};
 use heapless::Vec;
-use wavegraph::Event;
+use wavegraph_dsp::Event;
 use wavegraph_fx::{
     Delay, Dynamics, EqControls, MasterControls, Message as FxMessage, PhaserControls,
     SaturatorControls,

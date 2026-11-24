@@ -6,9 +6,9 @@ use crate::{
     sequencer::DrumMessage,
 };
 use heapless::Vec;
-use wavegraph::bytecode::Error;
 use wavegraph_909::Voice as Drum;
 use wavegraph_arp::Chord;
+use wavegraph_dsp::bytecode::Error;
 use wavegraph_organ::POLYPHONY;
 
 /// A polyphonic key and its strike generation, retained across dropped scans.
@@ -186,7 +186,7 @@ impl<const KEYS: usize> Piano<KEYS> {
     }
 }
 
-pub(super) use wavegraph::midi::MidiMessage as MidiAction;
+pub(super) use wavegraph_dsp::midi::MidiMessage as MidiAction;
 
 pub(super) fn decode_midi([header, status, key, value]: [u8; 4]) -> Option<(Channel, MidiAction)> {
     if header != status >> 4 {

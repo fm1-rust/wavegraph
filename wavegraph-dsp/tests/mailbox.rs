@@ -2,7 +2,7 @@
 #![cfg(target_has_atomic = "ptr")]
 
 use core::hint::spin_loop;
-use wavegraph::mailbox::Mailbox;
+use wavegraph_dsp::mailbox::Mailbox;
 
 #[test]
 fn a_full_slot_returns_the_original_owner_and_survives_resplitting() {

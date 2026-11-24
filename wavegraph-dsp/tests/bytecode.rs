@@ -1,6 +1,6 @@
 //! Exercise a running program through the same entry points as a device.
 use core::cell::Cell;
-use wavegraph::{
+use wavegraph_dsp::{
     Event, Op, Port, Process, ProcessContext,
     bytecode::{DecodeError, Error, Patch, Program},
     dsp::{Dsp, Software},

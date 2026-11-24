@@ -6,8 +6,8 @@ use crate::{
     panel::{Assignment, CHANNELS, Channel, Navigation},
 };
 use pattern::{Automation, BAR, Clip, Slot};
-use wavegraph::{Event, Port, Process, ProcessContext, bytecode::Error, midi::MidiMessage};
 use wavegraph_909::{Tr909, Voice};
+use wavegraph_dsp::{Event, Port, Process, ProcessContext, bytecode::Error, midi::MidiMessage};
 use wavegraph_sample::I24;
 
 pub(super) mod edit;
@@ -997,7 +997,7 @@ mod tests {
     #[test]
     fn live_909_burst_fits_an_edited_step_with_alternate_drum_pitches() -> Result<(), Error> {
         use crate::instrument::RoutedEvents;
-        use wavegraph::midi::Note;
+        use wavegraph_dsp::midi::Note;
 
         let channel = Channel::Four;
         let track = &mut Track::rack(Navigation::INITIAL.assignments)[channel.index()];
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn edited_notes_loop_with_velocity_and_releases_while_other_lanes_keep_playing() {
         use alloc::boxed::Box;
-        use wavegraph::midi::Note;
+        use wavegraph_dsp::midi::Note;
         let edits = Box::leak(Box::new(Edits::new()));
         let slot = Slot::KEYS[2].1; // a single bar
         let addr = |channel, part| Address {

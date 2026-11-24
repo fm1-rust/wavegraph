@@ -19,7 +19,7 @@ qualified-usb = []
 fm1-audio.workspace = true
 heapless.workspace = true
 micromath = "2.2"
-wavegraph = { path = "../wavegraph", features = ["async"] }
+wavegraph-dsp = { path = "../wavegraph-dsp", features = ["async"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303" }
 wavegraph-808 = { path = "../instruments/wavegraph-808" }
 wavegraph-909 = { path = "../instruments/wavegraph-909" }
