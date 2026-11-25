@@ -22,6 +22,8 @@ mod envelope;
 #[cfg(target_os = "none")]
 mod firmware;
 #[cfg(any(target_os = "none", test))]
+mod fm;
+#[cfg(any(target_os = "none", test))]
 mod fx;
 #[cfg(any(target_os = "none", test))]
 mod inserts;

@@ -39,6 +39,7 @@ impl Colors {
             Part::Tr808 => (drums::STYLE_808.background, drums::CREAM, drums::HOT),
             Part::Tr909 => (drums::STYLE.background, drums::GRAPHITE, drums::ORANGE),
             Part::Supersaw => (jp8080::FACE, jp8080::PRINT, jp8080::AMBER),
+            Part::Fm => (super::fm::FACE, super::fm::PRINT, super::fm::GREEN),
             Part::Wavetable => (microwave::FACE, microwave::PRINT, microwave::LIME),
         };
         Self { face, ink, accent }

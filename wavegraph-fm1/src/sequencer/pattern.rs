@@ -29,10 +29,12 @@ impl Slot {
     }
 
     pub(crate) fn clip(self, part: Part, channel: Channel) -> &'static Clip {
-        let bank = if part == Part::Bass && channel == Channel::Two {
-            7
-        } else {
-            part as usize
+        let bank = match (part, channel) {
+            (Part::Bass, Channel::Two) => 7,
+            // The electric piano starts with the organ chord clips. Recording
+            // and slot selection remain keyed by the assigned part.
+            (Part::Fm, _) => Part::Organ as usize,
+            _ => part as usize,
         };
         &BANKS[bank][usize::from(self.0)]
     }

@@ -1,15 +1,7 @@
 //! FM-1 encoder mappings and the VCA envelope preview.
 
 use crate::capture::{Trace, WIDTH};
-use wavegraph_adsr::Adsr;
-
-// Approximately three detents per octave. The SH-101 attack has the shorter range.
-const TIME_US: [u32; 39] = [
-    0, 1_500, 2_000, 3_000, 4_000, 5_000, 6_000, 8_000, 10_000, 12_000, 16_000, 20_000, 25_000,
-    32_000, 40_000, 50_000, 64_000, 80_000, 100_000, 125_000, 160_000, 200_000, 250_000, 320_000,
-    400_000, 500_000, 640_000, 800_000, 1_000_000, 1_250_000, 1_600_000, 2_000_000, 2_500_000,
-    3_200_000, 4_000_000, 5_000_000, 6_400_000, 8_000_000, 10_000_000,
-];
+use wavegraph_adsr::{Adsr, TIMES_US as TIME_US};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct EnvelopeControls(Adsr);
@@ -18,6 +10,20 @@ pub(super) struct EnvelopeControls(Adsr);
 pub(super) enum EnvelopeTarget {
     Amp,
     Modulation,
+    Pitch,
+}
+
+impl EnvelopeTarget {
+    pub(super) fn turn(self, delta: i16, fm: bool) -> Self {
+        const ALL: [EnvelopeTarget; 3] = [
+            EnvelopeTarget::Amp,
+            EnvelopeTarget::Modulation,
+            EnvelopeTarget::Pitch,
+        ];
+        let n = if fm { 3 } else { 2 };
+        let index = (self as i16).saturating_add(delta).rem_euclid(n);
+        ALL[usize::try_from(index).expect("wrapped envelope target")]
+    }
 }
 
 fn turn_time(us: u32, delta: i8, steps: &[u32]) -> u32 {
@@ -30,6 +36,10 @@ fn turn_time(us: u32, delta: i8, steps: &[u32]) -> u32 {
 }
 
 impl EnvelopeControls {
+    pub(super) const fn new(adsr: Adsr) -> Self {
+        Self(adsr)
+    }
+
     pub(super) const INITIAL: Self = Self(Adsr {
         attack_us: 8_000,
         decay_us: 160_000,

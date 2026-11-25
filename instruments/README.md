@@ -9,6 +9,7 @@ outlet 0. Each instance keeps its voice state between blocks.
 | Crate | What to look at |
 | --- | --- |
 | [`wavegraph-monosynth`](wavegraph-monosynth/) | A single oscillator with a filter and a gate-controlled ADSR envelope. |
+| [`wavegraph-fm`](wavegraph-fm/) | Two sine operators per note, velocity-sensitive modulation, feedback and a separate brightness decay. |
 | [`wavegraph-supersaw`](wavegraph-supersaw/) | Seven detuned phase accumulators, a pitch-tracking high-pass and 2× oversampling. |
 | [`wavegraph-wavetable`](wavegraph-wavetable/) | Four independent scan clocks, stepped or interpolated frames, and two CC0 banks. |
 | [`wavegraph-organ`](wavegraph-organ/) | Polyphony with four preallocated voices and a note-stealing policy. |

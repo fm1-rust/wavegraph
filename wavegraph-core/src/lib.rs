@@ -2,12 +2,14 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod sine;
 mod tuning;
 
 pub mod bytecode;
 pub mod midi;
 pub mod polyphony;
 pub use bytecode::Op;
+pub use sine::sine_q15;
 pub use tuning::Tuning;
 
 /// A target can implement these operations with its own DSP kernels. Each

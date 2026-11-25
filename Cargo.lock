@@ -922,6 +922,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wavegraph-fm"
+version = "0.1.0"
+dependencies = [
+ "wavegraph-adsr",
+ "wavegraph-core",
+ "wavegraph-sample",
+]
+
+[[package]]
 name = "wavegraph-fm1"
 version = "0.0.0"
 dependencies = [
@@ -942,6 +951,7 @@ dependencies = [
  "wavegraph-adsr",
  "wavegraph-arp",
  "wavegraph-dsp",
+ "wavegraph-fm",
  "wavegraph-fm1-core",
  "wavegraph-fx",
  "wavegraph-lfo",

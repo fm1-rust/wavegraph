@@ -7,7 +7,7 @@ pub use wavegraph_core::polyphony::{Chord, VoiceMode};
 use wavegraph_core::{midi::Note, polyphony::Keyboard};
 
 use wavegraph_adsr::{Envelope, Timing};
-use wavegraph_core::{Port, Process, ProcessContext};
+use wavegraph_core::{Port, Process, ProcessContext, sine_q15};
 use wavegraph_sample::FromSample;
 
 /// Maximum simultaneous notes, including voices in their release tail.
@@ -158,12 +158,12 @@ impl Voice {
         let (mid, high) = match params.voicing {
             Voicing::House => (
                 if self.step < 715_827_882 {
-                    sine(self.phase.wrapping_mul(3))
+                    sine_q15(self.phase.wrapping_mul(3))
                 } else {
                     0
                 },
                 if self.step < 357_913_941 {
-                    sine(self.phase.wrapping_mul(6))
+                    sine_q15(self.phase.wrapping_mul(6))
                 } else {
                     0
                 },
@@ -212,39 +212,6 @@ impl Voice {
 fn triangle(phase: u32) -> i32 {
     let ramp = i32::from((phase >> 16) as u16);
     32767 - (2 * ramp - 65535).abs()
-}
-
-// Same 65-entry quarter-wave sine table and 8-bit interpolation as the monosynth.
-const SINE: [i16; 65] = [
-    0, 804, 1608, 2410, 3212, 4011, 4808, 5602, 6393, 7179, 7962, 8739, 9512, 10278, 11039, 11793,
-    12539, 13279, 14010, 14732, 15446, 16151, 16846, 17530, 18204, 18868, 19519, 20159, 20787,
-    21403, 22005, 22594, 23170, 23731, 24279, 24811, 25329, 25832, 26319, 26790, 27245, 27683,
-    28105, 28510, 28898, 29268, 29621, 29956, 30273, 30571, 30852, 31113, 31356, 31580, 31785,
-    31971, 32137, 32285, 32412, 32521, 32609, 32678, 32728, 32757, 32767,
-];
-
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
-    reason = "Quarter-wave interpolation fits i32"
-)]
-fn sine(phase: u32) -> i32 {
-    let quarter = phase & 0x3fff_ffff;
-    let folded = if phase & 0x4000_0000 == 0 {
-        quarter
-    } else {
-        (1 << 30) - quarter
-    };
-    let index = (folded >> 24) as usize;
-    let a = i32::from(SINE[index]);
-    let b = i32::from(SINE[(index + 1).min(64)]);
-    let frac = i32::from(((folded >> 16) & 255) as u8);
-    let sample = a + (((b - a) * frac) >> 8);
-    if phase & 0x8000_0000 == 0 {
-        sample
-    } else {
-        -sample
-    }
 }
 
 /// A fixed four-voice, dry house organ with one message inlet and one signal
