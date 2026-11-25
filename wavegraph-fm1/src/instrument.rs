@@ -321,7 +321,10 @@ enum Bank {
     None,
     Kit(DrumHits),
     Wave([WaveProgram; 2]),
-    Sampler([SampleProgram; crate::assets::SAMPLE_NAMES.len()]),
+    Sampler(
+        [SampleProgram; crate::assets::SAMPLE_NAMES.len()],
+        crate::sampler::Pads,
+    ),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -380,7 +383,7 @@ impl Track {
                     WaveProgram::new(Scan::RESONANT),
                     WaveProgram::new(Scan::VOCAL),
                 ]),
-                Part::Sampler => Bank::Sampler(SampleProgram::BANK),
+                Part::Sampler => Bank::Sampler(SampleProgram::BANK, crate::sampler::Pads::INITIAL),
                 _ => Bank::None,
             },
             envelope_target: EnvelopeTarget::Amp,
@@ -455,6 +458,9 @@ impl Track {
     }
 
     pub(super) fn turn_select(&mut self, detents: i8) {
+        if self.amen_slices() {
+            return;
+        }
         match self.assignment.part {
             Part::Mono
             | Part::Organ
@@ -527,15 +533,44 @@ impl Track {
         }
     }
 
+    pub(super) fn amen_slices(&self) -> bool {
+        self.assignment.part == Part::Sampler
+            && self.voice.waveform == 0
+            && self.sample_program().playback.mode == wavegraph_sampler::PlaybackMode::Slice
+    }
+
+    pub(super) fn sample_pads(&self) -> crate::sampler::Pads {
+        match &self.bank {
+            Bank::Sampler(_, pads) => *pads,
+            _ => crate::sampler::Pads::INITIAL,
+        }
+    }
+
+    pub(super) fn select_slice(&mut self, note: u8) {
+        if self.amen_slices()
+            && let Bank::Sampler(_, pads) = &mut self.bank
+        {
+            pads.select(note);
+        }
+    }
+
+    pub(super) fn key_transpose(&self) -> i8 {
+        if self.amen_slices() {
+            0
+        } else {
+            self.voice.transpose
+        }
+    }
+
     pub(super) fn sample_program(&self) -> SampleProgram {
         match &self.bank {
-            Bank::Sampler(bank) => bank[usize::from(self.voice.waveform)],
+            Bank::Sampler(bank, _) => bank[usize::from(self.voice.waveform)],
             _ => SampleProgram::DRY,
         }
     }
 
     fn sample_program_mut(&mut self) -> &mut SampleProgram {
-        let Bank::Sampler(bank) = &mut self.bank else {
+        let Bank::Sampler(bank, _) = &mut self.bank else {
             unreachable!("sampler assignment")
         };
         &mut bank[usize::from(self.voice.waveform)]
@@ -552,7 +587,11 @@ impl Track {
         match (view, self.assignment.part) {
             (View::SampleEdit, Part::Sampler) => {
                 self.turn_select(select);
-                self.sample_program_mut().edit(knobs);
+                let Bank::Sampler(bank, pads) = &mut self.bank else {
+                    unreachable!("sampler editor")
+                };
+                let slot = self.voice.waveform;
+                bank[usize::from(slot)].edit(knobs, (slot == 0).then_some(pads));
             }
             (View::Envelope, Part::Sampler) => {
                 self.envelope_target = self
@@ -745,6 +784,14 @@ impl Track {
                 ))))
                 .expect("one playback setup");
         }
+        if self.amen_slices() {
+            let trims = self.sample_pads().trims;
+            if previous.is_none_or(|p| !p.amen_slices() || p.sample_pads().trims != trims) {
+                events
+                    .push(at(Message::Sampler(SampleMessage::SliceTrims(trims))))
+                    .expect("one slice setup");
+            }
+        }
         // A selection can return to a still-ringing clip. Refresh its live tone as well.
         if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform)
             || old.is_none_or(|p| p.timbre != program.timbre)
@@ -846,8 +893,8 @@ impl Track {
 
     fn poly_key_events(&self, previous: Option<&Self>, events: &mut EventBatch) {
         let old_keys = previous.map_or([PolyKey::EMPTY; POLYPHONY], |p| p.poly_keys);
-        let old_transpose = previous.map_or(0, |p| p.voice.transpose);
-        let now_transpose = self.voice.transpose;
+        let old_transpose = previous.map_or(0, Self::key_transpose);
+        let now_transpose = self.key_transpose();
         let sounding = |key: PolyKey, transpose: i8| {
             key.note.map(|mut note| {
                 note.number = note.number.saturating_add_signed(transpose).min(127);
@@ -875,8 +922,11 @@ impl Track {
         let last_strike = previous
             .filter(|p| {
                 self.assignment.part == Part::Sampler
-                    && self.sample_program().playback.mode
-                        == wavegraph_sampler::PlaybackMode::OneShot
+                    && matches!(
+                        self.sample_program().playback.mode,
+                        wavegraph_sampler::PlaybackMode::OneShot
+                            | wavegraph_sampler::PlaybackMode::Slice
+                    )
                     && p.voice.gate.note.is_some()
             })
             .map(|p| p.voice.gate.phrase);
@@ -903,6 +953,7 @@ pub(super) enum Message {
     Fm(FmMessage),
     Wavetable(WaveMessage),
     Sampler(SampleMessage),
+    Recording(Option<crate::clipboard::Take>),
     WaveFrame(u8),
     Organ(OrganMessage),
     Bass(BassMessage),
@@ -974,7 +1025,7 @@ pub(super) type EventBatch = Vec<Event<Message>, MAX_EVENTS>;
 // The 909 accepts nine MIDI pitches across six voices. Clip strikes on alternate
 // pitches can coincide with overdubs on the other voices, a full live burst,
 // and frame-zero assignment or release events. Storage is off the IRQ stack.
-const MAX_ROUTED_EVENTS: usize = 32 + 8 + 9 + 2;
+const MAX_ROUTED_EVENTS: usize = 32 + 8 + 9 + 2 + 1; // Optional recording replacement.
 pub(super) type RoutedEvents = Vec<Event<Message>, MAX_ROUTED_EVENTS>;
 
 // Only the assigned engine occupies mutable storage on each channel.
@@ -1076,10 +1127,17 @@ impl Process<Message, I24> for Node<'_> {
                 Message::Fm(m) => Some(m),
                 _ => None,
             }),
-            Player::Sampler(node) => dispatch(node, cx, |m| match m {
-                Message::Sampler(message) => Some(message),
-                _ => None,
-            }),
+            Player::Sampler(node) => {
+                for event in cx.events {
+                    if let Message::Recording(take) = event.message {
+                        node.replace_recording(take.map(crate::clipboard::Take::clip));
+                    }
+                }
+                dispatch(node, cx, |m| match m {
+                    Message::Sampler(message) => Some(message),
+                    _ => None,
+                });
+            }
             Player::Supersaw(node) => dispatch(node, cx, |m| match m {
                 Message::Supersaw(m) => Some(m),
                 _ => None,
@@ -1329,6 +1387,9 @@ impl Programs {
         Ok(Instrument {
             lfos: [lfo; CHANNELS],
             offsets: [KnobOffset::default(); CHANNELS],
+            recorder: crate::clipboard::Recorder::new(rate),
+            recording_request: crate::clipboard::Request::INITIAL,
+            previous_take: None,
             programs: self,
             patch: self.0[0].bind_nodes(nodes)?,
             half_gain: false,
@@ -1355,6 +1416,9 @@ impl Programs {
 }
 
 pub(super) struct Instrument<'a> {
+    pub(super) recorder: crate::clipboard::Recorder,
+    pub(super) recording_request: crate::clipboard::Request,
+    previous_take: Option<crate::clipboard::Take>,
     programs: &'a Programs,
     patch: Patch<'a, 'a, Message, I24, 8, AudioProcess<'a>>,
     pub(super) half_gain: bool,
@@ -1398,7 +1462,7 @@ impl Instrument<'_> {
         self.arps[channel.index()]
             .clock
             .sounding()
-            .map(|n| n.saturating_add_signed(track.voice.transpose).min(127))
+            .map(|n| n.saturating_add_signed(track.key_transpose()).min(127))
     }
 
     pub(super) fn set_mixer(&mut self, mixer: Mixer) {
@@ -1444,6 +1508,7 @@ impl Instrument<'_> {
         if frames == 0 {
             return Ok(());
         }
+        self.recorder.interrupt();
         for events in self.events.iter_mut() {
             events.clear();
         }
@@ -1585,6 +1650,13 @@ impl Instrument<'_> {
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
+            if part == Part::Sampler
+                && (old.is_none() || self.recorder.status.take != self.previous_take)
+            {
+                events
+                    .push(at(Message::Recording(self.recorder.status.take)))
+                    .map_err(|_| Error::Capacity)?;
+            }
             if let Some(message) = bass_mod {
                 events.push(at(message)).map_err(|_| Error::Capacity)?;
             }
@@ -1694,6 +1766,14 @@ impl Instrument<'_> {
                 _ => Err(event),
             },
         )?;
+        self.previous_take = self.recorder.status.take;
+        self.recorder.process(
+            self.recording_request,
+            tracks,
+            self.transport,
+            player.downbeat,
+            buses,
+        );
         self.player = player;
         self.position = player.position();
         self.drums = drums;

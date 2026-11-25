@@ -98,6 +98,20 @@ cargo run -q -p wavegraph-sampler --example one_shot -- hit.s16le | ffplay -auto
 The [909 kit][909] uses three instances of this player and publishes each
 voice on its own signal outlet.
 
+### Slice keyboards and recorded PCM
+
+Attach eight MIDI-keyed source-frame ranges with `Clip::with_slices` and select
+`PlaybackMode::Slice`. The root triggers the complete clip. Each mapped key
+triggers its range at the root playback rate, with transport speed changes
+applied to any tempo-tagged clip. The next strike chokes the current chop.
+`PitchedMessage::SliceTrims` sets independent start/end percentages within
+the eight ranges. Unmapped keys are silent and leave the current hit sounding.
+
+The `recording` feature accepts native-endian mono PCM16 in an atomic sample
+slice. A host can publish one take to multiple players with `replace_recording`.
+The final bank entry is the recording slot. Changing its contents retires
+voices on that slot while other bank entries keep sounding.
+
 ## License
 
 The Rust code is available under either the [Apache License, Version 2.0][apache]

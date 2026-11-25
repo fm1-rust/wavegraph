@@ -22,6 +22,23 @@ const SEMITONES: [u32; 12] = [
 ];
 const FULL_GAIN: u32 = 1 << 24;
 
+/// A drum pad selects an inclusive start and exclusive end in source frames.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Slice {
+    /// MIDI pad identity, independent of playback pitch.
+    pub note: u8,
+    /// First source frame.
+    pub start: u32,
+    /// First source frame outside the chop.
+    pub end: u32,
+}
+
+/// Per-pad trim percentages, in the same order as the clip's eight slices.
+pub type SliceTrims = [[u8; 2]; 8];
+
+/// Use the complete factory region on every pad.
+pub const FULL_SLICES: SliceTrims = [[0, 100]; 8];
+
 /// Mono PCM16 with its recording rate and the MIDI key that plays it at native speed.
 #[derive(Clone, Copy, Debug)]
 pub struct Clip<'a> {
@@ -29,6 +46,7 @@ pub struct Clip<'a> {
     source_hz: u32,
     root: u8,
     native_bpm: u16,
+    slices: Option<&'a [Slice; 8]>,
 }
 
 impl<'a> Clip<'a> {
@@ -64,6 +82,17 @@ impl<'a> Clip<'a> {
             return None;
         }
         Self::new(Pcm::Raw(pcm), source_hz, root)
+    }
+
+    /// A published region of shared native-endian PCM16 recording memory.
+    #[cfg(feature = "recording")]
+    #[must_use]
+    pub const fn from_shared_pcm16(
+        samples: &'a [core::sync::atomic::AtomicI16],
+        source_hz: u32,
+        root: u8,
+    ) -> Option<Self> {
+        Self::new(Pcm::Shared(samples), source_hz, root)
     }
 
     /// Borrow losslessly bit-packed PCM1, validating all groups once. Can be used in a static bank.
@@ -107,6 +136,7 @@ impl<'a> Clip<'a> {
             source_hz,
             root,
             native_bpm: 0,
+            slices: None,
         })
     }
 
@@ -115,6 +145,47 @@ impl<'a> Clip<'a> {
     pub const fn with_native_tempo(mut self, bpm: u16) -> Self {
         self.native_bpm = bpm;
         self
+    }
+
+    /// Assign eight one-shot pads. Slice mode always reserves the root for the whole clip.
+    #[must_use]
+    pub const fn with_slices(mut self, pads: &'a [Slice; 8]) -> Self {
+        self.slices = Some(pads);
+        self
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        reason = "The validated percentages limit both offsets to the nonempty u32 source range."
+    )]
+    fn region(
+        self,
+        key: u8,
+        playback: Playback,
+        trims: &SliceTrims,
+    ) -> Option<core::ops::Range<u32>> {
+        let frames = self.pcm.frames();
+        let (start, end, trim) = if playback.mode == PlaybackMode::Slice {
+            if key == self.root {
+                return (frames != 0).then_some(0..frames);
+            }
+            let (i, pad) = self
+                .slices?
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.note == key)?;
+            (pad.start, pad.end, trims[i])
+        } else {
+            (0, frames, [playback.start, playback.end])
+        };
+        if start >= end || end > frames {
+            return None;
+        }
+        let span = u64::from(end - start);
+        let begin = start + (span * u64::from(trim[0]) / 100) as u32;
+        let end = start + (span * u64::from(trim[1])).div_ceil(100) as u32;
+        Some(begin..end)
     }
 
     /// MIDI key at which the clip plays at its original speed.
@@ -149,6 +220,8 @@ pub enum PlaybackMode {
     Gate,
     /// Repeat the region forwards until key release, then fade out.
     Loop,
+    /// Play a mapped drum chop at the root pitch. A new hit chokes the previous slice.
+    Slice,
 }
 
 /// Playback settings latched on the next strike.
@@ -182,6 +255,8 @@ pub enum PitchedMessage {
     Select(u8),
     /// Configure the next strike. Invalid trim ranges are ignored.
     Playback(Playback),
+    /// Trim each chop relative to its own source range. The root always plays the full clip.
+    SliceTrims(SliceTrims),
     /// Set the selected clip's tone. Edits also affect its sounding voices.
     Timbre(Timbre),
     /// Transport BPM for tempo-tagged clips. Zero selects the recording's own tempo.
@@ -199,8 +274,11 @@ pub enum PitchedMessage {
 pub struct PitchedSampler<'a> {
     bank: &'a [Clip<'a>],
     selected: &'a Clip<'a>,
+    #[cfg(feature = "recording")]
+    recording: Option<Clip<'a>>,
     program: Timbre,
     playback: Playback,
+    trims: SliceTrims,
     bpm: u16,
     output_hz: u32,
     period: f32,
@@ -260,14 +338,43 @@ impl<'a> PitchedSampler<'a> {
         Some(Self {
             bank,
             selected: clip,
+            #[cfg(feature = "recording")]
+            recording: None,
             program: Timbre::DRY,
             playback: Playback::INITIAL,
+            trims: FULL_SLICES,
             bpm: 0,
             output_hz,
             period,
             voices: core::array::from_fn(|_| Voice::new(clip, period)),
             order: [0, 1, 2, 3],
         })
+    }
+
+    /// Replace the last bank entry with a recorded take. Voices using that entry
+    /// stop at this block boundary. Passing `None` restores its factory clip.
+    #[cfg(feature = "recording")]
+    pub fn replace_recording(&mut self, recording: Option<Clip<'a>>) {
+        let Some(slot) = self.bank.last() else { return };
+        for voice in &mut self.voices {
+            if core::ptr::eq(voice.clip, slot) {
+                voice.current = None;
+            }
+        }
+        self.recording = recording;
+    }
+
+    fn source(&self, slot: &Clip<'a>) -> Clip<'a> {
+        #[cfg(feature = "recording")]
+        if let Some(take) = self.recording
+            && self
+                .bank
+                .last()
+                .is_some_and(|last| core::ptr::eq(last, slot))
+        {
+            return take;
+        }
+        *slot
     }
 
     fn apply(&mut self, message: PitchedMessage) {
@@ -279,11 +386,18 @@ impl<'a> PitchedSampler<'a> {
             }
             PitchedMessage::Playback(p) if p.start < p.end && p.end <= 100 => self.playback = p,
             PitchedMessage::Playback(_) => (),
+            PitchedMessage::SliceTrims(trims) => {
+                if trims.iter().all(|&[start, end]| start < end && end <= 100) {
+                    self.trims = trims;
+                }
+            }
             PitchedMessage::Tempo(bpm) => {
                 self.bpm = bpm;
-                for voice in &mut self.voices {
-                    if voice.current.is_some() && voice.clip.native_bpm != 0 {
-                        voice.update_step(self.output_hz, self.period, bpm);
+                for i in 0..POLYPHONY {
+                    let source = self.source(self.voices[i].clip);
+                    let voice = &mut self.voices[i];
+                    if voice.current.is_some() && source.native_bpm != 0 {
+                        voice.update_step(source, self.output_hz, self.period, bpm);
                     }
                 }
             }
@@ -312,6 +426,17 @@ impl<'a> PitchedSampler<'a> {
                 }
             }
             PitchedMessage::NoteOn(note) if note.number < 128 => {
+                let source = self.source(self.selected);
+                let Some(region) = source.region(note.number, self.playback, &self.trims) else {
+                    return;
+                };
+                if self.playback.mode == PlaybackMode::Slice {
+                    for voice in &mut self.voices {
+                        if core::ptr::eq(voice.clip, self.selected) {
+                            voice.current = None;
+                        }
+                    }
+                }
                 let rank = self
                     .order
                     .iter()
@@ -333,14 +458,16 @@ impl<'a> PitchedSampler<'a> {
                 let slot = usize::from(self.order[rank]);
                 self.order[rank..].rotate_left(1);
                 let voice = &mut self.voices[slot];
+                voice.clip = self.selected;
                 voice.strike(
-                    self.selected,
+                    source,
                     note,
                     self.playback,
                     self.program,
                     self.period,
+                    region,
                 );
-                voice.update_step(self.output_hz, self.period, self.bpm);
+                voice.update_step(source, self.output_hz, self.period, self.bpm);
             }
             PitchedMessage::NoteOn(_) => (),
         }
@@ -405,14 +532,18 @@ impl<'a> Voice<'a> {
         clippy::arithmetic_side_effects,
         reason = "Playback speed is nonnegative, fixed-point fractions are less than one and MIDI intervals fit eleven octaves."
     )]
-    fn update_step(&mut self, output_hz: u32, period: f32, bpm: u16) {
-        let clip = self.clip;
+    fn update_step(&mut self, clip: Clip<'_>, output_hz: u32, period: f32, bpm: u16) {
+        let key = if self.active.mode == PlaybackMode::Slice {
+            clip.root
+        } else {
+            self.note
+        };
         if clip.native_bpm == 0 {
-            let step = clip.step(self.note, output_hz);
+            let step = clip.step(key, output_hz);
             self.step_whole = step >> FRAC_BITS;
             self.step_fraction = step << (32 - FRAC_BITS);
         } else {
-            let interval = i32::from(self.note) - i32::from(clip.root);
+            let interval = i32::from(key) - i32::from(clip.root);
             let index = usize::try_from(interval.rem_euclid(12)).expect("semitone");
             let octave = interval.div_euclid(12);
             let pitch =
@@ -428,7 +559,10 @@ impl<'a> Voice<'a> {
 
     fn release(&mut self, output_hz: u32) {
         self.held = false;
-        if self.active.mode == PlaybackMode::OneShot {
+        if matches!(
+            self.active.mode,
+            PlaybackMode::OneShot | PlaybackMode::Slice
+        ) {
             return;
         }
         self.tone.release();
@@ -452,13 +586,13 @@ impl<'a> Voice<'a> {
     )]
     fn strike(
         &mut self,
-        clip: &'a Clip<'a>,
+        clip: Clip<'a>,
         note: Note,
         playback: Playback,
         program: Timbre,
         period: f32,
+        region: core::ops::Range<u32>,
     ) {
-        self.clip = clip;
         self.note = note.number;
         self.held = true;
         self.tone.strike(program, note, clip.root, period);
@@ -467,10 +601,8 @@ impl<'a> Voice<'a> {
         self.envelope = FULL_GAIN;
         self.fraction = 0;
         self.active = playback;
-        let frames = u64::from(clip.pcm.frames());
-        let begin = (frames * u64::from(playback.start) / 100) as u32;
-        let end = (frames * u64::from(playback.end)).div_ceil(100) as u32;
-        self.region_frames = end - begin;
+        let begin = region.start;
+        self.region_frames = region.end - begin;
         self.start = clip.pcm.cursor();
         if begin != 0 {
             self.start.nth(begin - 1);

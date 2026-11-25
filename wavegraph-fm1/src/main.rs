@@ -18,6 +18,8 @@ mod bumper;
 #[cfg(any(target_os = "none", test))]
 mod capture;
 #[cfg(any(target_os = "none", test))]
+mod clipboard;
+#[cfg(any(target_os = "none", test))]
 mod envelope;
 #[cfg(target_os = "none")]
 mod firmware;

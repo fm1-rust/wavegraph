@@ -82,6 +82,7 @@ impl Assignment {
 pub(super) enum View {
     Scope,
     SampleEdit,
+    Clipboard,
     VoiceMode,
     Envelope,
     Arp,
@@ -127,7 +128,8 @@ impl View {
         match self {
             Self::Scope | Self::Fx => true,
             Self::SampleEdit => part == Part::Sampler,
-            Self::Envelope
+            Self::Clipboard
+            | Self::Envelope
             | Self::VoiceMode
             | Self::Lfo
             | Self::Arp
@@ -194,6 +196,8 @@ pub(super) enum PageButton {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Navigation {
+    pub(super) clip_options: crate::clipboard::Options,
+    pub(super) clip_request: crate::clipboard::Request,
     pub(super) view: View,
     pub(super) focus: Channel,
     pub(super) preset_since: Option<u32>,
@@ -206,6 +210,8 @@ pub(super) struct Navigation {
 
 impl Navigation {
     pub(super) const INITIAL: Self = Self {
+        clip_options: crate::clipboard::Options::INITIAL,
+        clip_request: crate::clipboard::Request::INITIAL,
         view: View::Scope,
         focus: Channel::One,
         preset_since: None,
@@ -283,6 +289,8 @@ impl Navigation {
                 self.fx_parent = View::Fx;
                 View::MasterFx(None)
             }
+            PageButton::Edit if self.view.is_mixer() => View::Clipboard,
+            PageButton::Edit if self.view == View::Clipboard => View::Mixer,
             PageButton::Home if self.view == View::Channel => View::Mixer,
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,

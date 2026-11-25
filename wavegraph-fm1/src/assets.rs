@@ -7,13 +7,15 @@ use wavegraph_wavetable::{BANKS, Bank};
 pub(crate) use fm1_assets::flash_asset;
 
 pub(super) const HOUSE_M7: u8 = 1;
-pub(super) const SAMPLE_NAMES: [[u8; 9]; 6] = [
+pub(super) const CLIPBOARD_SLOT: u8 = 6;
+pub(super) const SAMPLE_NAMES: [[u8; 9]; 7] = [
     *b"AMEN BRK ",
     *b"MIN7 STAB",
     *b"RAVE RISE",
     *b"AIRHORN  ",
     *b"LASER ZAP",
     *b"RAVE STAB",
+    *b"CLIPBOARD",
 ];
 
 macro_rules! rave_clip {
@@ -40,18 +42,104 @@ macro_rules! rave_clip {
     }};
 }
 
+// The lower-rate hits share the Amen's block decoder. Only the selected
+// recording is linked, and the frame count excludes the final block's padding.
+macro_rules! rave_hit {
+    ($file:literal, $root:literal, $master_hz:literal, $hz:literal, $frames:literal) => {{
+        #[cfg(feature = "lofi-samples")]
+        let clip = wavegraph_sampler::Clip::from_ima_adpcm(
+            flash_asset!(
+                u8,
+                include_bytes!(concat!("../samples/rave/", $file, "-lofi.ima"))
+            )
+            .as_slice(),
+            $frames,
+            $hz,
+            $root,
+        )
+        .expect("valid low-rate factory hit");
+        #[cfg(not(feature = "lofi-samples"))]
+        let clip = rave_clip!(
+            $file,
+            $master_hz,
+            $root,
+            all(target_os = "none", not(feature = "packed-cymbals"))
+        );
+        clip
+    }};
+}
+
+// Source-frame boundaries close to zero crossings ahead of the chosen attacks.
+// The compact render has its own rate and rounding at those crossings.
+pub(super) const PAD_NOTES: [u8; 8] = [53, 55, 57, 59, 62, 64, 65, 67];
+#[cfg(all(
+    feature = "packed-samples",
+    feature = "packed-cymbals",
+    not(feature = "lofi-samples")
+))]
+const BOUNDS: [(u32, u32); 8] = [
+    (0, 5_981),
+    (11_981, 18_000),
+    (18_000, 20_978),
+    (20_978, 23_980),
+    (29_985, 35_981),
+    (125_967, 131_955),
+    (137_985, 143_961),
+    (173_963, 192_000),
+];
+#[cfg(not(all(
+    feature = "packed-samples",
+    feature = "packed-cymbals",
+    not(feature = "lofi-samples")
+)))]
+const BOUNDS: [(u32, u32); 8] = [
+    (0, 3_066),
+    (6_138, 9_218),
+    (9_218, 10_748),
+    (10_748, 12_291),
+    (15_370, 18_438),
+    (64_558, 67_624),
+    (70_720, 73_781),
+    (89_168, 98_400),
+];
+pub(super) const AMEN_PADS: [wavegraph_sampler::Slice; 8] = {
+    let mut pads = [wavegraph_sampler::Slice {
+        note: 0,
+        start: 0,
+        end: 0,
+    }; 8];
+    let mut i = 0;
+    while i < pads.len() {
+        pads[i] = wavegraph_sampler::Slice {
+            note: PAD_NOTES[i],
+            start: BOUNDS[i].0,
+            end: BOUNDS[i].1,
+        };
+        i += 1;
+    }
+    pads
+};
+
 // SAFETY: these immutable clip descriptors point into read-only upper flash.
 #[cfg_attr(target_os = "none", unsafe(link_section = ".fm1_assets"))]
 pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len()] = [
     {
         // The two encodings contain the same sixteen beats. Only one enters the image.
-        #[cfg(all(feature = "packed-samples", feature = "packed-cymbals"))]
+        #[cfg(all(
+            feature = "packed-samples",
+            feature = "packed-cymbals",
+            not(feature = "lofi-samples")
+        ))]
         let (bytes, frames, hz) = (
             flash_asset!(u8, include_bytes!("../samples/rave/amen.ima")).as_slice(),
             192_000,
             24_400,
         );
-        #[cfg(not(all(feature = "packed-samples", feature = "packed-cymbals")))]
+        #[cfg(not(all(
+            feature = "packed-samples",
+            feature = "packed-cymbals",
+            not(feature = "lofi-samples")
+        )))]
         let (bytes, frames, hz) = (
             flash_asset!(u8, include_bytes!("../samples/rave/amen-compact.ima")).as_slice(),
             98_400,
@@ -60,13 +148,9 @@ pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len
         wavegraph_sampler::Clip::from_ima_adpcm(bytes, frames, hz, 60)
             .expect("validated four-bar Amen break")
             .with_native_tempo(122)
+            .with_slices(&AMEN_PADS)
     },
-    rave_clip!(
-        "house-m7",
-        16_000,
-        62,
-        all(target_os = "none", not(feature = "packed-cymbals"))
-    ),
+    rave_hit!("house-m7", 62, 16_000, 8_000, 4_000),
     wavegraph_sampler::Clip::from_ima_adpcm(
         flash_asset!(u8, include_bytes!("../samples/rave/rise.ima")),
         19_404,
@@ -75,18 +159,9 @@ pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len
     )
     .expect("validated rave rise"),
     rave_clip!("horn", 22_059, 60, any()),
-    rave_clip!(
-        "zap",
-        22_059,
-        60,
-        all(target_os = "none", not(feature = "packed-cymbals"))
-    ),
-    rave_clip!(
-        "stab",
-        14_706,
-        43,
-        all(target_os = "none", not(feature = "packed-cymbals"))
-    ),
+    rave_hit!("zap", 60, 22_059, 14_706, 11_765),
+    rave_hit!("stab", 43, 14_706, 7_353, 6_471),
+    wavegraph_sampler::Clip::from_pcm16le(&[], 44_118, 60).expect("empty session slot"),
 ];
 
 #[cfg(target_os = "none")]

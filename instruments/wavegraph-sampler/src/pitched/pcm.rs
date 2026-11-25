@@ -3,6 +3,8 @@
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Pcm<'a> {
     Raw(&'a [[u8; 2]]),
+    #[cfg(feature = "recording")]
+    Shared(&'a [core::sync::atomic::AtomicI16]),
     #[cfg(feature = "ima-adpcm")]
     Ima {
         blocks: &'a [[u8; 64]],
@@ -19,6 +21,8 @@ pub(super) enum Pcm<'a> {
 impl<'a> Pcm<'a> {
     pub(super) fn frames(self) -> u32 {
         match self {
+            #[cfg(feature = "recording")]
+            Self::Shared(frames) => u32::try_from(frames.len()).unwrap_or(u32::MAX),
             Self::Raw(frames) => u32::try_from(frames.len()).unwrap_or(u32::MAX),
             #[cfg(feature = "ima-adpcm")]
             Self::Ima { frames, .. } => frames,
@@ -30,6 +34,8 @@ impl<'a> Pcm<'a> {
     pub(super) fn cursor(self) -> Cursor<'a> {
         match self {
             Self::Raw(frames) => Cursor::Raw(frames.iter()),
+            #[cfg(feature = "recording")]
+            Self::Shared(frames) => Cursor::Shared(frames.iter()),
             #[cfg(feature = "ima-adpcm")]
             Self::Ima { blocks, .. } => Cursor::Ima(super::ima::Decoder::new(blocks)),
             #[cfg(feature = "packed-pcm")]
@@ -61,6 +67,8 @@ impl<'a> Pcm<'a> {
 #[derive(Clone, Debug)]
 pub(super) enum Cursor<'a> {
     Raw(core::slice::Iter<'a, [u8; 2]>),
+    #[cfg(feature = "recording")]
+    Shared(core::slice::Iter<'a, core::sync::atomic::AtomicI16>),
     #[cfg(feature = "ima-adpcm")]
     Ima(super::ima::Decoder<'a>),
     #[cfg(feature = "packed-pcm")]
@@ -78,6 +86,10 @@ impl Cursor<'_> {
     /// Skip source frames and consume the next one.
     pub(super) fn nth(&mut self, skip: u32) -> Option<i16> {
         match self {
+            #[cfg(feature = "recording")]
+            Self::Shared(frames) => frames
+                .nth(usize::try_from(skip).ok()?)
+                .map(|s| s.load(core::sync::atomic::Ordering::Relaxed)),
             Self::Raw(frames) => frames
                 .nth(usize::try_from(skip).unwrap_or(usize::MAX))
                 .copied()

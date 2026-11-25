@@ -156,8 +156,33 @@ impl<const KEYS: usize> Piano<KEYS> {
         assignment: Assignment,
         key: Note,
     ) -> Option<Note> {
-        self.release(key.number);
-        let note = self.mapped_note(assignment.part, key)?;
+        self.keyboard_note(channel, assignment, key, false, false)
+    }
+
+    pub(super) fn keyboard_note(
+        &mut self,
+        channel: Channel,
+        assignment: Assignment,
+        key: Note,
+        slices: bool,
+        erase: bool,
+    ) -> Option<Note> {
+        let note = if slices {
+            if key.number != 60 && !crate::assets::PAD_NOTES.contains(&key.number) {
+                return None;
+            }
+            key
+        } else {
+            self.mapped_note(assignment.part, key)?
+        };
+        if !erase {
+            self.press_mapped(channel, assignment, key.number, note);
+        }
+        Some(note)
+    }
+
+    fn press_mapped(&mut self, channel: Channel, assignment: Assignment, key: u8, note: Note) {
+        self.release(key);
         if let Some(drum) = assignment.part.drum(note.number) {
             let pads = &mut self.pads[channel.index()];
             if pads.generation != assignment.generation {
@@ -171,14 +196,13 @@ impl<const KEYS: usize> Piano<KEYS> {
         self.serial = self.serial.wrapping_add(1);
         self.held
             .push(Press {
-                key: key.number,
+                key,
                 channel,
                 generation: assignment.generation,
                 note,
                 strike: self.serial,
             })
             .expect("one press per physical key");
-        Some(note)
     }
 
     pub(super) fn release(&mut self, key: u8) {
@@ -404,6 +428,12 @@ impl<const PANEL: usize> Keys<PANEL> {
             return;
         }
         let notes = keys.latest();
+        if let Some(note) = notes[0].note
+            && notes[0].strike != track.voice.gate.phrase
+            && notes[0].strike == keys.serial
+        {
+            track.select_slice(note.number);
+        }
         track.voice.gate = Gate {
             note: notes[0].note,
             // Keep the last sampler strike so an uncovered one-shot is not launched twice.

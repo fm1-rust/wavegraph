@@ -126,6 +126,7 @@ impl Renderer {
         graph.set_mixer(settings.mixer);
         graph.set_fx(settings.fx);
         graph.transport = settings.seq.transport;
+        graph.recording_request = nav.clip_request;
         graph.sequences = settings.seq.enabled;
         graph.select_patterns(Channel::ALL.map(|c| {
             settings
@@ -166,6 +167,7 @@ impl Renderer {
             [0; CHANNELS]
         };
         block.motion = Motion {
+            clipboard: graph.recorder.status,
             position: graph.position,
             transport: Some(settings.seq.transport),
             banks: graph.banks(),

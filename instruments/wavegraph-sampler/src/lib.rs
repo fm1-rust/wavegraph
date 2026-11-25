@@ -5,7 +5,8 @@
 mod pitched;
 
 pub use pitched::{
-    Clip, POLYPHONY, PitchedMessage, PitchedSampler, Playback, PlaybackMode, Timbre,
+    Clip, FULL_SLICES, POLYPHONY, PitchedMessage, PitchedSampler, Playback, PlaybackMode, Slice,
+    SliceTrims, Timbre,
 };
 
 use wavegraph_core::{Port, Process, ProcessContext};

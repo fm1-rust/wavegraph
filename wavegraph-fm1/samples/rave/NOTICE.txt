@@ -27,8 +27,8 @@ https://freesound.org/people/JapanYoshiTheGamer/sounds/576561/
 The author programmed the remake from scratch in FL Studio. Rhythm after
 Gregory C. Coleman on The Winstons' "Amen, Brother". The firmware plays
 the opening four bars from the Ogg preview. At C4 their speed follows
-the transport (122 BPM by default). The packed firmware uses 192,000
-frames at 24,400 Hz, the comparison build uses 98,400 at 12,505 Hz.
+the transport (122 BPM by default). The default bank uses 98,400 frames
+at 12,505 Hz. The original-rate packed bank uses 192,000 at 24,400 Hz.
 Both use a single peak gain across all four bars and short boundary
 fades. The break and rise use 64-byte mono IMA ADPCM blocks.
 
@@ -38,3 +38,8 @@ Original synthesized D4 minor seventh (D, F, A, C) with FM tines,
 detuned reeds, a lower D and two short echoes. No record audio was used.
 house_m7.py renders the 8,000 mono PCM16 frames at 16 kHz as a WAV.
 The .s16le asset is its data chunk.
+
+lofi.py generates house-m7-lofi.ima, stab-lofi.ima and zap-lofi.ima
+from the credited PCM masters with FFmpeg. It low-pass filters and
+resamples to 8,000, 7,353 and 14,706 Hz respectively, then quantizes
+to 10, 8 and 12 bits before encoding as 64-byte mono IMA blocks.
