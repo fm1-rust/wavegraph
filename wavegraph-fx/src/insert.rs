@@ -16,6 +16,8 @@ pub struct SaturatorControls {
     pub mix: u8,
     /// Wet output level, from silence to unity.
     pub level: u8,
+    /// Clipping curve, from the original cubic soft knee to a hard knee.
+    pub shape: u8,
     /// Enable with a short bypass crossfade.
     pub enabled: bool,
 }
@@ -26,6 +28,7 @@ impl SaturatorControls {
         drive: 32,
         mix: 128,
         level: 96,
+        shape: 0,
         enabled: true,
     };
 }
@@ -103,12 +106,13 @@ fn blend(current: &mut i32, target: i32) -> i32 {
     *current
 }
 
-/// Memoryless, symmetric cubic soft clipper with a dry/wet crossfade.
+/// Symmetric soft-to-hard clipper with smoothed shape and wet/dry controls.
 /// No oversampling: high drive can produce aliasing.
 #[derive(Clone, Copy, Debug)]
 pub struct Saturator {
     controls: SaturatorControls,
     blend: i32,
+    shape: i32,
 }
 
 impl Default for Saturator {
@@ -124,6 +128,7 @@ impl Saturator {
         Self {
             controls: SaturatorControls::INITIAL,
             blend: 0,
+            shape: 0,
         }
     }
 
@@ -144,6 +149,7 @@ impl Saturator {
                 0
             },
         );
+        let shape = blend(&mut self.shape, i32::from(c.shape.min(128)));
         if mix == 0 {
             return sample;
         }
@@ -151,7 +157,10 @@ impl Saturator {
         let driven = clamp_pcm(mul_q7(x, 128 + 7 * i32::from(c.drive.min(128))));
         let square = ((i64::from(driven) * i64::from(driven)) >> 23) as i32;
         let cube = ((i64::from(square) * i64::from(driven)) >> 23) as i32;
-        let shaped = (3 * driven - cube) / 2;
+        // Both curves have a slope of 1.5 at zero and reach the same peak.
+        let soft = (3 * driven - cube) / 2;
+        let hard = clamp_pcm(3 * driven / 2);
+        let shaped = soft + mul_q7(hard - soft, shape);
         let wet = mul_q7(shaped, i32::from(c.level.min(128)));
         pcm(x + mul_q7(wet - x, mix))
     }
@@ -294,6 +303,33 @@ mod tests {
             fx.tick(input);
         }
         assert_eq!(fx.tick(input), input);
+    }
+
+    #[test]
+    fn saturator_shape_morphs_between_soft_and_hard_at_the_same_level() {
+        let mut fx = Saturator::new();
+        let controls = SaturatorControls {
+            drive: 0,
+            mix: 128,
+            level: 128,
+            ..SaturatorControls::INITIAL
+        };
+        let sample = I24::new_unchecked(1 << 22);
+        for (shape, expected) in [(0, 5_767_168), (64, 6_029_312), (128, 6_291_456)] {
+            fx.set_controls(SaturatorControls { shape, ..controls });
+            for _ in 0..64 {
+                fx.tick(sample);
+            }
+            assert_eq!(fx.tick(sample).inner(), expected);
+            assert_eq!(fx.tick(I24::new_unchecked(-(1 << 22))).inner(), -expected);
+            assert_eq!(fx.tick(I24::default()).inner(), 0);
+        }
+        fx.set_controls(controls);
+        assert_eq!(fx.tick(sample).inner(), 6_283_264); // first of 64 steps back
+        for _ in 1..64 {
+            fx.tick(sample);
+        }
+        assert_eq!(fx.tick(sample).inner(), 5_767_168);
     }
 
     #[test]

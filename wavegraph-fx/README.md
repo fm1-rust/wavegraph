@@ -18,6 +18,10 @@ two-input send-only node.
   depth the delay runs from one sample to 2 ms, up to 63 samples. Send
   `Message::Flanger(FlangerControls)` to edit rate, depth, feedback (up to
   75%) and mix. `Message::Enabled(false)` fades the insert to dry.
+- `Saturator` applies drive, shapes the clipped signal, then adjusts its wet
+  level and mix. Shape 0 uses the original cubic curve. Shape 128 hard-clips
+  with the same low-level gain and peak. Sweeps between the two change the
+  harmonics around the clipping knee.
 - `SidechainDucker<N>` takes the program on signal inlet 0. Route a kick
   or another signal to a further inlet, then use `Message::SidechainKey` to
   choose the detector. `SidechainDepth` controls the gain reduction and

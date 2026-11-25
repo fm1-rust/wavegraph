@@ -244,8 +244,12 @@ fn insert(
         Insert::Saturator(fx) => {
             let drive = 10 + u16::from(fx.drive) * 70 / 128;
             let drive = heapless::format!(5; "{}.{}x", drive / 10, drive % 10).expect("drive");
-            dial(112, "1 DRIVE", fx.drive, &drive);
-            for (x, name, position) in [(164, "2 MIX", fx.mix), (211, "3 LEVEL", fx.level)] {
+            dial(87, "1 DRIVE", fx.drive, &drive);
+            for (x, name, position) in [
+                (130, "2 MIX", fx.mix),
+                (173, "3 LEVEL", fx.level),
+                (216, "4 SHAPE", fx.shape),
+            ] {
                 dial(
                     x,
                     name,

@@ -406,13 +406,10 @@ impl Track {
     }
 
     #[cfg(test)]
-    #[expect(
-        clippy::panic,
-        reason = "Test helper checks the factory insert invariant"
-    )]
+    #[expect(clippy::panic, reason = "Test helper requires a sidechain in slot one")]
     fn bass_fx(&mut self) -> &mut BassFx {
         let Insert::Compressor(fx) = &mut self.inserts[0] else {
-            panic!("factory bass insert");
+            panic!("expected a sidechain in slot one");
         };
         fx
     }
@@ -1335,6 +1332,7 @@ impl Programs {
             mixer: Mixer::DRY,
             previous_mixer: None,
             previous_bpm: 0,
+            shape_offsets: [0; CHANNELS],
             fx: Fx::INITIAL,
             cue: Cue::EMPTY,
             previous_fx: None,
@@ -1361,6 +1359,7 @@ pub(super) struct Instrument<'a> {
     mixer: Mixer,
     previous_mixer: Option<Mixer>,
     previous_bpm: u16,
+    shape_offsets: [u8; CHANNELS],
     fx: Fx,
     pub(super) cue: Cue,
     previous_fx: Option<Fx>,
@@ -1528,11 +1527,6 @@ impl Instrument<'_> {
                     .push(at(Message::Insert(Channel::ALL[i], part)))
                     .map_err(|_| Error::Capacity)?;
             }
-            if old.is_none_or(|t| t.inserts != track.inserts) {
-                inserts
-                    .push(at(Message::ChannelInserts(Channel::ALL[i], track.inserts)))
-                    .map_err(|_| Error::Capacity)?;
-            }
             // Each synth's live gate takes over its own sequencer lane.
             enabled[i] &= if track.arp.enabled {
                 self.arps[i].chord.is_empty()
@@ -1634,6 +1628,22 @@ impl Instrument<'_> {
             },
             &mut wire,
         )?;
+        // Insert controls run at the DMA block rate. The clip adds to the
+        // panel setting, so knob edits survive a loop, mute or transport stop.
+        let shape_offsets =
+            Channel::ALL.map(|c| player.automation(c).map_or(0, |a| a.shape_offset));
+        for (i, track) in tracks.iter().enumerate() {
+            let old = self.previous.as_ref().map(|tracks| &tracks[i]);
+            if old.is_none_or(|t| t.assignment != track.assignment || t.inserts != track.inserts)
+                || self.shape_offsets[i] != shape_offsets[i]
+            {
+                let mut slots = track.inserts;
+                slots[0].add_shape(shape_offsets[i]);
+                inserts
+                    .push(at(Message::ChannelInserts(Channel::ALL[i], slots)))
+                    .map_err(|_| Error::Capacity)?;
+            }
+        }
         for (i, (events, live)) in self.events.iter_mut().zip(live_counts).enumerate() {
             merge_live_events(events, live);
             let track = &tracks[i];
@@ -1695,6 +1705,7 @@ impl Instrument<'_> {
             },
         )?;
         self.player = player;
+        self.shape_offsets = shape_offsets;
         self.position = player.position();
         self.drums = drums;
         self.wave_frames = wave_frames;
@@ -2842,6 +2853,7 @@ mod tests {
         ] {
             with_instrument(44_118, |instrument| {
                 let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
+                parts[2].inserts[0] = Insert::Compressor(BassFx::INITIAL);
                 parts[2].bass_fx().edit([turn, 25, 4, 0], false);
                 let fx = *parts[2].bass_fx();
                 assert_eq!(fx.key, key);
@@ -2900,6 +2912,8 @@ mod tests {
             let mut tracks = Track::rack(
                 [Part::Tr909, Part::Bass, Part::Bass, Part::Tr909].map(Assignment::new),
             );
+            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+            tracks[2].inserts[0] = Insert::Compressor(BassFx::INITIAL);
             let mut mixer = Mixer::DRY;
             mixer.0[0].level = 0;
             mixer.0[3].level = 0;
@@ -2965,10 +2979,59 @@ mod tests {
     }
 
     #[test]
+    fn factory_shape_gesture_follows_only_the_upper_303_and_releases_on_mute() -> Result<(), Error>
+    {
+        use wavegraph_fx::Saturator;
+        with_instrument(44_118, |instrument| {
+            let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+            assert_eq!(tracks[2].inserts, [Insert::None; 2]);
+            assert_eq!(tracks[3].inserts, [Insert::None; 2]);
+            tracks[1].inserts[0].edit([0, 0, 0, 12], false);
+            let mut refs = [Saturator::new(); 2];
+            let mut changes = Vec::<u8, 8>::new();
+            let mut muted_once = false;
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            instrument.transport.toggle();
+            for _ in 0..2713 {
+                // one four-bar loop at 122 BPM
+                instrument.render_with_midi(&tracks, &mut buses, |_, e| {
+                    assert!(!matches!(e.message, MidiMessage::Control(20, _)));
+                })?;
+                for (i, reference) in refs.iter_mut().enumerate() {
+                    let c = Channel::ALL[i];
+                    let offset = instrument
+                        .bass_automation(c)
+                        .map_or(0, |(_, a)| a.shape_offset);
+                    if i == 0 {
+                        assert_eq!(offset, 0);
+                    } else {
+                        if changes.last() != Some(&offset) {
+                            changes.push(offset).map_err(|_| Error::Capacity)?;
+                        }
+                        instrument.sequences[i] = offset != 128 || muted_once;
+                        muted_once |= offset == 128;
+                    }
+                    let Insert::Saturator(mut fx) = tracks[i].inserts[0] else {
+                        return Err(Error::Object);
+                    };
+                    fx.shape = fx.shape.saturating_add(offset).min(128);
+                    reference.set_controls(fx);
+                    let expected = buses[c.source_bus()].map(|sample| reference.tick(sample));
+                    assert_eq!(buses[STRIP_BUS + i], expected);
+                }
+            }
+            assert_eq!(changes.as_slice(), &[0, 48, 97, 128, 0, 128, 48, 0]);
+            Ok(())
+        })
+    }
+
+    #[test]
     fn each_303_keeps_its_own_key_depth_and_bypass() -> Result<(), Error> {
         use crate::fx::KeySource;
         with_instrument(44_118, |instrument| {
             let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+            tracks[0].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
             tracks[0].bass_fx().edit([0, 25, 0, 0], true);
             tracks[1].bass_fx().key = KeySource::Kick808;
             tracks[1].voice.gate.note = Some(note(48, 120));
@@ -3363,6 +3426,7 @@ mod tests {
             );
             let mut tracks = Track::rack(nav.assignments);
             assert_eq!(instrument.sequences, [true; 4]);
+            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
             tracks[1].voice.gate.note = Some(note(65, 100));
             tracks[2]
                 .drum_hits_mut()
