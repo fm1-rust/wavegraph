@@ -762,6 +762,8 @@ impl Screen {
             .position
             .map(|p| usize::from(p.beat_phase) * WIDTH / 256);
         if labels.view == View::Fx {
+            let mut labels = labels;
+            labels.inserts[0].add_shape(motion.shape_offset(labels.channel));
             let page = Page::Fx(labels.channel, labels.focus);
             let entering = self.page.replace(page) != Some(page);
             let style = self.selector.style(theme.scope);

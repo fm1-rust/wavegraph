@@ -1,5 +1,11 @@
 # Factory MIDI clips
 
+The upper 303's **01** clip adds Saturator Shape on beat two of bar four.
+Local CC 20 rises on the B–E slide and returns to zero before the final G.
+A value of 0 follows knob 4, and 127 adds the full Shape range. This
+controller acts on a Saturator in slot 1 of that strip and stays local to
+the FM-1. Notes, slides and synth CCs still go to USB MIDI.
+
 Sampler pattern 01 holds C4 for the full four bars. The default AMEN BRK plays in time with the transport. At C4 the full take lasts sixteen
 beats at the current tempo (122 BPM by default). The other seven
 sampler patterns play D-minor phrases against the factory 303s.

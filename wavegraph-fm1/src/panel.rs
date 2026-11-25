@@ -558,14 +558,21 @@ mod tests {
         assert_eq!(nav.insert_slot(), None);
         nav.turn(1, 0);
         assert_eq!(nav.insert_slot(), Some(0));
-        nav.turn(0, 1);
         assert_eq!(
             nav.insert_kinds[0],
             [InsertKind::Saturator, InsertKind::None]
         );
+        nav.turn(0, -1);
+        assert_eq!(
+            nav.insert_kinds[0],
+            [InsertKind::Compressor, InsertKind::None]
+        );
         nav.turn(1, -1);
         assert_eq!(nav.insert_slot(), Some(1));
-        assert_eq!(nav.insert_kinds[0], [InsertKind::Saturator, InsertKind::Eq]);
+        assert_eq!(
+            nav.insert_kinds[0],
+            [InsertKind::Compressor, InsertKind::Eq]
+        );
         assert_eq!(nav.focus, Channel::One);
         assert_eq!(nav.insert_kinds[1], InsertKind::factory(Part::Bass));
         nav.press(PageButton::Home);

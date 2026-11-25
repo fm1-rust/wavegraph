@@ -15,6 +15,8 @@ pub(super) mod pattern;
 use edit::{Address, EDITS, Edits, Step, Suppressed};
 
 const SUBSTEPS: usize = pattern::STEPS * 8;
+// Local clip modulation of the first channel insert's Saturator Shape.
+const CC_SATURATOR_SHAPE: u8 = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Transport {
@@ -470,6 +472,12 @@ impl Lane {
         if let MidiMessage::Control(cc, value) = midi
             && part == Part::Bass
         {
+            if cc == CC_SATURATOR_SHAPE {
+                // A zero offset gives the knob its full range. Keep the local
+                // FX lane off the USB stream sent to an external TB-03.
+                self.automation.shape_offset = value.saturating_add(value >> 6);
+                return Ok(());
+            }
             if cc == CC_SLIDE {
                 self.slide = value >= 64;
             } else {

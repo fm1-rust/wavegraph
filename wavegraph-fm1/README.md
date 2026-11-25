@@ -632,10 +632,24 @@ A 1:1 ratio leaves the limiter available on its own.
 
 ![Four channel faders during playback and the global rack with the compressor selected](assets/glo-master-fx.png)
 
+### Hear Saturator Shape on the 303
+
+Press PLAY with pattern 01 on both 303s. In bar four, listen for the upper
+303 sliding from B to E and then answering on G. The slide hardens and the G
+returns to the softer curve. To watch it, select channel 2, press FX and
+turn SELECT to slot 1. Its Shape dial follows the phrase.
+
+Both factory 303 channels have their own **SAT** in slot 1. Knobs 1–4 set
+Drive, Mix, Level and Shape. At 0% Shape the original soft knee rounds peaks.
+At 100% the harder curve flattens them. Turn knob 4 to set the starting
+shape, or press SEL to compare with the dry sound. The pattern adds to
+your setting for one beat. The lower 303 stays on its own setting throughout.
+
 ### Hear the kick duck the bass
 
-Select a TB-303 channel, press PLAY, then press FX to open **303 COMP**. Knob 1 starts on
-**909 KICK**, the isolated kick before its fader. Keep that source selected and
+Select a 303 channel, open FX, turn SELECT to slot 1 and turn PRESETS one
+detent left from **SATURATOR** to **SIDECHAIN**. Press PLAY. Knob 1 starts
+on **909 KICK**, the isolated kick before its fader. Keep it selected and
 turn knob 2 from 0% to 100%. At 0% the insert keeps its makeup gain, so you
 can compare depths at the same level between kicks. Listen to the bottom of
 the 303 dip on each quarter and come back between hits. Knob 3 moves the shelf
@@ -652,9 +666,8 @@ accents. Only the 303 is processed. The factory setting is 75% depth at
 
 The channel FX scope taps the selected instrument after its inserts and before
 its fader and shared sends. It keeps the same vertical gain while you adjust
-depth, bypass the compressor or switch to the send controls. The TB-303 has a
-compressor in slot 1. To flange the compressed bass, select slot 2 and turn
-PRESETS to **FLANGER**. Each slot keeps its own delay line.
+depth, bypass the compressor or switch to the send controls. To flange the
+compressed bass, select slot 2 and turn PRESETS to **FLANGER**. Each slot keeps its own delay line.
 
 ![Channel FX racks showing the TB-303 compressor and flanger alongside the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
 
@@ -803,7 +816,7 @@ The delay borrows 900 ms of PCM16 storage (79,412 bytes) and skips empty
 blocks once its line is silent. The shorter line reserves SRAM for channel inserts.
 
 The hot 303 preset reserves 16-fold output headroom before converting to Q23.
-Its sidechain insert sits between the synth and the channel fader, so both
+Its channel inserts sit between the synth and the channel fader, so both
 post-fader sends hear the shaped acid line. The GLO faders and sends apply
 to live and sequenced notes.
 FX's ALGORITHM encoder retains the async `EditQueue` to switch the output

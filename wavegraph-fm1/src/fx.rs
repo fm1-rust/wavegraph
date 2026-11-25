@@ -142,7 +142,7 @@ impl InsertKind {
     pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
         [
             if matches!(part, Part::Bass) {
-                Self::Compressor
+                Self::Saturator
             } else {
                 Self::None
             },
@@ -169,10 +169,17 @@ impl InsertKind {
         }
     }
 
-    pub(super) const fn initial(self) -> Insert {
+    pub(super) const fn initial(self, part: Part) -> Insert {
         match self {
             Self::None => Insert::None,
             Self::Compressor => Insert::Compressor(BassFx::INITIAL),
+            // Keep some dry attack and match the factory 303 levels.
+            Self::Saturator if matches!(part, Part::Bass) => Insert::Saturator(SaturatorControls {
+                drive: 80,
+                mix: 96,
+                level: 28,
+                ..SaturatorControls::INITIAL
+            }),
             Self::Saturator => Insert::Saturator(SaturatorControls::INITIAL),
             Self::Phaser => Insert::Phaser(PhaserControls::INITIAL),
             Self::Flanger => Insert::Flanger(FlangerControls::INITIAL),
@@ -200,7 +207,7 @@ fn edit_eq(db: &mut [i8; 3], knobs: [i8; 4]) {
 impl Insert {
     pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
         let [first, second] = InsertKind::factory(part);
-        [first.initial(), second.initial()]
+        [first.initial(part), second.initial(part)]
     }
 
     pub(super) const fn kind(self) -> InsertKind {
@@ -211,6 +218,12 @@ impl Insert {
             Self::Phaser(_) => InsertKind::Phaser,
             Self::Flanger(_) => InsertKind::Flanger,
             Self::Eq(_) => InsertKind::Eq,
+        }
+    }
+
+    pub(super) fn add_shape(&mut self, offset: u8) {
+        if let Self::Saturator(fx) = self {
+            fx.shape = fx.shape.saturating_add(offset).min(128);
         }
     }
 
@@ -233,6 +246,7 @@ impl Insert {
                 turn(&mut fx.drive, knobs[0]);
                 turn(&mut fx.mix, knobs[1]);
                 turn(&mut fx.level, knobs[2]);
+                turn(&mut fx.shape, knobs[3]);
                 fx.enabled ^= toggle;
             }
             Self::Eq(fx) => {
@@ -397,7 +411,7 @@ mod tests {
     #[test]
     fn insert_bypass_preserves_edited_controls() {
         for kind in InsertKind::ALL {
-            let mut insert = kind.initial();
+            let mut insert = kind.initial(Part::Mono);
             insert.edit([3, -4, 5, -6], false);
             assert_eq!(insert.kind(), kind);
             assert_eq!(insert.enabled(), kind != InsertKind::None);

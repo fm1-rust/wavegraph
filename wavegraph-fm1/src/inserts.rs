@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn eq_edits_and_bypass_only_affect_the_selected_strip() {
         let mut rack = ChannelInserts::new(44_118);
-        let mut eq = InsertKind::Eq.initial();
+        let mut eq = InsertKind::Eq.initial(Part::Mono);
         let input = [I24::new_unchecked(100_000); 128];
         let silence = [I24::default(); 128];
         let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
@@ -348,8 +348,8 @@ mod tests {
     fn slots_are_serial_and_other_channels_are_dry() {
         let mut rack = ChannelInserts::new(44_118);
         let settings = [
-            InsertKind::Saturator.initial(),
-            InsertKind::Phaser.initial(),
+            InsertKind::Saturator.initial(Part::Mono),
+            InsertKind::Phaser.initial(Part::Mono),
         ];
         let event = [Event {
             frame: 0,

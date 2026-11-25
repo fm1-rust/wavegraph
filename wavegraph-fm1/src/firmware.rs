@@ -161,6 +161,12 @@ pub struct Motion {
 }
 
 impl Motion {
+    pub(super) fn shape_offset(&self, channel: Channel) -> u8 {
+        self.bass_automation
+            .filter(|(c, _)| *c == channel)
+            .map_or(0, |(_, a)| a.shape_offset)
+    }
+
     /// Wake pages with discrete motion even when their audio trace is quiet.
     fn display_changed(&self, old: &Self, nav: Navigation) -> bool {
         let i = nav.focus.index();
@@ -168,6 +174,7 @@ impl Motion {
             View::Mixer | View::Channel => self.peaks != old.peaks,
             View::MasterFx(_) => self.reduction != old.reduction,
             View::Arp => self.arp_notes[i] != old.arp_notes[i],
+            View::Fx => self.shape_offset(nav.focus) != old.shape_offset(nav.focus),
             View::Sequencer => {
                 self.banks != old.banks
                     || self.position.map(|p| p.step) != old.position.map(|p| p.step)
@@ -887,7 +894,7 @@ mod app {
                 // Type choices are channel-owned and survive instrument swaps.
                 for (insert, kind) in tracks[i].inserts.iter_mut().zip(nav.insert_kinds[i]) {
                     if insert.kind() != kind {
-                        *insert = kind.initial();
+                        *insert = kind.initial(assignment.part);
                     }
                 }
                 pads[i].apply(&mut tracks[i]);
