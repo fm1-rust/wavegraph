@@ -413,7 +413,7 @@ fn lit_pad_identity_survives_octave_transpose_and_seq_rec() {
 
 #[test]
 fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Result<(), Error> {
-    use crate::clipboard::{Options, State};
+    use crate::clipboard::State;
     let check_chord = |engine: &mut Instrument<'_>, part| {
         let source = Channel::One;
         let mut tracks = Track::TEST_TRACKS;
@@ -424,12 +424,12 @@ fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Re
             *track = Track::factory(channel, Assignment::new(Part::Sampler));
             track.voice.waveform = crate::assets::CLIPBOARD_SLOT;
         }
-        let mut options = Options::INITIAL;
-        options.turn(-1, 2); // A one-beat take at native audio rate, rooted at D4.
-        engine.recording_request.press(source, assignment, options);
+        engine.recording_request.press(source, assignment);
         let mut buses = [[I24::default(); 128]; BUS_COUNT];
         engine.render(tracks, &mut buses)?;
         assert_eq!(engine.recorder.status.state, State::Armed);
+        // While waiting for sound, select one beat at native rate and root it at D4.
+        engine.recording_request.options.turn(-1, 2);
         for (i, pitch) in [62, 65, 69, 72].into_iter().enumerate() {
             tracks[0].poly_keys[i] = PolyKey {
                 note: Some(note(pitch, 110)),
@@ -452,7 +452,9 @@ fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Re
             }
         }
         assert_eq!(engine.recorder.status.state, State::Recording);
-        engine.recording_request.press(source, assignment, options);
+        // Stage a one-bar take at C4 before manually finishing the D4 chord.
+        engine.recording_request.options.turn(1, -2);
+        engine.recording_request.press(source, assignment);
         engine.render(tracks, &mut buses)?;
         let take = engine.recorder.status.take.expect("finished chord");
         assert_eq!(take.root, 62);
@@ -478,18 +480,20 @@ fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Re
         let mut transport = Transport::INITIAL;
         transport.toggle();
         let recorder = &mut engine.recorder;
-        engine.recording_request.press(source, assignment, options);
+        engine.recording_request.press(source, assignment);
         recorder.process(engine.recording_request, &tracks, transport, None, &buses);
         assert_eq!(recorder.status.state, State::Armed);
         assert_eq!(recorder.status.take, Some(take));
-        engine.recording_request.press(source, assignment, options);
+        engine.recording_request.press(source, assignment);
         recorder.process(engine.recording_request, &tracks, transport, None, &buses);
         assert_eq!(recorder.status.take, Some(take));
 
         // Record two bars from frame 17. The recorder must fit the complete loop,
         // including its final short decimation group, and publish the new root.
-        options.turn(2, -2);
-        engine.recording_request.press(source, assignment, options);
+        engine.recording_request.press(source, assignment);
+        recorder.process(engine.recording_request, &tracks, transport, None, &buses);
+        assert_eq!(recorder.status.state, State::Armed);
+        engine.recording_request.options.turn(1, 0); // Extend to two bars before the downbeat.
         recorder.process(
             engine.recording_request,
             &tracks,
@@ -499,6 +503,7 @@ fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Re
         );
         assert_eq!(recorder.status.take, None);
         assert_eq!(recorder.status.state, State::Recording);
+        engine.recording_request.options.turn(-2, 7); // Next take only.
         let frames = (44_118_u32 * 60 * 8).div_ceil(u32::from(transport.bpm));
         let divisor = frames.div_ceil(32_768);
         for _ in 0..frames.saturating_sub(111).div_ceil(128) {

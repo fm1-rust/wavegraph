@@ -338,6 +338,11 @@ pub(super) async fn clipboard(
         State::Recording => "REC  FINISH",
         _ => "REC  ARM CAPTURE",
     };
+    let (length_label, root_label) = if status.state == State::Recording {
+        ("1  NEXT LENGTH", "2  NEXT ROOT")
+    } else {
+        ("1  LENGTH", "2  ROOT")
+    };
     let mut display = lcd.as_async(clock)?;
     for y in (0..SIZE).step_by(BAND) {
         let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, super::mixer::BACKGROUND);
@@ -352,7 +357,7 @@ pub(super) async fn clipboard(
             colors.accent,
         );
         band.label(&info, Point::new(14, 89), Alignment::Left, colors.accent);
-        for (row, label, value) in [(132, "1  LENGTH", length), (151, "2  ROOT", ascii(&root))] {
+        for (row, label, value) in [(132, length_label, length), (151, root_label, ascii(&root))] {
             band.label(label, Point::new(8, row), Alignment::Left, colors.ink);
             band.label(value, Point::new(228, row), Alignment::Right, colors.ink);
         }

@@ -196,7 +196,6 @@ pub(super) enum PageButton {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Navigation {
-    pub(super) clip_options: crate::clipboard::Options,
     pub(super) clip_request: crate::clipboard::Request,
     pub(super) view: View,
     pub(super) focus: Channel,
@@ -210,7 +209,6 @@ pub(super) struct Navigation {
 
 impl Navigation {
     pub(super) const INITIAL: Self = Self {
-        clip_options: crate::clipboard::Options::INITIAL,
         clip_request: crate::clipboard::Request::INITIAL,
         view: View::Scope,
         focus: Channel::One,

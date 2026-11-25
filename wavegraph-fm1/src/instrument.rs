@@ -1779,7 +1779,7 @@ impl Instrument<'_> {
                 && (!track.arp.enabled
                     || old.is_none()
                     || self.arps[i].chord.is_empty()
-                    || last.voice.transpose != track.voice.transpose)
+                    || last.key_transpose() != track.key_transpose())
             {
                 self.arps[i].clock.stop(|n| {
                     arp::route(
