@@ -46,6 +46,29 @@ two-input send-only node.
 Mixer and effect controls accept sample-offset events. `Message::Wet` scales a
 return, and `Message::Enabled(false)` mutes it while its tail continues to decay.
 
+## Beat-synchronized effects
+
+`BeatClock` carries the master BPM and one `BeatDivision` shared by every
+`BeatFx`. A division is a fraction of a quarter-note beat. Use `Message::BeatTime`
+to update Echo spacing, Flanger sweep length or Slicer pattern length at a graph frame. Send
+`Message::BeatPhase` with `clock.phase(whole_beats, fraction_q32)` to anchor
+Flanger or Slicer at that frame. A host driving the DSP directly can pass both via
+`BeatFx::sync`. These processors implement the usual WaveGraph `Process`.
+
+`Delay::with_rate` accepts the exact audio sample-rate ratio. For long
+intervals in limited SRAM, `with_long_taps` takes two additional buffers
+for four- and sixteen-frame averages stored as companded PCM.
+
+`Slicer` gates a mono signal over sixteen equal parts of the selected Beat FX
+cycle. Send `Message::StepPattern(StepPattern::from_bits(mask))` to set the
+cells, least significant bit first. Lit cells pass the input at unity.
+`SlicerControls::depth` controls attenuation on unlit cells. The gate ramps
+gain at step and bypass transitions. The FM-1 shares one clock conversion
+across all four gates.
+
+A sequencer can also send a per-track mask as `MixerMessage::SendGate` on a step boundary to gate new
+effect input while the return continues to ring.
+
 ## License
 
 Dual-licensed under [Apache-2.0](LICENSE-APACHE) OR [MIT](LICENSE-MIT).

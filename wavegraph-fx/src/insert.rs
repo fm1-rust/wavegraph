@@ -4,10 +4,12 @@ mod chorus;
 pub use chorus::{Chorus, ChorusControls};
 mod flanger;
 mod pattern_filter;
+mod slicer;
 pub use flanger::Flanger;
 pub use pattern_filter::{
     FILTER_PATTERNS, FilterMode, FilterPattern, PatternFilter, PatternFilterControls,
 };
+pub use slicer::{Slicer, SlicerControls};
 
 use super::{Message, clamp_pcm, pcm};
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -81,16 +83,6 @@ impl ModulationControls {
     )]
     fn phase_step(self, rate_hz: u32) -> u32 {
         ((u64::from(self.centihz()) << 32) / (100 * u64::from(rate_hz))) as u32
-    }
-}
-
-#[allow(clippy::arithmetic_side_effects, reason = "The high word fits i32")]
-fn triangle(phase: u32) -> i32 {
-    let ramp = i32::from((phase >> 16) as u16);
-    if ramp < 32768 {
-        2 * ramp - 32768
-    } else {
-        98302 - 2 * ramp
     }
 }
 
@@ -178,8 +170,7 @@ impl Saturator {
 pub struct Phaser {
     rate_hz: u32,
     controls: ModulationControls,
-    phase: u32,
-    step: u32,
+    phase: wavegraph_lfo::Phase,
     state: [i32; 4],
     last: i32,
     blend: i32,
@@ -195,8 +186,7 @@ impl Phaser {
         let mut fx = Self {
             rate_hz,
             controls: ModulationControls::INITIAL,
-            phase: 0,
-            step: 0,
+            phase: wavegraph_lfo::Phase::default(),
             state: [0; 4],
             last: 0,
             blend: 0,
@@ -208,7 +198,10 @@ impl Phaser {
     /// Update parameters without resetting phase or filter history.
     pub fn set_controls(&mut self, controls: ModulationControls) {
         self.controls = controls;
-        self.step = controls.phase_step(self.rate_hz);
+        self.phase.control(wavegraph_lfo::PhaseControl {
+            increment: controls.phase_step(self.rate_hz),
+            phase: None,
+        });
     }
 
     /// Process a single signed Q23 sample.
@@ -223,7 +216,7 @@ impl Phaser {
                 0
             },
         );
-        self.phase = self.phase.wrapping_add(self.step);
+        self.phase.advance(1);
         if mix == 0 {
             self.state = [0; 4];
             self.last = 0;
@@ -231,7 +224,7 @@ impl Phaser {
         }
         // g = 0.55 +/- 0.35; never reaches either unstable endpoint.
         let depth = (11469 * i32::from(c.depth.min(128))) >> 7;
-        let g = 18022 + mul_q15(triangle(self.phase), depth);
+        let g = 18022 + mul_q15(self.phase.triangle_q15(), depth);
         let x = sample.inner();
         let feedback = (96 * i32::from(c.feedback.min(128))) >> 7;
         let mut wet = clamp_pcm(x + mul_q7(self.last, feedback));
@@ -285,7 +278,8 @@ macro_rules! node {
 node!(Saturator, Saturator => set_controls);
 node!(Phaser, Phaser => set_controls);
 node!(Chorus, Chorus => set_controls, Enabled => set_enabled);
-node!(Flanger, Flanger => set_controls, Enabled => set_enabled);
+node!(Flanger, Flanger => set_controls, Enabled => set_enabled, BeatTime => set_clock, BeatPhase => anchor);
+node!(Slicer, Slicer => set_controls, StepPattern => set_pattern, Enabled => set_enabled, BeatTime => set_clock, BeatPhase => anchor);
 node!(super::ThreeBandEq, Eq => set_controls);
 node!(PatternFilter, PatternFilter => set_controls, FilterTrigger => trigger, Enabled => set_enabled);
 
@@ -348,7 +342,7 @@ mod tests {
             changed |= fx.tick(x) != x;
         }
         assert!(changed);
-        assert_ne!(fx.phase, 0);
+        assert_ne!(fx.phase.position(), 0);
         fx.set_controls(ModulationControls {
             enabled: false,
             ..ModulationControls::INITIAL

@@ -15,6 +15,7 @@ short-detector-probe = []
 [dependencies]
 libm = "0.2"
 wavegraph-core.workspace = true
+wavegraph-lfo.workspace = true
 wavegraph-sample.workspace = true
 
 [lints]

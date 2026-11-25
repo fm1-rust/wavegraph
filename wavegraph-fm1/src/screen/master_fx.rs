@@ -24,6 +24,7 @@ enum Unit {
     Wet,
     Ms,
     Percent,
+    Clock,
     Db,
     Ratio,
 }
@@ -67,6 +68,7 @@ impl Dial {
         let mut text = String::new();
         let v = self.value;
         match self.unit {
+            Unit::Clock => write!(text, "{}", if v == 0 { "FREE" } else { "BEAT" }),
             Unit::Raw => write!(text, "{v}"),
             Unit::Ms => write!(text, "{v}ms"),
             Unit::Wet => write!(text, "{}%", (v * 100 + 64) / 128),
@@ -100,16 +102,20 @@ impl Row {
                 None,
             ],
             Device::Delay => [
-                Dial::control(
-                    "TIME",
-                    i16::try_from(fx.time_ms).expect("delay time"),
-                    5,
-                    i16::try_from(MAX_DELAY_MS).expect("delay range"),
-                    Ms,
-                ),
+                (!fx.clocked_delay)
+                    .then(|| {
+                        Dial::control(
+                            "TIME",
+                            i16::try_from(fx.time_ms).expect("delay time"),
+                            5,
+                            i16::try_from(MAX_DELAY_MS).expect("delay range"),
+                            Ms,
+                        )
+                    })
+                    .flatten(),
                 Dial::control("FDBK", fx.feedback, 0, 95, Percent),
                 Dial::control("RETURN", fx.delay.wet, 0, 128, Wet),
-                None,
+                Dial::control("CLOCK", i16::from(fx.clocked_delay), 0, 1, Unit::Clock),
             ],
             Device::Eq => [
                 Dial::control("LOW", fx.eq[0], -12, 12, Db),
@@ -243,9 +249,12 @@ impl Rack {
                 band.rect(Point::new(74, 120), Size::new(160, 1), OUTLINE);
             } else {
                 let (top, bottom) = if editing {
-                    ("KNOBS EDIT     SEL BYPASS", "SELECT DEVICE     HOME BACK")
+                    ("KNOBS EDIT   SEL BYPASS", "EDIT BEAT FX     HOME BACK")
                 } else {
-                    ("SELECT DEVICE", "FX MIXER     GLO CHANNEL FX")
+                    (
+                        "SELECT DEVICE   EDIT BEAT FX",
+                        "FX MIXER     GLO CHANNEL FX",
+                    )
                 };
                 band.label(top, Point::new(120, 211), Alignment::Center, POINTER);
                 band.label(bottom, Point::new(120, 225), Alignment::Center, LABEL);

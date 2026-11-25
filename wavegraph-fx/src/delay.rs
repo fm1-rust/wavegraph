@@ -1,4 +1,6 @@
-use super::Message;
+mod history;
+use super::{BeatClock, BeatFx, Message};
+use history::History;
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::I24;
 
@@ -8,7 +10,10 @@ use wavegraph_sample::I24;
 #[derive(Debug)]
 pub struct Delay<'a> {
     line: &'a mut [i16],
-    rate_hz: u32,
+    extended: Option<(History<'a, 4>, History<'a, 16>)>,
+    capacity: usize,
+    flush_frames: usize,
+    rate: (u32, u32),
     write: usize,
     // Upper bound on the number of zero writes needed to empty the ring.
     tail: usize,
@@ -34,13 +39,23 @@ impl<'a> Delay<'a> {
     /// or a zero sample rate.
     #[must_use]
     pub fn new(line: &'a mut [i16], rate_hz: u32) -> Option<Self> {
-        if line.is_empty() || rate_hz == 0 {
+        Self::with_rate(line, (rate_hz, 1))
+    }
+
+    /// Construct a delay for a fractional hardware frame clock (numerator, denominator).
+    /// Returns `None` for an empty line or zero clock component.
+    #[must_use]
+    pub fn with_rate(line: &'a mut [i16], rate: (u32, u32)) -> Option<Self> {
+        if line.is_empty() || rate.0 == 0 || rate.1 == 0 {
             return None;
         }
         line.fill(0);
         let mut delay = Self {
+            capacity: line.len(),
+            flush_frames: line.len(),
+            extended: None,
             line,
-            rate_hz,
+            rate,
             write: 0,
             tail: 0,
             time: 0,
@@ -55,6 +70,37 @@ impl<'a> Delay<'a> {
         Some(delay)
     }
 
+    /// Extend the native PCM16 line with two continuously recorded, lower-bandwidth
+    /// histories. Each byte covers four or sixteen frames respectively. Returns
+    /// `None` unless both rings extend the preceding range.
+    #[must_use]
+    pub fn with_long_taps(mut self, mid: &'a mut [u8], long: &'a mut [u8]) -> Option<Self> {
+        let mid = History::new(mid)?;
+        let long = History::new(long)?;
+        if self.line.len() < 16
+            || mid.capacity() <= self.capacity
+            || long.capacity() <= mid.capacity()
+        {
+            return None;
+        }
+        self.capacity = long.capacity();
+        // Flush the partial group and the adjacent interpolation tap before skipping silence.
+        self.flush_frames = self.capacity.saturating_add(2 * 16 - 1);
+        self.extended = Some((mid, long));
+        self.control(Message::TimeMs(Self::DEFAULT_TIME_MS));
+        Some(self)
+    }
+
+    fn set_time(&mut self, frames: u64) {
+        self.target = usize::try_from(frames)
+            .unwrap_or(usize::MAX)
+            .clamp(1, self.capacity);
+        if self.tail == 0 {
+            self.time = self.target;
+            self.fade_frame = 0;
+        }
+    }
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "u32 Hz times u16 ms fits u64"
@@ -62,15 +108,12 @@ impl<'a> Delay<'a> {
     fn control(&mut self, message: Message) {
         match message {
             Message::TimeMs(ms) => {
-                let frames = (u64::from(self.rate_hz) * u64::from(ms) + 500) / 1000;
-                self.target = usize::try_from(frames)
-                    .unwrap_or(usize::MAX)
-                    .clamp(1, self.line.len());
-                if self.tail == 0 {
-                    self.time = self.target;
-                    self.fade_frame = 0;
-                }
+                let denominator = u64::from(self.rate.1) * 1000;
+                let frames =
+                    (u64::from(self.rate.0) * u64::from(ms) + denominator / 2) / denominator;
+                self.set_time(frames);
             }
+            Message::BeatTime(clock) => self.sync(clock, None),
             Message::Feedback(percent) => self.feedback = percent.min(Self::MAX_FEEDBACK),
             Message::Wet(level) => self.wet = level.min(128),
             Message::Enabled(enabled) => self.enabled = enabled,
@@ -83,6 +126,15 @@ impl<'a> Delay<'a> {
         reason = "Both indices are bounded by the line length"
     )]
     fn tap(&self, frames: usize) -> i32 {
+        if frames > self.line.len()
+            && let Some((mid, long)) = &self.extended
+        {
+            return if frames <= mid.capacity() {
+                mid.tap(frames)
+            } else {
+                long.tap(frames)
+            };
+        }
         let index = if self.write >= frames {
             self.write - frames
         } else {
@@ -113,9 +165,14 @@ impl<'a> Delay<'a> {
 
         // Truncate toward zero so even the quietest negative repeats decay to silence.
         let sample = input.inner() / 256 + echo * i32::from(self.feedback) / 100;
-        self.line[self.write] = sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        let stored = sample.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        self.line[self.write] = stored;
+        if let Some((mid, long)) = &mut self.extended {
+            mid.push(stored);
+            long.push(stored);
+        }
         if sample != 0 {
-            self.tail = self.line.len();
+            self.tail = self.flush_frames;
         } else {
             self.tail = self.tail.saturating_sub(1);
             if self.tail == 0 {
@@ -142,6 +199,14 @@ impl<'a> Delay<'a> {
             for (out, &sample) in output.iter_mut().zip(input) {
                 *out = self.sample(sample);
             }
+        }
+    }
+}
+
+impl BeatFx for Delay<'_> {
+    fn sync(&mut self, clock: BeatClock, _: Option<u32>) {
+        if let Some(frames) = clock.beats.frames(clock.bpm, self.rate) {
+            self.set_time(frames);
         }
     }
 }

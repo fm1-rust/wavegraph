@@ -276,8 +276,10 @@ impl StepClock {
         }
         self.phase -= self.threshold;
         let tick = self.next;
-        self.next = (tick + 1) % SUBSTEPS;
-        Some(tick)
+        // The pattern repeats every 16 beats. A three-beat FX sweep also
+        // needs its phase beyond that boundary; both grids repeat after 48.
+        self.next = (tick + 1) % (3 * SUBSTEPS);
+        Some(tick % SUBSTEPS)
     }
 
     #[allow(
@@ -603,6 +605,33 @@ impl PatternPlayer {
         self.position
     }
 
+    /// Phase at the first frame of the upcoming block, before the player advances.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        reason = "32 substeps per beat; the scaled division is bounded by one beat plus one sample"
+    )]
+    pub(super) fn effect_phase(
+        &self,
+        transport: Transport,
+        clock: wavegraph_fx::BeatClock,
+    ) -> Option<u32> {
+        if !transport.playing() {
+            return None;
+        }
+        if self.transport_changed(transport) {
+            return Some(0);
+        }
+        let c = &self.clock;
+        let tick = (c.next + 3 * SUBSTEPS - 1) % (3 * SUBSTEPS);
+        let fine = (u64::from(c.phase) << 27) / u64::from(c.threshold);
+        let fraction = ((tick as u64 % 32) << 27) + fine;
+        Some(clock.phase(
+            (tick / 32) as u32 + (fraction >> 32) as u32,
+            fraction as u32,
+        ))
+    }
+
     pub(super) fn banks(&self) -> [BankPosition; CHANNELS] {
         self.lanes.map(|l| l.position)
     }
@@ -619,8 +648,30 @@ impl PatternPlayer {
         transport: Transport,
         tracks: &[Track; CHANNELS],
         enabled: [bool; CHANNELS],
+        emit: impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
+        wire: impl FnMut(Channel, Event<MidiMessage>),
+    ) -> Result<(), Error> {
+        self.render_steps(
+            frames,
+            transport,
+            tracks,
+            enabled,
+            emit,
+            (wire, |_, _| Ok(())),
+        )
+    }
+
+    pub(super) fn render_steps(
+        &mut self,
+        frames: usize,
+        transport: Transport,
+        tracks: &[Track; CHANNELS],
+        enabled: [bool; CHANNELS],
         mut emit: impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
-        mut wire: impl FnMut(Channel, Event<MidiMessage>),
+        (mut wire, mut step): (
+            impl FnMut(Channel, Event<MidiMessage>),
+            impl FnMut(usize, u8) -> Result<(), Error>,
+        ),
     ) -> Result<(), Error> {
         self.downbeat = None;
         if frames == 0 {
@@ -674,6 +725,12 @@ impl PatternPlayer {
         let mut frame = 0;
         while frame < frames {
             if let Some(tick) = self.clock.take_tick() {
+                if tick.is_multiple_of(8) {
+                    step(
+                        frame,
+                        u8::try_from(tick / 8 % 16).map_err(|_| Error::Capacity)?,
+                    )?;
+                }
                 if tick.is_multiple_of(16 * 8) && self.downbeat.is_none() {
                     self.downbeat = Some(frame);
                 }
@@ -1400,6 +1457,37 @@ mod tests {
             }
             beat_units = (beat_units + if frame < 9000 { 2 } else { 3 }) % 48_000;
         }
+    }
+
+    #[test]
+    fn three_beat_sweep_crosses_pattern_wrap_and_restarts_with_transport() {
+        use wavegraph_fx::{BeatClock, BeatDivision};
+        let mut transport = Transport {
+            bpm: 120,
+            ..playing()
+        };
+        let mut clock = BeatClock {
+            beats: BeatDivision::from_ratio(3, 1).expect("three beats"),
+            bpm: transport.bpm,
+        };
+        let mut player = PatternPlayer::new((8000, 1));
+        assert_eq!(player.effect_phase(transport, clock), Some(0));
+        render(&mut player, 16 * 4000, transport, [false; 4]);
+        assert_eq!(
+            player.effect_phase(transport, clock),
+            Some(clock.phase(16, 0))
+        );
+        transport.bpm = 60;
+        clock.bpm = transport.bpm;
+        render(&mut player, 4000, transport, [false; 4]);
+        assert_eq!(
+            player.effect_phase(transport, clock),
+            Some(clock.phase(16, 1 << 31))
+        );
+        transport.toggle();
+        assert_eq!(player.effect_phase(transport, clock), None);
+        transport.toggle();
+        assert_eq!(player.effect_phase(transport, clock), Some(0));
     }
 
     #[test]

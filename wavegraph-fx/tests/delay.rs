@@ -155,3 +155,82 @@ fn an_empty_delay_wakes_at_the_selected_time_after_silent_blocks() {
         [0, 0, 0, x]
     );
 }
+
+#[test]
+fn beat_echo_keeps_the_factory_tap_and_reaches_four_beats_at_30_bpm() {
+    use wavegraph_fx::{BeatClock, BeatDivision};
+    let rate = (24_000_000, 544);
+    for (beats, bpm) in [
+        (BeatDivision::DOTTED_EIGHTH, 122),
+        (BeatDivision::ONE, 120),
+        (BeatDivision::ONE.turn(4), 30),
+    ] {
+        let samples =
+            usize::try_from(beats.frames(bpm, rate).expect("clock")).expect("short duration");
+        let mut native = vec![0; 16_544];
+        let mut mid = vec![0; 23_162];
+        let mut long = vec![0; 23_162];
+        let mut delay = Delay::with_rate(&mut native, rate)
+            .and_then(|d| d.with_long_taps(&mut mid, &mut long))
+            .expect("echo storage");
+        let mut actual = Vec::new();
+        for block in 0..samples.div_ceil(128) + 2 {
+            let mut input = [0; 128];
+            let setup = [
+                at(0, Message::BeatTime(BeatClock { beats, bpm })),
+                at(0, Message::Wet(128)),
+                at(0, Message::Feedback(0)),
+            ];
+            if block == 0 {
+                input[..64].fill(1 << 21);
+            }
+            actual.extend(render(
+                &mut delay,
+                input,
+                if block == 0 { &setup } else { &[] },
+            ));
+        }
+        assert!(actual[..samples.saturating_sub(16)].iter().all(|&v| v == 0));
+        assert!(
+            actual[samples + 16..samples + 48]
+                .iter()
+                .all(|&v| v > (1 << 20))
+        );
+        assert!(actual[samples + 80..].iter().all(|&v| v == 0));
+        if beats == BeatDivision::DOTTED_EIGHTH {
+            assert_eq!(actual[samples], 1 << 21);
+            assert_eq!(actual[samples - 1], 0);
+        }
+    }
+}
+
+#[test]
+fn longest_tap_drains_across_single_frame_blocks() {
+    fn response<const BLOCK: usize>() -> [i32; 128] {
+        let (mut native, mut mid, mut long) = ([0; 16], [0; 12], [0; 5]);
+        let mut delay = Delay::new(&mut native, 1000)
+            .and_then(|d| d.with_long_taps(&mut mid, &mut long))
+            .expect("three ascending tap lengths");
+        render(
+            &mut delay,
+            [],
+            &[
+                at(0, Message::TimeMs(64)),
+                at(0, Message::Feedback(0)),
+                at(0, Message::Wet(128)),
+            ],
+        );
+        let mut output = [0; 128];
+        for (i, span) in output.as_chunks_mut::<BLOCK>().0.iter_mut().enumerate() {
+            let mut input = [0; BLOCK];
+            if i == 0 {
+                input[0] = 1 << 21;
+            }
+            span.copy_from_slice(&render(&mut delay, input, &[]));
+        }
+        output
+    }
+    let reference = response::<128>();
+    assert!(reference[65..80].iter().any(|&v| v != 0));
+    assert_eq!(response::<1>(), reference);
+}

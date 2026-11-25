@@ -4,7 +4,7 @@ use wavegraph_organ::{Chord, VoiceMode};
 
 use crate::{
     bass::Knob,
-    fx::{Device, INSERT_SLOTS, InsertKind},
+    fx::{BeatEffect, Device, INSERT_SLOTS, InsertKind},
     instrument::Part,
 };
 
@@ -91,6 +91,7 @@ pub(super) enum View {
     Mixer,
     Channel,
     MasterFx(Option<Device>),
+    BeatFx(BeatEffect),
     Sequencer,
 }
 
@@ -135,6 +136,7 @@ impl View {
             | Self::Arp
             | Self::Mixer
             | Self::Channel
+            | Self::BeatFx(_)
             | Self::MasterFx(_)
             | Self::Sequencer => false,
         }
@@ -202,6 +204,9 @@ pub(super) struct Navigation {
     pub(super) preset_since: Option<u32>,
     bass_slot: Option<u8>,
     fx_parent: View,
+    beat_parent: View,
+    pub(super) beat_steps: [wavegraph_fx::StepPattern; CHANNELS],
+    pub(super) slicer_steps: [wavegraph_fx::StepPattern; CHANNELS],
     insert_slot: Option<u8>,
     pub(super) insert_kinds: [[InsertKind; INSERT_SLOTS]; CHANNELS],
     pub(super) assignments: [Assignment; CHANNELS],
@@ -215,6 +220,9 @@ impl Navigation {
         preset_since: None,
         bass_slot: None,
         fx_parent: View::Mixer,
+        beat_parent: View::Fx,
+        beat_steps: [wavegraph_fx::StepPattern::ALL; CHANNELS],
+        slicer_steps: [wavegraph_fx::StepPattern::FIRST_HALF; CHANNELS],
         insert_slot: None,
         insert_kinds: [
             InsertKind::factory(Part::Bass),
@@ -247,6 +255,15 @@ impl Navigation {
         ..Self::INITIAL
     };
 
+    pub(super) fn beat_pattern_mut(&mut self) -> Option<&mut wavegraph_fx::StepPattern> {
+        let i = self.focus.index();
+        match self.view {
+            View::BeatFx(BeatEffect::Echo) => Some(&mut self.beat_steps[i]),
+            View::BeatFx(BeatEffect::Slicer) => Some(&mut self.slicer_steps[i]),
+            _ => None,
+        }
+    }
+
     // Page transitions run only on button edges. Keep them out of the SRAM panel ISR.
     #[cfg_attr(target_os = "none", inline(never))]
     pub(super) fn press(&mut self, button: PageButton) {
@@ -257,6 +274,13 @@ impl Navigation {
             return;
         }
         let next = match button {
+            PageButton::Edit | PageButton::Home if matches!(self.view, View::BeatFx(_)) => {
+                self.beat_parent
+            }
+            PageButton::Edit if matches!(self.view, View::Fx | View::MasterFx(_)) => {
+                self.beat_parent = self.view;
+                View::BeatFx(BeatEffect::Echo)
+            }
             PageButton::Home if matches!(self.view, View::MasterFx(Some(_))) => {
                 View::MasterFx(None)
             }
@@ -337,6 +361,9 @@ impl Navigation {
             let count = i16::try_from(Knob::PANEL.len()).expect("eight knobs");
             let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
             self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
+        }
+        if let View::BeatFx(effect) = self.view {
+            self.view = View::BeatFx(effect.turn(select));
         }
         if self.view == View::Fx && select != 0 {
             let start = self
@@ -555,6 +582,33 @@ mod tests {
                 assert_eq!(glo_off.focus, Channel::Two);
             }
         }
+    }
+
+    #[test]
+    fn beat_fx_selection_counts_detents_and_channel_focus_preserves_both_grids() {
+        let mut nav = Navigation::INITIAL;
+        nav.press(PageButton::Fx);
+        nav.press(PageButton::Edit);
+        assert_eq!(nav.view, View::BeatFx(BeatEffect::Echo));
+        nav.turn(2, 0);
+        assert_eq!(nav.view, View::BeatFx(BeatEffect::Slicer));
+        nav.beat_pattern_mut().expect("Slicer grid").toggle(0);
+        nav.turn(1, 1);
+        assert_eq!(
+            (nav.view, nav.focus),
+            (View::BeatFx(BeatEffect::Slicer), Channel::Two)
+        );
+        assert!(nav.slicer_steps[1].active(0));
+        nav.turn(-1, -1);
+        assert_eq!(
+            (nav.view, nav.focus),
+            (View::BeatFx(BeatEffect::Flanger), Channel::One)
+        );
+        assert!(nav.beat_pattern_mut().is_none());
+        nav.turn(-8, 0);
+        assert_eq!(nav.view, View::BeatFx(BeatEffect::Echo));
+        assert!(nav.beat_steps[0].active(0));
+        assert!(!nav.slicer_steps[0].active(0));
     }
 
     #[test]

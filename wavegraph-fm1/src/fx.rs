@@ -4,12 +4,29 @@ use crate::instrument::{Message, Part, at};
 use heapless::Vec;
 use wavegraph_dsp::Event;
 use wavegraph_fx::{
-    ChorusControls, Delay, Dynamics, EqControls, FlangerControls, MasterControls,
-    Message as FxMessage, PhaserControls, SaturatorControls,
+    BeatClock, BeatDivision, ChorusControls, Delay, Dynamics, EqControls, FlangerControls,
+    MasterControls, Message as FxMessage, PhaserControls, SaturatorControls, SlicerControls,
 };
 
-// Shared by the delay-line allocation, panel clamp and rack readout.
+// Original delay-storage budget and upper limit for the free-time rack control.
 pub(super) const MAX_DELAY_MS: u16 = 900;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BeatEffect {
+    Echo,
+    Flanger,
+    Slicer,
+}
+
+impl BeatEffect {
+    pub(super) fn turn(self, detents: i8) -> Self {
+        [Self::Echo, Self::Flanger, Self::Slicer]
+            [usize::from((self as u8).saturating_add_signed(detents).min(2))]
+    }
+}
+
+/// Physical white keys from F3 to G5, independent of the keyboard octave.
+pub(super) const STEP_KEYS: [u8; 16] = [0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Device {
@@ -284,6 +301,12 @@ pub(super) struct Fx {
     pub(super) delay: Return,
     pub(super) decay: u8,
     pub(super) time_ms: u16,
+    pub(super) beats: BeatDivision,
+    pub(super) clocked_delay: bool,
+    pub(super) echo_input_open: bool,
+    pub(super) flanger_target: Option<crate::panel::Channel>,
+    pub(super) beat_flanger: FlangerControls,
+    pub(super) slicers: [SlicerControls; crate::panel::CHANNELS],
     pub(super) feedback: u8,
     pub(super) eq: [i8; 3],
     pub(super) eq_enabled: bool,
@@ -302,6 +325,12 @@ impl Fx {
             enabled: true,
         },
         decay: 90,
+        clocked_delay: true,
+        echo_input_open: true,
+        beats: BeatDivision::DOTTED_EIGHTH,
+        flanger_target: None,
+        beat_flanger: FlangerControls::INITIAL,
+        slicers: [SlicerControls::INITIAL; crate::panel::CHANNELS],
         time_ms: 369, // Dotted eighth at the factory 122 BPM.
         feedback: 43,
         eq: [0; 3],
@@ -309,6 +338,47 @@ impl Fx {
         dynamics: Dynamics::GLUE,
         dynamics_enabled: true,
     };
+
+    pub(super) fn edit_beat(
+        &mut self,
+        channel: crate::panel::Channel,
+        effect: BeatEffect,
+        knobs: [i8; 4],
+        sel: bool,
+    ) {
+        let [beats, depth, feedback, color] = knobs;
+        self.beats = self.beats.turn(beats);
+        match effect {
+            BeatEffect::Echo => {
+                self.clocked_delay = true;
+                // Depth is the focused strip's existing post-fader send.
+                self.feedback = self
+                    .feedback
+                    .saturating_add_signed(feedback)
+                    .min(Delay::MAX_FEEDBACK);
+                self.delay.wet = self.delay.wet.saturating_add_signed(color).min(128);
+                if sel {
+                    // A closed send lets the captured phrase ring. SEL also recalls a muted return.
+                    self.echo_input_open = !(self.echo_input_open && self.delay.enabled);
+                    self.delay.enabled = true;
+                }
+            }
+            BeatEffect::Slicer => {
+                let slicer = &mut self.slicers[channel.index()];
+                slicer.depth = slicer.depth.saturating_add_signed(depth).min(128);
+                slicer.enabled ^= sel;
+            }
+            BeatEffect::Flanger => {
+                let f = &mut self.beat_flanger;
+                f.mix = f.mix.saturating_add_signed(depth).min(128);
+                f.feedback = f.feedback.saturating_add_signed(feedback).min(128);
+                f.depth = f.depth.saturating_add_signed(color).min(128);
+                if sel {
+                    self.flanger_target = (self.flanger_target != Some(channel)).then_some(channel);
+                }
+            }
+        }
+    }
 
     pub(super) fn enabled(self, device: Device) -> bool {
         match device {
@@ -327,10 +397,15 @@ impl Fx {
                 self.reverb.enabled ^= toggle;
             }
             Device::Delay => {
-                self.time_ms = self
-                    .time_ms
-                    .saturating_add_signed(i16::from(knobs[0]).saturating_mul(5))
-                    .clamp(5, MAX_DELAY_MS);
+                if knobs[3] != 0 {
+                    self.clocked_delay = knobs[3] > 0;
+                }
+                if !self.clocked_delay {
+                    self.time_ms = self
+                        .time_ms
+                        .saturating_add_signed(i16::from(knobs[0]).saturating_mul(5))
+                        .clamp(5, MAX_DELAY_MS);
+                }
                 self.feedback = self
                     .feedback
                     .saturating_add_signed(knobs[1])
@@ -357,6 +432,8 @@ impl Fx {
         self,
         previous: Option<Self>,
         device: Device,
+        bpm: u16,
+        previous_bpm: u16,
     ) -> Vec<Event<Message>, 4> {
         let mut events = Vec::new();
         let mut push = |changed, message: FxMessage| {
@@ -375,10 +452,21 @@ impl Fx {
                 (self.reverb, previous.map(|p| p.reverb))
             }
             Device::Delay => {
-                push(
-                    previous.is_none_or(|p| p.time_ms != self.time_ms),
-                    FxMessage::TimeMs(self.time_ms),
-                );
+                if self.clocked_delay {
+                    push(
+                        previous.is_none_or(|p| !p.clocked_delay || p.beats != self.beats)
+                            || bpm != previous_bpm,
+                        FxMessage::BeatTime(BeatClock {
+                            beats: self.beats,
+                            bpm,
+                        }),
+                    );
+                } else {
+                    push(
+                        previous.is_none_or(|p| p.clocked_delay || p.time_ms != self.time_ms),
+                        FxMessage::TimeMs(self.time_ms),
+                    );
+                }
                 push(
                     previous.is_none_or(|p| p.feedback != self.feedback),
                     FxMessage::Feedback(self.feedback),
@@ -423,6 +511,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn one_beat_value_follows_the_editor_and_only_a_tempo_change_retimes_echo() {
+        use crate::panel::Channel;
+        let mut fx = Fx::INITIAL;
+        fx.edit_beat(Channel::Three, BeatEffect::Echo, [1, 0, 0, 0], false);
+        assert_eq!(fx.beats, BeatDivision::ONE);
+        fx.edit_beat(Channel::Three, BeatEffect::Flanger, [0; 4], true);
+        assert_eq!(fx.flanger_target, Some(Channel::Three));
+        fx.edit_beat(Channel::One, BeatEffect::Flanger, [-1, 0, 0, 0], false);
+        assert_eq!(fx.beats, BeatDivision::DOTTED_EIGHTH);
+        let events = fx.return_events(Some(fx), Device::Delay, 100, 122);
+        assert_eq!(
+            events.as_slice(),
+            &[at(FxMessage::BeatTime(BeatClock {
+                beats: fx.beats,
+                bpm: 100
+            }))]
+        );
+        assert!(
+            fx.return_events(Some(fx), Device::Delay, 100, 100)
+                .is_empty()
+        );
+        fx.edit(Device::Delay, [0, 0, 0, -1], false);
+        assert!(
+            fx.return_events(Some(fx), Device::Delay, 100, 122)
+                .is_empty()
+        );
+        assert_eq!(
+            STEP_KEYS.map(|k| (53 + k) % 12),
+            [5, 7, 9, 11, 0, 2, 4, 5, 7, 9, 11, 0, 2, 4, 5, 7]
+        );
+    }
+
+    #[test]
+    fn echo_sel_recalls_a_muted_return_then_closes_only_its_input() {
+        use crate::panel::Channel;
+        for open in [false, true] {
+            let mut fx = Fx::INITIAL;
+            fx.echo_input_open = open;
+            fx.edit(Device::Delay, [0; 4], true);
+            assert!(!fx.delay.enabled);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            assert!(fx.echo_input_open && fx.delay.enabled);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            assert!(!fx.echo_input_open && fx.delay.enabled);
+        }
+    }
+
+    #[test]
     fn insert_bypass_preserves_edited_controls() {
         for kind in InsertKind::ALL {
             let mut insert = kind.initial(Part::Mono);
@@ -442,7 +578,7 @@ mod tests {
         let mut fx = Fx::INITIAL;
         assert_eq!(fx.time_ms, 369);
         for _ in 0..3 {
-            fx.edit(Device::Delay, [127, 0, 0, 0], false);
+            fx.edit(Device::Delay, [127, 0, 0, -1], false);
         }
         assert_eq!(fx.time_ms, MAX_DELAY_MS);
     }
@@ -474,11 +610,11 @@ mod tests {
         fx.edit(Device::Dynamics, [0; 4], true);
         assert_eq!(fx, before);
         assert!(
-            fx.return_events(Some(Fx::INITIAL), Device::Reverb)
+            fx.return_events(Some(Fx::INITIAL), Device::Reverb, 122, 122)
                 .is_empty()
         );
         assert!(
-            fx.return_events(Some(Fx::INITIAL), Device::Delay)
+            fx.return_events(Some(Fx::INITIAL), Device::Delay, 122, 122)
                 .is_empty()
         );
     }

@@ -120,7 +120,7 @@ impl Rack {
                         if controls.selected.is_some() {
                             "PRESETS FX"
                         } else {
-                            "SELECT SLOT"
+                            "EDIT BEAT FX"
                         },
                         Point::new(231, 99),
                         Alignment::Right,

@@ -987,6 +987,7 @@ version = "0.0.0"
 dependencies = [
  "libm",
  "wavegraph-core",
+ "wavegraph-lfo",
  "wavegraph-sample 0.2.0-pre",
 ]
 

@@ -6,12 +6,14 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+mod beat;
 mod delay;
 mod ducker;
 mod eq;
 mod insert;
 mod master;
 mod mixer;
+pub use beat::{BeatClock, BeatDivision, BeatFx, StepPattern};
 pub use delay::Delay;
 pub use ducker::SidechainDucker;
 pub use eq::{EqControls, ThreeBandEq};
@@ -19,7 +21,7 @@ pub use insert::{
     Chorus, ChorusControls, FILTER_PATTERNS, FilterMode, FilterPattern, Flanger,
     ModulationControls, ModulationControls as FlangerControls,
     ModulationControls as PhaserControls, PatternFilter, PatternFilterControls, Phaser, Saturator,
-    SaturatorControls,
+    SaturatorControls, Slicer, SlicerControls,
 };
 pub use master::{Dynamics, MasterBus, MasterControls};
 pub use mixer::{ChannelMixer, MixerMessage};
@@ -46,6 +48,10 @@ pub enum Message {
     Decay(u8),
     /// Digital delay time in milliseconds, limited by the caller's delay line.
     TimeMs(u16),
+    /// Set echo spacing or modulation period from the master tempo and shared beat division.
+    BeatTime(BeatClock),
+    /// Anchor a modulation cycle to the transport phase (Q0.32) at this frame.
+    BeatPhase(u32),
     /// Digital delay feedback in percent, clamped to 95. Zero gives one echo.
     Feedback(u8),
     /// Select a detector signal inlet on a sidechain insert. Inlet 0 keys from the program.
@@ -68,6 +74,10 @@ pub enum Message {
     Flanger(FlangerControls),
     /// Resonant pattern filter and envelope settings.
     PatternFilter(PatternFilterControls),
+    /// Sixteen-step amplitude gate controls.
+    Slicer(SlicerControls),
+    /// Replace the pass/rest mask of a rhythmic gate.
+    StepPattern(StepPattern),
     /// Trigger the pattern filter envelope at this sample offset, with strength 0..=127.
     FilterTrigger(u8),
     /// Enable the effect. Disabling mutes a return or bypasses an insert.

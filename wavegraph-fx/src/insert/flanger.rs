@@ -1,4 +1,6 @@
-use super::{ModulationControls, blend, clamp_pcm, mul_q7, pcm, triangle};
+use super::{ModulationControls, blend, clamp_pcm, mul_q7, pcm};
+use crate::{BeatClock, BeatFx};
+use wavegraph_lfo::{Phase, PhaseControl};
 use wavegraph_sample::I24;
 
 /// Mono Q23 flanger with a triangle LFO and a linearly interpolated PCM16 tap.
@@ -9,8 +11,9 @@ pub struct Flanger {
     line: [i16; 64],
     write: u8,
     rate_hz: u32,
-    phase: u32,
-    step: u32,
+    phase: Phase,
+    clock: Option<BeatClock>,
+    free_rate: u8,
     center_q8: u16,
     sweep_q8: u16,
     feedback: u8,
@@ -36,8 +39,9 @@ impl Flanger {
             line: [0; 64],
             write: 0,
             rate_hz,
-            phase: 0,
-            step: 0,
+            phase: Phase::default(),
+            clock: None,
+            free_rate: u8::MAX,
             center_q8: ((256 + max_q8) / 2) as u16,
             sweep_q8: 0,
             feedback: 0,
@@ -56,12 +60,47 @@ impl Flanger {
         reason = "The sweep fits 63 samples in Q8 and feedback is at most 96/128"
     )]
     pub fn set_controls(&mut self, controls: ModulationControls) {
-        self.step = controls.phase_step(self.rate_hz);
+        if self.free_rate != controls.rate {
+            self.free_rate = controls.rate;
+            self.clock = None;
+            self.phase.control(PhaseControl {
+                increment: controls.phase_step(self.rate_hz),
+                phase: None,
+            });
+        }
         self.sweep_q8 =
             ((u32::from(self.center_q8 - 256) * u32::from(controls.depth.min(128))) >> 7) as u16;
         self.feedback = (u16::from(controls.feedback.min(128)) * 3 / 4) as u8;
         self.wet_mix = controls.mix.min(128);
         self.set_enabled(controls.enabled);
+    }
+
+    /// Fade back to the dry input without clearing the delay history.
+    pub fn bypass(&mut self) {
+        self.set_enabled(false);
+    }
+
+    /// Whether a bypass fade has reached the exact dry signal.
+    #[must_use]
+    pub fn is_dry(&self) -> bool {
+        !self.enabled && self.mix == 0
+    }
+
+    /// Apply a shared audio-rate LFO control at the next sample. Keep the delay history.
+    pub fn set_phase(&mut self, control: PhaseControl) {
+        self.clock = None;
+        self.phase.control(control);
+        if let Some(phase) = control.phase {
+            self.anchor(phase);
+        }
+    }
+
+    pub(super) fn set_clock(&mut self, clock: BeatClock) {
+        self.sync(clock, None);
+    }
+
+    pub(super) fn anchor(&mut self, phase: u32) {
+        self.phase.seek(phase.wrapping_sub(self.phase.increment()));
     }
 
     pub(super) fn set_enabled(&mut self, enabled: bool) {
@@ -79,7 +118,8 @@ impl Flanger {
         let write = usize::from(self.write);
         let mask = self.line.len() - 1;
         self.write = ((write + 1) & mask) as u8;
-        self.phase = self.phase.wrapping_add(self.step);
+        self.phase.advance(1);
+        let triangle = self.phase.triangle_q15();
         let target = if self.enabled { self.wet_mix } else { 0 };
         let mix = blend(&mut self.mix, i32::from(target));
         let dry = sample.inner();
@@ -87,8 +127,7 @@ impl Flanger {
             self.line[write] = (dry / 256) as i16;
             return sample;
         }
-        let delay =
-            i32::from(self.center_q8) + ((triangle(self.phase) * i32::from(self.sweep_q8)) >> 15);
+        let delay = i32::from(self.center_q8) + ((triangle * i32::from(self.sweep_q8)) >> 15);
         let index = write.wrapping_sub((delay >> 8) as usize) & mask;
         let newer = i32::from(self.line[index]);
         let older = i32::from(self.line[index.wrapping_sub(1) & mask]);
@@ -96,5 +135,17 @@ impl Flanger {
         // Truncate toward zero so the last negative feedback repeat decays to silence.
         self.line[write] = (clamp_pcm(dry + mul_q7(wet, i32::from(self.feedback))) / 256) as i16;
         pcm(dry + mul_q7(wet - dry, mix))
+    }
+}
+
+impl BeatFx for Flanger {
+    fn sync(&mut self, clock: BeatClock, phase: Option<u32>) {
+        if self.clock != Some(clock) {
+            self.phase.control(clock.lfo(self.rate_hz, None));
+            self.clock = Some(clock);
+        }
+        if let Some(phase) = phase {
+            self.anchor(phase);
+        }
     }
 }
