@@ -1,4 +1,4 @@
-//! A one-bit ink mask over the live scope, with a shared mask for the selected row.
+//! A one-bit ink mask over the live scope.
 
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{
@@ -16,13 +16,14 @@ use fm1_graphics::embedded_graphics::{
         raw::{BigEndian, RawU1, ToBytes},
     },
     prelude::{DrawTarget, Point, Primitive, Size},
-    primitives::{PrimitiveStyle, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    primitives::{ContainsPoint, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
     text::{Baseline, Text},
 };
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 
-const WIDTH: usize = 144;
-const ROW_HEIGHT: usize = 21;
+const WIDTH: usize = 136;
+// The eight instruments and their 15–16 pixel labels fit without growing the selector.
+const ROW_HEIGHT: usize = 18;
 const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;
 pub(super) const RIGHT: usize = LEFT + WIDTH;
@@ -57,21 +58,23 @@ pub(super) enum Menu {
 pub(super) struct Selector {
     menu: Option<Menu>,
     mask: Mask<HEIGHT, { buffer_size::<BinaryColor>(WIDTH, HEIGHT) }>,
-    row: Mask<ROW_HEIGHT, { buffer_size::<BinaryColor>(WIDTH, ROW_HEIGHT) }>,
+    row_inset: [u8; ROW_HEIGHT],
     pub(super) badge: super::badge::ChannelBadge,
 }
 
 impl Selector {
     pub(super) fn new() -> Self {
-        let mut row = Mask::new();
-        highlight(0)
-            .into_styled(PrimitiveStyle::with_fill(BinaryColor::On))
-            .draw(&mut row)
-            .expect("infallible framebuffer");
+        let row = highlight(0);
+        // Each rounded scanline is symmetric, so its first filled x describes both edges.
+        let row_inset = core::array::from_fn(|y| {
+            (0..=4)
+                .find(|&x| row.contains(Point::new(i32::from(x), y as i32)))
+                .expect("corner radius is four pixels")
+        });
         Self {
             menu: None,
             mask: Mask::new(),
-            row,
+            row_inset,
             badge: super::badge::ChannelBadge::new(),
         }
     }
@@ -104,7 +107,7 @@ impl Selector {
                                 .draw(&mut self.mask)
                                 .expect("infallible framebuffer");
                         }
-                        Text::with_baseline(kind.name(), Point::new(8, y + 3), text, Baseline::Top)
+                        Text::with_baseline(kind.name(), Point::new(8, y + 2), text, Baseline::Top)
                             .draw(&mut self.mask)
                             .expect("infallible framebuffer");
                     }
@@ -123,7 +126,7 @@ impl Selector {
                 if numbered {
                     Text::with_baseline(
                         ["1", "2", "3", "4"][row],
-                        Point::new(8, y + 3),
+                        Point::new(8, y + 2),
                         text,
                         Baseline::Top,
                     )
@@ -131,7 +134,7 @@ impl Selector {
                     .expect("infallible framebuffer");
                 }
                 if super::lettering::panel_type(*part) {
-                    let left = if numbered { 27 } else { 8 };
+                    let left = if numbered { 24 } else { 8 };
                     for (i, ch) in part.name().bytes().enumerate() {
                         let mask = super::lettering::GRID.glyph(ch);
                         for dy in 0..mask.height {
@@ -152,7 +155,7 @@ impl Selector {
                 }
                 Text::with_baseline(
                     part.name(),
-                    Point::new(if numbered { 27 } else { 8 }, y + 3),
+                    Point::new(if numbered { 24 } else { 8 }, y + 2),
                     text,
                     Baseline::Top,
                 )
@@ -240,7 +243,8 @@ impl Selector {
         if let Menu::Channels { focus, .. } = self.menu? {
             let top = (HEIGHT - CHANNELS * ROW_HEIGHT) / 2 + focus.index() * ROW_HEIGHT;
             let row = y.checked_sub(top)?;
-            if row >= ROW_HEIGHT || !marked(self.row.data(), x, row) {
+            let inset = usize::from(*self.row_inset.get(row)?);
+            if x < inset || x >= WIDTH - inset {
                 return None;
             }
         }

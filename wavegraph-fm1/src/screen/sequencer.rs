@@ -43,7 +43,9 @@ const INKS: [Rgb565; 3] = [
 const ACID: Rgb565 = Rgb565::new(31, 24, 4);
 
 pub(super) fn style(part: Part) -> WaveformStyle {
-    if part.is_kit() {
+    if part == Part::Fm {
+        super::fm::PANEL_STYLE
+    } else if part.is_kit() {
         drums::style(part)
     } else {
         super::STYLE
@@ -168,7 +170,7 @@ impl Roll {
                         cell.accent |= n.velocity >= 100;
                         cell.slide |= slide || held.iter().any(Option::is_some);
                     }
-                    if matches!(part, Part::Wavetable | Part::Organ) {
+                    if part.is_polyphonic() {
                         if !held.contains(&Some(n.number))
                             && let Some(v) = held.iter_mut().find(|v| v.is_none())
                         {
@@ -307,6 +309,7 @@ impl Roll {
                         Part::Wavetable => super::microwave::STYLE.trace,
                         Part::Supersaw => super::jp8080::STYLE.trace,
                         Part::Organ => super::ORGAN_LIME,
+                        Part::Fm => super::fm::GREEN,
                         _ => palette::GREEN,
                     }
                 };

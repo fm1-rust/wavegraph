@@ -19,7 +19,8 @@ caller-owned buffers. Each instrument is a separate crate. The
 | [`wavegraph-audio`](wavegraph-audio/) | Routed audio I/O for macOS and the FM-1 | Unpublished | [Run the Mac synth](wavegraph-audio/README.md) | [![Build status][audio-build]][audio-ci] |
 | [`wavegraph-core`](wavegraph-core/) | Patch objects, events and bytecode instructions | Unpublished | [Object interface](wavegraph-core/README.md) | [![Build status][dsp-build]][dsp-ci] |
 | [`wavegraph-dsp`](wavegraph-dsp/) | DSP and bytecode interpreter | Unpublished | [Patch guide](wavegraph-dsp/README.md) | [![Build status][dsp-build]][dsp-ci] |
-| [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, five synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
+| [`wavegraph-fm`](instruments/wavegraph-fm/) | Four-voice, two-operator FM electric piano, bell and bass | Unpublished | [Instrument guide](instruments/wavegraph-fm/README.md) | [![Build status][fm-build]][fm-ci] |
+| [`wavegraph-fm1`](wavegraph-fm1/) | Four assignable channels, six synths, 808 and 909 drums and a live oscilloscope for the M-VAVE FM-1 | [Firmware releases](https://github.com/fm1-rust/wavegraph/releases) | [Controls and build](wavegraph-fm1/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-fm1-core`](wavegraph-fm1-core/) | Run your own DSP graph on CPU1 with RTICX and the FM-1 DAC on CPU0 | Unpublished | [Build an app](wavegraph-fm1-core/README.md) | [![Build status][fm1-build]][fm1-ci] |
 | [`wavegraph-lfo`](wavegraph-lfo/) | Frame-clocked modulation source with a float message outlet | Unpublished | [LFO guide](wavegraph-lfo/README.md) | [![Build status][lfo-build]][lfo-ci] |
 | [`wavegraph-monosynth`](instruments/wavegraph-monosynth/) | Sine, triangle, sawtooth and square monosynth | Unpublished | [Instrument guide](instruments/wavegraph-monosynth/README.md) | [![Build status][dsp-build]][dsp-ci] |
@@ -58,6 +59,8 @@ cargo +stable test -p wavegraph-dsp --test patch --locked
 [lfo-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-lfo.yml
 [arp-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-arp.yml/badge.svg?branch=main&event=push
 [arp-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-arp.yml
+[fm-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm.yml/badge.svg?branch=main&event=push
+[fm-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm.yml
 [fm1-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml/badge.svg?branch=main&event=push
 [fm1-ci]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [organ-build]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-organ.yml/badge.svg?branch=main&event=push

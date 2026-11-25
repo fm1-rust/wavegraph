@@ -2,6 +2,14 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+/// Envelope times in microseconds, spaced approximately three steps per octave.
+pub const TIMES_US: [u32; 39] = [
+    0, 1_500, 2_000, 3_000, 4_000, 5_000, 6_000, 8_000, 10_000, 12_000, 16_000, 20_000, 25_000,
+    32_000, 40_000, 50_000, 64_000, 80_000, 100_000, 125_000, 160_000, 200_000, 250_000, 320_000,
+    400_000, 500_000, 640_000, 800_000, 1_000_000, 1_250_000, 1_600_000, 2_000_000, 2_500_000,
+    3_200_000, 4_000_000, 5_000_000, 6_400_000, 8_000_000, 10_000_000,
+];
+
 /// Attack, decay, sustain and release settings, independent of sample rate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Adsr {

@@ -14,6 +14,7 @@ four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
 All four patterns start enabled. GLO lets any channel host any instrument,
 including the [monosynth](../instruments/wavegraph-monosynth/),
 [M1-inspired organ](../instruments/wavegraph-organ/),
+[two-operator FM synth](../instruments/wavegraph-fm/),
 [Super Saw](../instruments/wavegraph-supersaw/) and
 [wavetable synth](../instruments/wavegraph-wavetable/).
 The transport starts stopped. You can play the panel keys immediately.
@@ -40,7 +41,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
 | REC | Start live recording on the current channel. REC ends recording and keeps the loop playing. PLAY stops both. |
-| EDIT on an organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
+| EDIT on an FM, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
 | SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
@@ -50,14 +51,15 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, or select a wavetable bank. While a 303 knob is selected, ALGORITHM adjusts its value. |
-| SELECT encoder on the scope | Transpose the monosynth, organ, Super Saw or wavetable by ±12 semitones, or cycle through all eight 303 knobs. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, or load the next FM program. While a 303 knob is selected, ALGORITHM adjusts its value. |
+| SELECT encoder on the scope | Transpose the monosynth, FM, organ, Super Saw or wavetable by ±12 semitones, or cycle through all eight 303 knobs. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
+| Knobs 1–4 on the FM synth | Modulator-to-carrier frequency ratio, modulation index, modulator envelope decay (0–10 s), and modulator feedback. Harder strikes sound brighter. |
 | Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. In ENV mode knob 3 sets position attack. |
 | Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
-| ENV | Open or close the monosynth, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
-| Knobs 1–4 in monosynth, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to switch between AMP and FILTER on Super Saw, or AMP and POSITION on wavetable. |
+| ENV | Open or close the monosynth, FM, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
+| Knobs 1–4 in monosynth, FM, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to choose the envelope on FM (carrier, modulator, pitch), Super Saw (amp, filter) or wavetable (amp, position). |
 | Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
 | HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
@@ -73,8 +75,24 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
 | ALGORITHM in FX | Switch the full/half post-rack output gain. |
-| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
+| SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for FM and 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
+
+To play FM, press GLO, turn SELECT to a channel, turn PRESETS to **FM SYNTH**,
+then press GLO to play. ALGORITHM recalls **Tine EP**, **Glass Bell** or
+**Wire Bass**, including its knob values and three envelopes. The
+scope's two numbered boxes show operator 2 feeding operator 1. In SEQ the FM
+starts with the organ's eight chord clips and has its own edits and slot selection.
+
+Press **ENV**, then turn SELECT or press SEL to cycle through **OP1 CARRIER**
+(volume), **OP2 MOD** (brightness), and **PITCH**. Knobs 1–4 set attack, decay,
+sustain and release for the displayed envelope. On PITCH, ALGORITHM sets depth
+in 10-cent steps from −1200 to +1200 cents. The center line is the played pitch.
+Each key starts its own three envelopes. Both operators follow its pitch bend.
+
+| Tine EP playing a chord | Pitch envelope |
+| --- | --- |
+| ![Tine EP with the two-operator routing and live scope](assets/fm-synth.png) | ![FM pitch envelope edited for a downward bend](assets/fm-pitch.png) |
 
 The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
@@ -104,10 +122,10 @@ Hold a bass note on channel one, turn PRESETS to channel two, and play the
 upper voice. Each key keeps the channel it was pressed on. The 303 and
 monosynth use last-note priority. On the 303, velocity 96+ triggers accent,
 overlapping notes slide, and a fresh strike after release restarts the
-envelopes. On the organ, Super Saw and wavetable synths, the latest four physical keys take priority.
+envelopes. On the FM, organ, Super Saw and wavetable synths, the latest four physical keys take priority.
 Releasing a newer key restores an older held key.
 
-All three scopes show the mode or the selected chord symbol. These instruments start in **Poly**, with one voice per key. **Chord** plays the
+All four scopes show the mode or the selected chord symbol. These instruments start in **Poly**, with one voice per key. **Chord** plays the
 selected voicing from a single root. **Unison** spreads all four voices
 around one pitch (approximately ±2 and ±7 cents). In either stacked mode the
 newest held root wins. Releasing it recalls the previous held root and its
@@ -482,7 +500,7 @@ SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
 Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the seven instruments,
+the new assignment immediately. Any slot can run any of the eight instruments,
 including four independent TB-303s. The slot keeps its MIDI channel, fader,
 sends and sequence mute. The new processor starts from its factory settings.
 

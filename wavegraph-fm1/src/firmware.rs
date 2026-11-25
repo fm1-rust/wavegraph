@@ -66,6 +66,7 @@ impl Settings {
             bass_knob: self.nav.bass_knob(),
             mode: track.polyphony.mode,
             organ: track.organ,
+            fm: track.fm,
             drums808: track.drums808,
             saw: track.saw,
             wave: track.wave_program(),
@@ -92,8 +93,10 @@ impl Settings {
                 self.tracks[self.nav.focus.index()].inserts[usize::from(slot)].enabled()
             }),
             View::MasterFx(Some(row)) => self.fx.enabled(row),
-            View::Envelope if matches!(self.nav.part(), Part::Supersaw | Part::Wavetable) => {
-                self.tracks[self.nav.focus.index()].envelope_target == EnvelopeTarget::Modulation
+            View::Envelope
+                if matches!(self.nav.part(), Part::Supersaw | Part::Wavetable | Part::Fm) =>
+            {
+                self.tracks[self.nav.focus.index()].envelope_target != EnvelopeTarget::Amp
             }
             View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
             View::Sequencer => {
@@ -116,6 +119,7 @@ pub(super) struct Labels {
     pub(super) bass_knob: Option<Knob>,
     pub(super) mode: wavegraph_organ::VoiceMode,
     pub(super) organ: OrganControls,
+    pub(super) fm: crate::fm::Controls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) saw: SawControls,
     pub(super) wave: WaveProgram,
@@ -919,7 +923,7 @@ mod app {
                 }
                 View::Scope | View::Envelope => {
                     let track = &mut self.settings.tracks[channel.index()];
-                    track.turn_algorithm(nav.bass_knob(), algorithm);
+                    track.turn_algorithm(view, nav.bass_knob(), algorithm);
                     track.edit_panel(view, select, knobs, sel);
                 }
                 View::MasterFx(None) | View::Sequencer => (),
@@ -1293,11 +1297,12 @@ mod app {
                     if bass_scope {
                         self.capture.push_bass(samples, block.bass_cycle)
                     } else {
-                        let scale = if voice_scope && labels.focus == Part::Wavetable {
-                            Scale::Auto
-                        } else {
-                            Scale::Fixed
-                        };
+                        let scale =
+                            if voice_scope && matches!(labels.focus, Part::Wavetable | Part::Fm) {
+                                Scale::Auto
+                            } else {
+                                Scale::Fixed
+                            };
                         self.capture.push(samples, scale)
                     }
                 });

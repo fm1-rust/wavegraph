@@ -23,6 +23,7 @@ pub(super) async fn paint(
     entering: bool,
 ) -> Result<(), Error> {
     let (face, ink, accent) = match labels.focus {
+        Part::Fm => (super::fm::FACE, super::fm::PRINT, super::fm::GREEN),
         Part::Organ => (ORGAN_STYLE.background, palette::WHITE, ORGAN_LIME),
         Part::Supersaw => (jp8080::FACE, jp8080::PRINT, jp8080::AMBER),
         _ => (microwave::FACE, microwave::PRINT, microwave::LIME),

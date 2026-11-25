@@ -29,6 +29,7 @@ use wavegraph_dsp::{
     dsp::Software,
     midi::MidiMessage,
 };
+use wavegraph_fm::{Fm, Message as FmMessage};
 use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage, MixerMessage};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
@@ -37,6 +38,7 @@ use wavegraph_supersaw::{Message as SawMessage, Supersaw};
 use wavegraph_wavetable::{Message as WaveMessage, Scan, Wavetable};
 
 const _: () = assert!(wavegraph_wavetable::POLYPHONY == POLYPHONY);
+const _: () = assert!(wavegraph_fm::POLYPHONY == POLYPHONY);
 
 const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
     (Waveform::Sine, b"SINE    "),
@@ -64,10 +66,11 @@ pub(super) enum Part {
     Tr808,
     Supersaw,
     Wavetable,
+    Fm,
 }
 
 impl Part {
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 8] = [
         Self::Mono,
         Self::Organ,
         Self::Bass,
@@ -75,6 +78,7 @@ impl Part {
         Self::Tr808,
         Self::Supersaw,
         Self::Wavetable,
+        Self::Fm,
     ];
 
     pub(super) const fn is_kit(self) -> bool {
@@ -82,13 +86,16 @@ impl Part {
     }
 
     pub(super) const fn is_polyphonic(self) -> bool {
-        matches!(self, Self::Organ | Self::Supersaw | Self::Wavetable)
+        matches!(
+            self,
+            Self::Organ | Self::Supersaw | Self::Wavetable | Self::Fm
+        )
     }
 
     pub(super) const fn has_envelope(self) -> bool {
         matches!(
             self,
-            Self::Mono | Self::Organ | Self::Bass | Self::Supersaw | Self::Wavetable
+            Self::Mono | Self::Organ | Self::Bass | Self::Supersaw | Self::Wavetable | Self::Fm
         )
     }
 
@@ -104,6 +111,7 @@ impl Part {
             Self::Mono => MonoMessage::NoteOn { note, velocity }.into(),
             Self::Organ => OrganMessage::NoteOn { note, velocity }.into(),
             Self::Wavetable => WaveMessage::NoteOn { note, velocity }.into(),
+            Self::Fm => FmMessage::NoteOn { note, velocity }.into(),
             Self::Supersaw => SawMessage::NoteOn { note, velocity }.into(),
             Self::Bass => BassMessage::NoteOn {
                 note,
@@ -120,6 +128,7 @@ impl Part {
             Self::Mono => MonoMessage::NoteOff(note).into(),
             Self::Organ => OrganMessage::NoteOff(note).into(),
             Self::Wavetable => WaveMessage::NoteOff(note).into(),
+            Self::Fm => FmMessage::NoteOff(note).into(),
             Self::Supersaw => SawMessage::NoteOff(note).into(),
             Self::Bass => BassMessage::NoteOff(note).into(),
             Self::Tr808 | Self::Tr909 => unreachable!("drum kits take triggers"),
@@ -164,6 +173,7 @@ impl Part {
             Self::Tr808 => "TR-808",
             Self::Supersaw => "SUPER SAW",
             Self::Wavetable => "WAVETABLE",
+            Self::Fm => "FM SYNTH",
         }
     }
 }
@@ -202,7 +212,7 @@ impl Voice {
         self.waveform = match part {
             Part::Mono => position % 4,
             Part::Organ | Part::Bass | Part::Wavetable => position % 2,
-            Part::Tr808 | Part::Tr909 | Part::Supersaw => 0,
+            Part::Tr808 | Part::Tr909 | Part::Supersaw | Part::Fm => 0,
         };
     }
 
@@ -228,6 +238,7 @@ impl Voice {
             Part::Tr808 => b"TR-808  ",
             Part::Supersaw => b"SUPERSAW",
             Part::Wavetable => b"WAVETABLE",
+            Part::Fm => b"FM SYNTH",
         }
     }
 
@@ -278,6 +289,7 @@ pub(super) struct Track {
     pub(super) inserts: [Insert; INSERT_SLOTS],
     pub(super) polyphony: crate::panel::Polyphony,
     pub(super) organ: OrganControls,
+    pub(super) fm: crate::fm::Controls,
     pub(super) saw: SawControls,
     wave_programs: [WaveProgram; 2],
     pub(super) poly_keys: [PolyKey; POLYPHONY],
@@ -301,6 +313,7 @@ impl Track {
             inserts: Insert::factory(assignment.part),
             polyphony: crate::panel::Polyphony::INITIAL,
             organ: OrganControls::INITIAL,
+            fm: crate::fm::Controls::INITIAL,
             poly_keys: [PolyKey::EMPTY; POLYPHONY],
             voice_envelope: match assignment.part {
                 Part::Supersaw => EnvelopeControls::SUPER_SAW_AMP,
@@ -320,7 +333,12 @@ impl Track {
             },
             voice_tap: matches!(
                 assignment.part,
-                Part::Bass | Part::Tr808 | Part::Tr909 | Part::Supersaw | Part::Wavetable
+                Part::Bass
+                    | Part::Tr808
+                    | Part::Tr909
+                    | Part::Supersaw
+                    | Part::Wavetable
+                    | Part::Fm
             ),
             drums808: wavegraph_808::Controls::INITIAL,
             panel_hits: HitLog::EMPTY,
@@ -379,16 +397,22 @@ impl Track {
 
     pub(super) fn turn_select(&mut self, detents: i8) {
         match self.assignment.part {
-            Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable => {
+            Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable | Part::Fm => {
                 self.voice.transpose = self.voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
             Part::Bass | Part::Tr808 | Part::Tr909 => (),
         }
     }
 
-    pub(super) fn turn_algorithm(&mut self, bass_knob: Option<Knob>, detents: i8) {
+    pub(super) fn turn_algorithm(&mut self, view: View, bass_knob: Option<Knob>, detents: i8) {
         if let Some(knob) = bass_knob {
             self.bass.turn(knob, detents);
+        } else if self.assignment.part == Part::Fm {
+            if view == View::Scope {
+                self.fm.select(detents);
+            } else if self.envelope_target == EnvelopeTarget::Pitch {
+                self.fm.turn_depth(detents);
+            }
         } else {
             self.voice.turn_waveform(self.assignment.part, detents);
         }
@@ -405,6 +429,7 @@ impl Track {
                 self.saw.mix = self.saw.mix.saturating_add_signed(mix).min(127);
             }
             Part::Organ => self.organ.turn_knobs(detents),
+            Part::Fm => self.fm.turn(detents),
             Part::Wavetable => self.wave_programs[usize::from(self.voice.waveform)].turn(detents),
             Part::Bass => self.bass.turn_knobs(detents),
             Part::Tr808 => {
@@ -427,22 +452,25 @@ impl Track {
 
     pub(super) fn edit_panel(&mut self, view: View, select: i8, knobs: [i8; 4], sel: bool) {
         match (view, self.assignment.part) {
-            (View::Envelope, part @ (Part::Supersaw | Part::Wavetable)) => {
-                if select % 2 != 0 || sel {
-                    self.envelope_target = match self.envelope_target {
-                        EnvelopeTarget::Amp => EnvelopeTarget::Modulation,
-                        EnvelopeTarget::Modulation => EnvelopeTarget::Amp,
-                    };
-                }
-                match self.envelope_target {
-                    EnvelopeTarget::Amp => self.voice_envelope.turn(knobs),
-                    EnvelopeTarget::Modulation if part == Part::Supersaw => {
-                        self.saw.filter_envelope.turn(knobs)
+            (View::Envelope, part @ (Part::Supersaw | Part::Wavetable | Part::Fm)) => {
+                if part == Part::Fm {
+                    self.envelope_target = self
+                        .envelope_target
+                        .turn(i16::from(select).saturating_add(i16::from(sel)), true);
+                    self.fm.turn_envelope(self.envelope_target, knobs);
+                } else {
+                    if select % 2 != 0 || sel {
+                        self.envelope_target = self.envelope_target.turn(1, false);
                     }
-                    EnvelopeTarget::Modulation => self.wave_programs
-                        [usize::from(self.voice.waveform)]
-                    .position_envelope
-                    .turn(knobs),
+                    if self.envelope_target == EnvelopeTarget::Amp {
+                        self.voice_envelope.turn(knobs);
+                    } else if part == Part::Supersaw {
+                        self.saw.filter_envelope.turn(knobs);
+                    } else {
+                        self.wave_programs[usize::from(self.voice.waveform)]
+                            .position_envelope
+                            .turn(knobs);
+                    }
                 }
                 return;
             }
@@ -481,6 +509,16 @@ impl Track {
             Part::Mono => self.oscillator_events(old),
             Part::Supersaw => {
                 let mut events = self.saw_controls(old);
+                self.poly_events(old, &mut events);
+                events
+            }
+            Part::Fm => {
+                let mut events = EventBatch::new();
+                if old.is_none_or(|p| p.fm.patch != self.fm.patch) {
+                    events
+                        .push(at(FmMessage::Patch(self.fm.patch)))
+                        .map_err(|_| Error::Capacity)?;
+                }
                 self.poly_events(old, &mut events);
                 events
             }
@@ -641,6 +679,7 @@ impl Track {
         let mode = self.polyphony.mode;
         if previous.map_or(wavegraph_organ::VoiceMode::Poly, |p| p.polyphony.mode) != mode {
             let msg = match self.assignment.part {
+                Part::Fm => Message::Fm(FmMessage::VoiceMode(mode)),
                 Part::Organ => Message::Organ(OrganMessage::VoiceMode(mode)),
                 Part::Wavetable => Message::Wavetable(WaveMessage::VoiceMode(mode)),
                 Part::Supersaw => Message::Supersaw(SawMessage::VoiceMode(mode)),
@@ -692,6 +731,7 @@ impl Track {
 pub(super) enum Message {
     Mono(MonoMessage),
     Supersaw(SawMessage),
+    Fm(FmMessage),
     Wavetable(WaveMessage),
     WaveFrame(u8),
     Organ(OrganMessage),
@@ -717,6 +757,11 @@ impl From<MonoMessage> for Message {
 impl From<WaveMessage> for Message {
     fn from(value: WaveMessage) -> Self {
         Self::Wavetable(value)
+    }
+}
+impl From<FmMessage> for Message {
+    fn from(value: FmMessage) -> Self {
+        Self::Fm(value)
     }
 }
 impl From<SawMessage> for Message {
@@ -771,6 +816,7 @@ enum Player<'a> {
     Empty,
     Mono(Monosynth<'a>),
     Supersaw(Supersaw<'a>),
+    Fm(Fm<'a>),
     Wavetable(Wavetable<'a>),
     Organ(Organ),
     Bass(Tb303),
@@ -822,6 +868,7 @@ impl Process<Message, I24> for Node<'_> {
                     Wavetable::new(self.tuning, &crate::assets::WAVETABLES)
                         .expect("factory bank catalog"),
                 ),
+                Part::Fm => Player::Fm(Fm::new(self.tuning)),
                 Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
                 // Reserve headroom before the resonant signal is converted to Q23.
                 Part::Bass => Player::Bass(
@@ -848,6 +895,10 @@ impl Process<Message, I24> for Node<'_> {
             Player::Empty => cx.outputs[0].fill(I24::default()),
             Player::Mono(node) => dispatch(node, cx, |m| match m {
                 Message::Mono(m) => Some(m),
+                _ => None,
+            }),
+            Player::Fm(node) => dispatch(node, cx, |m| match m {
+                Message::Fm(m) => Some(m),
                 _ => None,
             }),
             Player::Supersaw(node) => dispatch(node, cx, |m| match m {
@@ -1492,12 +1543,14 @@ fn event_order(event: &Event<Message>) -> u8 {
         Message::Assign(_) => 0,
         Message::Mono(MonoMessage::NoteOff(_))
         | Message::Wavetable(WaveMessage::NoteOff(_))
+        | Message::Fm(FmMessage::NoteOff(_))
         | Message::Supersaw(SawMessage::NoteOff(_))
         | Message::Organ(OrganMessage::NoteOff(_))
         | Message::Bass(BassMessage::NoteOff(_) | BassMessage::Reset)
         | Message::Drum(DrumMessage::Stop) => 1,
         Message::Mono(MonoMessage::NoteOn { .. })
         | Message::Wavetable(WaveMessage::NoteOn { .. })
+        | Message::Fm(FmMessage::NoteOn { .. })
         | Message::Supersaw(SawMessage::NoteOn { .. })
         | Message::Organ(OrganMessage::NoteOn { .. })
         | Message::Bass(BassMessage::NoteOn { .. })
@@ -1531,7 +1584,7 @@ mod tests {
     fn edit_page_cycles_each_polysynth_and_recalls_its_chord() {
         use crate::panel::PageButton;
         use wavegraph_organ::{Chord, VoiceMode};
-        for part in [Part::Organ, Part::Wavetable, Part::Supersaw] {
+        for part in [Part::Organ, Part::Wavetable, Part::Supersaw, Part::Fm] {
             let mut nav = Navigation::INITIAL;
             nav.assignments[0] = Assignment::new(part);
             let mut track = Track::new(nav.assignments[0]);
@@ -1541,6 +1594,7 @@ mod tests {
             track.polyphony.edit(1, 2, false, 0);
             let mode = VoiceMode::Chord(Chord::MAJOR.turn(2));
             let msg = match part {
+                Part::Fm => at(FmMessage::VoiceMode(mode)),
                 Part::Organ => at(OrganMessage::VoiceMode(mode)),
                 Part::Supersaw => at(SawMessage::VoiceMode(mode)),
                 _ => at(WaveMessage::VoiceMode(mode)),
@@ -2500,7 +2554,7 @@ mod tests {
             track.edit_panel(nav.view, 1, [0; 4], false);
             assert_eq!(nav.bass_knob(), Some(knob));
             assert!(track.events(Some(before))?.is_empty());
-            track.turn_algorithm(nav.bass_knob(), 1);
+            track.turn_algorithm(nav.view, nav.bass_knob(), 1);
             assert_eq!(track.events(Some(before))?.as_slice(), &[at(message)]);
         }
         let before = track;
@@ -2515,11 +2569,11 @@ mod tests {
             ]
         );
         assert_eq!(nav.bass_knob(), Some(Knob::Accent));
-        track.turn_algorithm(nav.bass_knob(), -1);
+        track.turn_algorithm(nav.view, nav.bass_knob(), -1);
         assert_eq!(track.bass.detent(Knob::Accent), 50);
         let before = track;
         nav.press(crate::panel::PageButton::Home);
-        track.turn_algorithm(nav.bass_knob(), 1);
+        track.turn_algorithm(nav.view, nav.bass_knob(), 1);
         assert_eq!(
             track.events(Some(before))?.as_slice(),
             &[at(BassMessage::Waveform(wavegraph_303::Waveform::Square))]
@@ -3185,6 +3239,112 @@ mod tests {
     }
 
     #[test]
+    fn fm_assignment_loads_programs_and_routes_panel_notes_and_edits() -> Result<(), Error> {
+        use crate::panel::PageButton;
+        use wavegraph_fm::{Patch as FmPatch, Ratio};
+
+        with_instrument(44_100, |instrument| {
+            let mut keys = Keyboard::<4>::new();
+            keys.nav.press(PageButton::Glo);
+            keys.nav.turn(1, 0);
+            keys.nav.turn(0, -1);
+            assert_eq!(keys.nav.part(), Part::Fm);
+            let channel = keys.nav.focus;
+            let i = channel.index();
+            keys.tracks[i] = Track::factory(channel, keys.nav.assignments[i]);
+            keys.nav.press(PageButton::Glo);
+            let tuning = Tuning::new(44_100, 1).expect("audio clock");
+            let mut reference = Fm::new(&tuning);
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            let mut check = |tracks, messages: &[FmMessage]| -> Result<(), Error> {
+                let events: Vec<_, 4> = messages
+                    .iter()
+                    .map(|&message| Event {
+                        frame: 0,
+                        port: 0,
+                        message,
+                    })
+                    .collect();
+                let mut dry = [I24::default(); 128];
+                reference.process(&mut ProcessContext {
+                    frames: dry.len(),
+                    inputs: &[],
+                    outputs: &mut [&mut dry],
+                    events: &events,
+                    emit: &mut Err,
+                });
+                instrument.render(tracks, &mut buses)?;
+                assert_eq!(buses[channel.source_bus()], dry);
+                assert!(dry.iter().any(|s| s.inner() != 0));
+                assert!(
+                    buses[Channel::Two.source_bus()]
+                        .iter()
+                        .all(|s| s.inner() == 0)
+                );
+                Ok(())
+            };
+            keys.press(note(64, 72));
+            keys.press(note(71, 110));
+            check(
+                keys.tracks,
+                &[
+                    FmMessage::NoteOn {
+                        note: 64,
+                        velocity: 72,
+                    },
+                    FmMessage::NoteOn {
+                        note: 71,
+                        velocity: 110,
+                    },
+                ],
+            )?;
+            keys.tracks[i].turn_algorithm(keys.nav.view, None, 1);
+            assert_eq!(keys.tracks[i].fm.patch, FmPatch::BELL);
+            keys.tracks[i].turn_knobs([1, -3, 1, 2]);
+            assert_eq!(
+                keys.tracks[i].fm.patch,
+                FmPatch {
+                    ratio: Ratio::Two,
+                    index: 103,
+                    modulator: wavegraph_fm::Shape {
+                        decay: wavegraph_fm::Time::from_us(2_000_000),
+                        ..FmPatch::BELL.modulator
+                    },
+                    feedback: 8,
+                    ..FmPatch::BELL
+                }
+            );
+            keys.nav.press(PageButton::Env);
+            assert_eq!(keys.nav.view, View::Envelope);
+            keys.tracks[i].edit_panel(keys.nav.view, 0, [1, 0, 0, -1], false);
+            assert_eq!(keys.tracks[i].fm.patch.carrier.attack.micros(), 3000);
+            keys.tracks[i].edit_panel(keys.nav.view, 1, [0, -1, 0, 0], false);
+            assert_eq!(
+                keys.tracks[i].fm.patch.modulator.decay,
+                FmPatch::BELL.modulator.decay
+            );
+            keys.tracks[i].edit_panel(keys.nav.view, 0, [0; 4], true);
+            keys.tracks[i].turn_algorithm(keys.nav.view, None, -12);
+            assert_eq!(keys.tracks[i].fm.patch.pitch_cents, -120);
+            assert_eq!(keys.tracks[i].fm.program, 1);
+            assert_eq!(
+                keys.tracks[i]
+                    .fm
+                    .envelope(keys.tracks[i].envelope_target)
+                    .adsr(),
+                FmPatch::BELL.pitch.adsr()
+            );
+            check(keys.tracks, &[FmMessage::Patch(keys.tracks[i].fm.patch)])?;
+            keys.release(64);
+            keys.release(71);
+            check(
+                keys.tracks,
+                &[FmMessage::NoteOff(64), FmMessage::NoteOff(71)],
+            )
+        })
+    }
+
+    #[test]
     fn supersaw_swaps_into_every_strip_with_independent_notes_and_controls() -> Result<(), Error> {
         use crate::panel::{PageButton, View};
         with_instrument(44_118, |instrument| {
@@ -3260,7 +3420,7 @@ mod tests {
                     // Swapping away during a held note discards only this engine.
                     nav.press(PageButton::Glo);
                     nav.turn(1, 0);
-                    nav.turn(0, 2);
+                    nav.turn(0, -(Part::Supersaw as i8));
                     assert_eq!(nav.part(), Part::Mono);
                     keys.clear(Channel::Four);
                     tracks[3] = Track::factory(Channel::Four, nav.assignments[3]);
