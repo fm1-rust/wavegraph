@@ -242,7 +242,7 @@ mod app {
         sequencer::{DrumKits, SeqPage, Sequencer, edit::EDITS, pattern::Slot},
     };
     use core::pin::pin;
-    use fm1_audio::{FRAME_RATE, I24, OUTPUT_FRAMES, Output, Refill, Stats};
+    use fm1_audio::{FRAME_RATE, OUTPUT_FRAMES, Output, Refill, Stats};
     use fm1_controls::{Button, Encoder, Leds, PianoKey, PlayLedState, Scan, TouchControls};
     use fm1_rticx::{
         bsp::{
@@ -267,6 +267,7 @@ mod app {
     use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
+    use wavegraph_sample::I24;
 
     const SCANS: usize = 8;
     const MIDI_EVENTS: usize = 32;

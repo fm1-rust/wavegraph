@@ -1,7 +1,7 @@
 [package]
 name = "wavegraph-core"
 description = "Patch objects, frame-timed events and bytecode instructions for WaveGraph"
-version = "0.1.0"
+version = "0.0.0"
 license.workspace = true
 repository = "https://github.com/fm1-rust/wavegraph"
 categories = ["embedded", "multimedia::audio", "no-std"]

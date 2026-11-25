@@ -205,9 +205,9 @@ dependencies = [
 
 [[package]]
 name = "fm1"
-version = "0.2.0-rc.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5595f5f1b0baaf634b3542c6fabcf03fda7c1cc23eccfcfb332e1920f21339c"
+checksum = "c541b404466f0dd1ea5334e1ec72d75287bcc81bd4c5360802b6e9d0c07b071f"
 dependencies = [
  "critical-section",
  "embedded-hal",
@@ -217,25 +217,25 @@ dependencies = [
 
 [[package]]
 name = "fm1-assets"
-version = "0.2.0-rc.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37e63fe5c41d94e1576e3e579821884a749cd67b567f35ba56331f00c5cd9913"
+checksum = "1fbf6819182d5b2f98e72cc40035404d4c764414baab9336729ee470a58f8c97"
 
 [[package]]
 name = "fm1-audio"
-version = "0.2.0-rc.1"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4709a84cb1475c958ad8cce88ff7f26d914abfe4b0334fcca31ef194a46b917d"
+checksum = "4737db92831bb12aa0ff10b1d383aeabc4e2ccaab19a6719b863deacfee63b46"
 dependencies = [
  "fm1",
- "wavegraph-sample",
+ "wavegraph-sample 0.1.0",
 ]
 
 [[package]]
 name = "fm1-controls"
-version = "0.2.0-rc.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "404027318a5c3a47dd444b48e24e5ab93958e3bc554986df8d6fe79aed05bb45"
+checksum = "cebe4d5fbddf63da7db36c59cfa31fa43b2afb2a3c602d0b93b4aa76cb37bfc7"
 dependencies = [
  "critical-section",
  "fm1",
@@ -245,9 +245,9 @@ dependencies = [
 
 [[package]]
 name = "fm1-graphics"
-version = "0.2.0-rc.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd3fbdf47c34e5fd8da83170c5ce692b9a8147c5357f797d5868afa9ba855a1f"
+checksum = "2126384801d0e4dd1bbd48680f2716999d787b5979ec81d60691c866b2a73e76"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
@@ -256,9 +256,9 @@ dependencies = [
 
 [[package]]
 name = "fm1-rticx"
-version = "0.2.0-rc.1"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "238c3c1295e1e1d6570411a972c84e274678c868b8a81143b36468ffa75d73f8"
+checksum = "b0bd06fc4327737c95a130d92547fb4319baa4a374fa846c7f675f08ad9d45f8"
 dependencies = [
  "critical-section",
  "fm1",
@@ -598,9 +598,9 @@ dependencies = [
 
 [[package]]
 name = "rticx-pi32v2"
-version = "0.2.0-rc.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbe7c439bea0321e39988f471668a542a18ae13103816d2a724bf6f0142a3160"
+checksum = "28254870d48b34df53b7b8347c5ba04acf959d8eea206360f99580ffd594a999"
 dependencies = [
  "cc",
  "critical-section",
@@ -613,9 +613,9 @@ dependencies = [
 
 [[package]]
 name = "rticx-pi32v2-macro"
-version = "0.2.0-rc.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4eb94ef5c286b46776d63e30cde1efaf0b8ee2debe9978816943e16f78188ed3"
+checksum = "7bc7f507185021e626504044aa21ec428784e62807d316f6a979afe42b55124f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -861,35 +861,35 @@ dependencies = [
  "micromath",
  "wavegraph-core",
  "wavegraph-dsp",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-808"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-core",
  "wavegraph-dsp",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-909"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-core",
  "wavegraph-dsp",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
  "wavegraph-sampler",
 ]
 
 [[package]]
 name = "wavegraph-adsr"
-version = "0.1.0"
+version = "0.0.0"
 
 [[package]]
 name = "wavegraph-arp"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "heapless",
  "wavegraph-core",
@@ -897,37 +897,37 @@ dependencies = [
 
 [[package]]
 name = "wavegraph-audio"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "fm1-audio",
  "sdl3",
  "wavegraph-dsp",
  "wavegraph-monosynth",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-core"
-version = "0.1.0"
+version = "0.0.0"
 
 [[package]]
 name = "wavegraph-dsp"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "critical-section",
  "heapless",
  "wavegraph-core",
  "wavegraph-monosynth",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-fm"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-adsr",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
@@ -957,7 +957,7 @@ dependencies = [
  "wavegraph-lfo",
  "wavegraph-monosynth",
  "wavegraph-organ",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
  "wavegraph-sampler",
  "wavegraph-supersaw",
  "wavegraph-wavetable",
@@ -965,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "wavegraph-fm1-core"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "critical-section",
  "fm1-assets",
@@ -976,76 +976,83 @@ dependencies = [
  "wavegraph-audio",
  "wavegraph-dsp",
  "wavegraph-monosynth",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-fx"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "libm",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-lfo"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-core",
 ]
 
 [[package]]
 name = "wavegraph-monosynth"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "micromath",
  "wavegraph-adsr",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-organ"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-adsr",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-sample"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d7e04476790adc2ad2e2fbcddd8de74b81959cad3d15a4e19c59edbeecc77b4"
+
+[[package]]
+name = "wavegraph-sample"
+version = "0.2.0-pre"
 
 [[package]]
 name = "wavegraph-sampler"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "fm1-assets",
  "micromath",
  "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-dsp",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-supersaw"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "micromath",
  "wavegraph-adsr",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]
 name = "wavegraph-wavetable"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "wavegraph-adsr",
  "wavegraph-core",
- "wavegraph-sample",
+ "wavegraph-sample 0.2.0-pre",
 ]
 
 [[package]]

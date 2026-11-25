@@ -34,7 +34,7 @@ jobs:
 
   firmware:
     needs: verify
-    uses: fm1-rust/fm1-rust/.github/workflows/pi32v2-build.yml@f360cf357a71b9a3f59ed0f68c8e33a3ac3aa0d7 # fm1-rticx/v0.2.0-rc.1
+    uses: fm1-rust/fm1-rust/.github/workflows/pi32v2-build.yml@4c6a3fe082ec013ff594a06b8cd377a65bd96ffb # fm1-rticx/v0.2.0
     with:
       script: wavegraph-fm1/build.sh
       artifact-name: wavegraph-fm1

@@ -7,8 +7,9 @@ use crate::{
     mixer::Meter,
     panel::{Assignment, CHANNELS, Channel, Navigation, View},
 };
-use fm1_audio::{I24, OUTPUT_FRAMES};
+use fm1_audio::OUTPUT_FRAMES;
 use wavegraph_arp::Chord;
+use wavegraph_sample::I24;
 
 const _: () = assert!(OUTPUT_FRAMES == 128);
 

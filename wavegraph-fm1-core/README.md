@@ -29,14 +29,12 @@ and these entries in your workspace root manifest for the example.
 
 ```toml
 [dependencies]
-fm1-audio = "0.2.0-rc.1"
-fm1-rticx = "0.2.0-rc.1"
+fm1-audio = "0.2.1"
+fm1-rticx = "0.2.0"
 static_cell = "2.1.1"
 wavegraph-dsp = { path = "../wavegraph/wavegraph-dsp" }
 wavegraph-fm1-core = { path = "../wavegraph/wavegraph-fm1-core" }
 wavegraph-monosynth = { path = "../wavegraph/instruments/wavegraph-monosynth" }
-
-[patch.crates-io]
 wavegraph-sample = { path = "../wavegraph/wavegraph-sample" }
 
 [profile.firmware]
@@ -47,8 +45,8 @@ lto = true
 panic = "abort"
 ```
 
-The patch makes the graph and BSP share the same Q23 sample type. Generate a
-lockfile with `cargo generate-lockfile`, then run
+The graph uses `wavegraph_sample::I24` and writes signed Q23 `i32` samples
+to the DAC. Generate a lockfile with `cargo generate-lockfile`, then run
 `../wavegraph/wavegraph-fm1-core/build.sh` in the new project. The helper
 links the crate's startup archive and linker script with the FM-1 large-program
 code model. The ELF appears under `target/pi32v2-none/firmware/` with your
