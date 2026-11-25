@@ -414,10 +414,10 @@ fn lit_pad_identity_survives_octave_transpose_and_seq_rec() {
 #[test]
 fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Result<(), Error> {
     use crate::clipboard::{Options, State};
-    with_instrument(44_118, |engine| {
+    let check_chord = |engine: &mut Instrument<'_>, part| {
         let source = Channel::One;
         let mut tracks = Track::TEST_TRACKS;
-        let assignment = Assignment::new(Part::Fm);
+        let assignment = Assignment::new(part);
         tracks[0] = Track::factory(source, assignment);
         for channel in [Channel::Three, Channel::Four] {
             let track = &mut tracks[channel.index()];
@@ -510,5 +510,9 @@ fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Re
         assert_eq!(replacement.root, 60);
         assert_eq!(recorder.status.state, State::Idle);
         Ok(())
-    })
+    };
+    for part in [Part::Fm, Part::Hoover] {
+        with_instrument(44_118, |engine| check_chord(engine, part))?;
+    }
+    Ok(())
 }

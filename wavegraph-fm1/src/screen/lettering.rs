@@ -36,6 +36,7 @@ pub(super) const BADGE: Mask = mask!(24, 32, "badge");
 pub(super) const BASS: Mask = mask!(78, 20, "TB-303");
 pub(super) const TR808: Mask = mask!(100, 32, "TR-808");
 pub(super) const TR909: Mask = mask!(112, 32, "TR-909");
+pub(super) const HOOVER: Mask = mask!(16, 32, "hoover");
 pub(super) const JP: Mask = mask!(100, 16, "JP-8080");
 
 impl Mask {

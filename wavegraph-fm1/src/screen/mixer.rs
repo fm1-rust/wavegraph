@@ -469,13 +469,14 @@ impl<'a> Band<'a> {
         Point::new(x, y)
     }
 
+    #[inline(never)]
     pub(super) fn rect(&mut self, point: Point, size: Size, color: Rgb565) {
-        Rectangle::new(point, size)
-            .into_styled(PrimitiveStyle::with_fill(color))
-            .draw(self)
+        self.fill_solid(&Rectangle::new(point, size), color)
             .expect("infallible strip");
     }
 
+    // Share the title renderer across the instrument faceplates.
+    #[inline(never)]
     pub(super) fn title(&mut self, name: &str, point: Point, color: Rgb565) {
         if self.panel_type {
             return self.panel_text(

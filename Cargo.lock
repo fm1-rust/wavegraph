@@ -954,6 +954,7 @@ dependencies = [
  "wavegraph-fm",
  "wavegraph-fm1-core",
  "wavegraph-fx",
+ "wavegraph-hoover",
  "wavegraph-lfo",
  "wavegraph-monosynth",
  "wavegraph-organ",
@@ -984,6 +985,14 @@ name = "wavegraph-fx"
 version = "0.0.0"
 dependencies = [
  "libm",
+ "wavegraph-core",
+ "wavegraph-sample 0.2.0-pre",
+]
+
+[[package]]
+name = "wavegraph-hoover"
+version = "0.0.0"
+dependencies = [
  "wavegraph-core",
  "wavegraph-sample 0.2.0-pre",
 ]
