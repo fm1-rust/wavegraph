@@ -21,6 +21,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
             assert_eq!(keys.nav.part(), Part::Sampler);
             keys.tracks[channel.index()] =
                 Track::factory(channel, keys.nav.assignments[channel.index()]);
+            keys.tracks[channel.index()].turn_algorithm(View::Scope, None, 2);
         }
         keys.nav.focus = Channel::One;
         keys.nav.view = View::Scope;
@@ -73,10 +74,10 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
         }
         let track = &mut keys.tracks[0];
         for (turn, name) in [
-            (1, b"RAVE RISE"),
             (1, b"AMEN BRK "),
+            (1, b"RAVE RISE"),
             (1, b"AIRHORN  "),
-            (-1, b"AMEN BRK "),
+            (-1, b"RAVE RISE"),
         ] {
             track.turn_algorithm(View::Scope, None, turn);
             assert_eq!(track.voice.label(Part::Sampler), name);
@@ -118,7 +119,7 @@ fn changing_to_one_shot_while_holding_a_loop_still_releases_the_loop() {
     let mut keys = Keyboard::<4>::new();
     keys.nav.assignments[0] = Assignment::new(Part::Sampler);
     keys.tracks[0] = Track::new(keys.nav.assignments[0]);
-    keys.tracks[0].edit_panel(View::SampleEdit, 0, [1, 0, 0, 0], false);
+    keys.tracks[0].edit_panel(View::SampleEdit, 0, [2, 0, 0, 0], false);
     keys.press(note(60, 80));
     keys.press(note(64, 90));
     keys.tracks[0].edit_panel(View::SampleEdit, 0, [-2, 0, 0, 0], false);
@@ -137,7 +138,7 @@ fn changing_to_one_shot_while_holding_a_loop_still_releases_the_loop() {
 fn edit_sliders_set_loop_trim_and_keyboard_tracking_on_the_audio_voice() {
     let mut track = Track::new(Assignment::new(Part::Sampler));
     let before = track;
-    track.edit_panel(View::SampleEdit, 0, [1, 18, -35, 10], false);
+    track.edit_panel(View::SampleEdit, 0, [2, 18, -35, 10], false);
     let playback = Playback {
         mode: PlaybackMode::Loop,
         start: 18,
@@ -170,6 +171,7 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     nav.assignments[0] = Assignment::new(Part::Sampler);
     nav.focus = Channel::One;
     let mut track = Track::factory(nav.focus, nav.assignments[0]);
+    track.turn_algorithm(nav.view, None, 2);
     let horn = track.sample_program();
     track.edit_panel(View::Scope, 0, [-8, 12, 9, -7], false);
     let edited = track.sample_program().timbre;
@@ -194,10 +196,10 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     assert_eq!(program.timbre.amp, amp);
     assert_ne!(program.timbre.filter, horn.timbre.filter);
     track.turn_algorithm(nav.view, None, 1);
-    assert_eq!(track.voice.waveform, 0);
+    assert_eq!(track.voice.waveform, 2);
 
     nav.press(PageButton::Env);
-    track.turn_algorithm(nav.view, None, -1);
+    track.turn_algorithm(nav.view, None, -2);
     assert_eq!(track.sample_program().timbre, Timbre::DRY);
     assert_eq!(track.sample_program().playback.mode, PlaybackMode::OneShot);
     nav.press(PageButton::Edit);
@@ -205,7 +207,7 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     track.edit_panel(nav.view, 0, [0, 7, -12, 25], false);
     nav.press(PageButton::Edit);
     assert_eq!(nav.view, View::Scope);
-    track.turn_algorithm(nav.view, None, 1);
+    track.turn_algorithm(nav.view, None, 2);
     assert_eq!(track.sample_program(), program);
 }
 
@@ -240,7 +242,6 @@ fn replacing_the_808_plays_the_dry_amen_and_follows_live_tempo_without_retrigger
         assert_eq!(tracks[channel.index()].assignment.part, Part::Tr808);
         let track = &mut tracks[channel.index()];
         *track = Track::factory(channel, Assignment::new(Part::Sampler));
-        track.turn_algorithm(View::Scope, None, -1);
         engine.sequences = [false, false, true, false];
         engine.transport.toggle();
         let mut buses = [[I24::default(); 128]; BUS_COUNT];

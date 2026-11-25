@@ -7,11 +7,11 @@ use wavegraph_wavetable::{BANKS, Bank};
 pub(crate) use fm1_assets::flash_asset;
 
 pub(super) const SAMPLE_NAMES: [[u8; 9]; 5] = [
+    *b"AMEN BRK ",
+    *b"RAVE RISE",
     *b"AIRHORN  ",
     *b"LASER ZAP",
     *b"RAVE STAB",
-    *b"RAVE RISE",
-    *b"AMEN BRK ",
 ];
 
 macro_rules! rave_clip {
@@ -41,16 +41,6 @@ macro_rules! rave_clip {
 // SAFETY: these immutable clip descriptors point into read-only upper flash.
 #[cfg_attr(target_os = "none", unsafe(link_section = ".fm1_assets"))]
 pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len()] = [
-    rave_clip!("horn", 22_059, 60),
-    rave_clip!("zap", 22_059, 60),
-    rave_clip!("stab", 14_706, 43),
-    wavegraph_sampler::Clip::from_ima_adpcm(
-        flash_asset!(u8, include_bytes!("../samples/rave/rise.ima")),
-        19_404,
-        14_700,
-        60,
-    )
-    .expect("validated rave rise"),
     {
         // The two encodings contain the same sixteen beats. Only one enters the image.
         #[cfg(all(feature = "packed-samples", feature = "packed-cymbals"))]
@@ -69,6 +59,16 @@ pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len
             .expect("validated four-bar Amen break")
             .with_native_tempo(122)
     },
+    wavegraph_sampler::Clip::from_ima_adpcm(
+        flash_asset!(u8, include_bytes!("../samples/rave/rise.ima")),
+        19_404,
+        14_700,
+        60,
+    )
+    .expect("validated rave rise"),
+    rave_clip!("horn", 22_059, 60),
+    rave_clip!("zap", 22_059, 60),
+    rave_clip!("stab", 14_706, 43),
 ];
 
 #[cfg(target_os = "none")]

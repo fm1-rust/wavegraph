@@ -20,6 +20,23 @@ impl Program {
     };
 
     pub(super) const BANK: [Self; crate::assets::SAMPLE_NAMES.len()] = [
+        // A single step can launch all four bars with the recorded drum transients intact.
+        Self {
+            playback: Playback {
+                mode: PlaybackMode::OneShot,
+                ..Playback::INITIAL
+            },
+            ..Self::DRY
+        },
+        Self {
+            timbre: Timbre {
+                cutoff_hz: 4454,
+                env_semitones: 12,
+                filter: Shape::new(320_000, 160_000, 90, 125_000),
+                ..Timbre::DRY
+            },
+            ..Self::DRY
+        },
         // Leave the horn and zap wide open at full velocity, and darken softer hits.
         Self {
             timbre: Timbre {
@@ -46,23 +63,6 @@ impl Program {
                 key_tracking: 75,
                 amp: Shape::new(0, 250_000, 78, 100_000),
                 filter: Shape::new(0, 200_000, 18, 80_000),
-            },
-            ..Self::DRY
-        },
-        Self {
-            timbre: Timbre {
-                cutoff_hz: 4454,
-                env_semitones: 12,
-                filter: Shape::new(320_000, 160_000, 90, 125_000),
-                ..Timbre::DRY
-            },
-            ..Self::DRY
-        },
-        // A single step can launch all four bars with the recorded drum transients intact.
-        Self {
-            playback: Playback {
-                mode: PlaybackMode::OneShot,
-                ..Playback::INITIAL
             },
             ..Self::DRY
         },

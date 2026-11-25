@@ -324,9 +324,9 @@ to the same live view.
 ## Chromatic sampler
 
 Press **GLO**, turn **SELECT** to highlight a strip, turn **PRESETS** to
-**SAMPLER**, then press **GLO** to play. A new strip starts on **AIRHORN**.
-Turn **ALGORITHM** clockwise for **LASER ZAP**, **RAVE STAB**, **RAVE RISE**,
-then **AMEN BRK**. The next strike uses the selected sound. The LCD shows the
+**SAMPLER**, then press **GLO** to play. A new strip starts on **AMEN BRK**.
+Turn **ALGORITHM** clockwise for **RAVE RISE**, **AIRHORN**, **LASER ZAP**,
+then **RAVE STAB**. The next strike uses the selected sound. The LCD shows the
 original-speed **ROOT** key. The effects and break use C4 (MIDI 60). The stab uses
 its recorded G2 (MIDI 43) so it plays in tune with the synths. An octave up
 doubles speed and halves duration. Each strip has an independent monophonic
@@ -357,8 +357,7 @@ whole region after a tap, GATE releases on key-up, and LOOP repeats the region
 while held. Mode and trim take effect on the next strike. On the instrument
 page **SELECT** transposes live keys and **SEL** switches the scope tap.
 
-To replace the 808 with the break, assign **SAMPLER** to its strip, turn
-**ALGORITHM** one click left from **AIRHORN** to **AMEN BRK**, and press
+To replace the 808 with the break, assign **SAMPLER** to its strip and press
 **PLAY** with pattern **01**. It triggers C4 at full velocity every four
 bars. The break follows tempo changes in place by varying playback speed
 and pitch together. The other four recordings keep their keyboard tuning
