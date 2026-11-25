@@ -4,6 +4,9 @@ A one-shot PCM player with one message inlet and one mono signal outlet.
 Each `Sampler` borrows a clip and has its own playback position. A drum kit
 can give each voice a separate output and use `Stop` to choke an open hat.
 
+To record an instrument on the FM-1 and play it back across the keyboard,
+see [Sample a chord into the clipboard](../../wavegraph-fm1/README.md#sample-a-chord-into-the-clipboard).
+
 `Sampler::from_pcm16le` accepts headerless, signed 16-bit little-endian PCM,
 including bytes in flash from `include_bytes!`. Playback advances one source
 sample per output frame. Prepare the clip at the intended output rate. The

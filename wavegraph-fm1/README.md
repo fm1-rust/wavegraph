@@ -43,7 +43,7 @@ USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 | SELECT in ARP | Turn clockwise to latch the chord. Release all keys and play a new chord to replace it. Turn counterclockwise to release unheld keys. |
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
-| REC | Start live recording on the current channel. REC ends recording and keeps the loop playing. PLAY stops both. |
+| REC outside PCM CLIPBOARD | Record notes into the current channel’s sequence. REC ends recording and keeps the loop playing. PLAY stops both. |
 | EDIT on an FM, Hoover, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
 | SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
@@ -68,6 +68,7 @@ USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 | HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
+| EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard) to record audio from the focused channel. REC arms capture on this page. |
 | Knobs 1–4 in the GLO overview | Set channel faders 1–4 independently. |
 | SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
 | Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
@@ -430,21 +431,46 @@ The SEQ pattern picker keeps its normal eight bank keys.
 
 ### Sample a chord into the clipboard
 
-Focus the source strip in **GLO**, press **EDIT** to open **PCM CLIPBOARD**,
-then press **REC** to arm. With transport stopped, play a chord to start the
-take. During playback it starts on the next bar. Knob **1** selects one beat
-or one, two or four bars. Knob **2** sets the note that will replay the chord
-at its recorded pitch. You can change both settings while armed. Once recording
-starts, the knobs set the length and root for the next take. Press **REC** again
-to cancel while armed or finish a take early. Capture taps the instrument before
-its strip effects and fader.
+1. From the Hoover instrument screen, press **GLO**, then **EDIT**. If you
+   still have the factory rack, use **SELECT** in **GLO** to highlight a strip
+   and turn **PRESETS** to assign **HOOVER** before pressing **EDIT**. Check
+   the source channel and instrument on the **PCM CLIPBOARD** page. You can
+   turn **PRESETS** here to choose another channel before arming.
+2. Knob **1** sets **LENGTH** (one beat or one, two or four bars). Knob **2**
+   sets **ROOT**, the key that will replay the take at its original pitch and
+   speed. The defaults are **1 BAR** and **C4**. For a short D minor stab,
+   choose **1 BEAT** and **D4**.
+3. With the transport stopped and the Hoover silent, press **REC**. At
+   **PLAY A NOTE**, play your chord (for example, D4–F4–A4). The first sound
+   from the strip starts the take. With the transport running, the screen
+   shows **WAITING FOR DOWNBEAT** and capture starts on beat one of the next bar.
+4. During **RECORDING**, let the selected length elapse or press **REC** to
+   finish early. **READY** means the sample is playable. While waiting, you
+   can change length and root or press **REC** to cancel. Once recording
+   starts, knob changes apply to the next take.
 
-On any **SAMPLER** strip, select **CLIPBOARD** with **ALGORITHM** (one click
-back from the Amen), or press **SEL** on the clipboard page. Play a new chord
-to stack up to four transposed copies, each with its own amplitude and filter
-envelopes. All strips share one mono PCM16 recording until the next capture
-begins or power is lost. Each strip keeps its own sampler controls. Longer
-captures average more input frames into each stored sample to fit 64 KiB.
+**Play the take from a sampler strip**
+
+- **Sampler already assigned.** Stay on **PCM CLIPBOARD** and turn **PRESETS**
+  to the sampler channel. Press **SEL** (**USE CLIPBOARD**), then **HOME**.
+- **Need a sampler.** Press **EDIT** to return to the mixer. Highlight a
+  different strip with **SELECT** and turn **PRESETS** to **SAMPLER**. Press
+  **GLO** to open its instrument screen, then turn **ALGORITHM** one click
+  counterclockwise from **AMEN BRK** to **CLIPBOARD**.
+
+Play **D4** to hear the example chord as recorded, or **D5** to hear it an
+octave higher in half the time. A sampler strip can play four copies at once.
+
+If you see **CHOOSE ANOTHER SOURCE**, the selected sampler is playing the
+clipboard itself. Turn **PRESETS** back to the Hoover, then press **REC** to arm.
+
+The recorder takes mono audio from the instrument output, including the
+Hoover’s built-in chorus when enabled. The channel inserts, fader and effect
+sends come after this point. All sampler strips share one 64 KiB PCM16 take
+in RAM and keep their own sample controls. A new recording replaces the old
+take when capture starts. Powering off clears it. Longer takes use a lower
+sample rate to fit. At the factory 122 BPM, **1 BEAT** keeps the full 44.1 kHz
+and **1 BAR** records at 14.7 kHz.
 
 ## Pattern banks
 
