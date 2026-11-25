@@ -938,7 +938,6 @@ mod tests {
         let track = &mut tracks[channel.index()];
         assert_eq!(track.assignment.part, Part::Tr808);
         *track = Track::factory(channel, Assignment::new(Part::Sampler));
-        track.turn_algorithm(crate::panel::View::Scope, None, -1);
         assert_eq!(track.voice.label(Part::Sampler), b"AMEN BRK ");
         let mut player = PatternPlayer::new((24_000_000, 544));
         let mut events = Vec::new();

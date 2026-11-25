@@ -1,7 +1,6 @@
 # Factory MIDI clips
 
-Sampler pattern 01 holds C4 for the full four bars. Select AMEN BRK to play
-a breakbeat in time with the transport. At C4 the full take lasts sixteen
+Sampler pattern 01 holds C4 for the full four bars. The default AMEN BRK plays in time with the transport. At C4 the full take lasts sixteen
 beats at the current tempo (122 BPM by default). The other seven
 sampler patterns play D-minor phrases against the factory 303s.
 
