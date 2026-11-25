@@ -22,6 +22,13 @@ two-input send-only node.
   level and mix. Shape 0 uses the original cubic curve. Shape 128 hard-clips
   with the same low-level gain and peak. Sweeps between the two change the
   harmonics around the clipping knee.
+- `PatternFilter` sweeps a resonant low-pass or band-pass filter over any mono
+  input. Set cutoff, resonance, envelope amount and decay with
+  `Message::PatternFilter`. At each step, send the accent from one of the
+  eight sixteen-step `FILTER_PATTERNS` as a sample-offset `Message::FilterTrigger`.
+  A zero accent lets the last sweep decay. With amount at zero the cutoff
+  stays fixed. The player supplies the clock, so a held note can pulse
+  independently of its note pattern.
 - `SidechainDucker<N>` takes the program on signal inlet 0. Route a kick
   or another signal to a further inlet, then use `Message::SidechainKey` to
   choose the detector. `SidechainDepth` controls the gain reduction and
