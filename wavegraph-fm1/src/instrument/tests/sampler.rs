@@ -1,6 +1,6 @@
 use super::*;
 use crate::panel::PageButton;
-use wavegraph_sampler::{Playback, Timbre};
+use wavegraph_sampler::{Playback, PlaybackMode, Timbre};
 
 fn first_frames(pcm: &[u8]) -> [i32; 128] {
     let frames = pcm.as_chunks::<2>().0;
@@ -20,7 +20,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
             assert_eq!(keys.nav.part(), Part::Sampler);
             keys.tracks[channel.index()] =
                 Track::factory(channel, keys.nav.assignments[channel.index()]);
-            keys.tracks[channel.index()].turn_algorithm(View::Scope, None, 2);
+            keys.tracks[channel.index()].turn_algorithm(View::Scope, None, 3);
         }
         keys.nav.focus = Channel::One;
         keys.nav.view = View::Scope;
@@ -50,6 +50,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
         assert_eq!(keys.tracks[0].voice.label(Part::Sampler), b"LASER ZAP");
         assert_eq!(keys.tracks[1].voice.label(Part::Sampler), b"AIRHORN  ");
         keys.release(60);
+        engine.render(keys.tracks, &mut buses)?; // let the independent horn release finish
         keys.press(note(72, 127));
         engine.render(keys.tracks, &mut buses)?;
         let expected = first_frames(include_bytes!("../../../samples/rave/zap.s16le"));
@@ -59,6 +60,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
         // Open the voiced stab to check its underlying PCM and root.
         keys.tracks[0].sample_program_mut().timbre = Timbre::DRY;
         keys.release(72);
+        engine.render(keys.tracks, &mut buses)?;
         keys.press(note(55, 127));
         engine.render(keys.tracks, &mut buses)?;
         // At G3 the 14,706 Hz stab runs at twice its native speed: two stored samples
@@ -74,6 +76,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
         let track = &mut keys.tracks[0];
         for (turn, name) in [
             (1, b"AMEN BRK "),
+            (1, b"MIN7 STAB"),
             (1, b"RAVE RISE"),
             (1, b"AIRHORN  "),
             (-1, b"RAVE RISE"),
@@ -110,6 +113,25 @@ fn a_one_shot_retriggers_on_a_new_strike_but_not_when_an_older_key_is_uncovered(
             .expect("restrike")
             .iter()
             .any(|e| e.message == Message::Sampler(SampleMessage::NoteOn(note(60, 80))))
+    );
+}
+
+#[test]
+fn releasing_the_fifth_key_does_not_relaunch_a_stolen_amen() {
+    let mut keys = Keyboard::<5>::new();
+    keys.nav.assignments[0] = Assignment::new(Part::Sampler);
+    keys.tracks[0] = Track::new(keys.nav.assignments[0]);
+    for pitch in 60..65 {
+        keys.press(note(pitch, 100));
+    }
+    let old = keys.tracks[0];
+    keys.release(64);
+    assert_eq!(
+        keys.tracks[0]
+            .events(Some(old))
+            .expect("release")
+            .as_slice(),
+        &[at(Message::Sampler(SampleMessage::NoteOff(64)))]
     );
 }
 
@@ -170,7 +192,7 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     nav.assignments[0] = Assignment::new(Part::Sampler);
     nav.focus = Channel::One;
     let mut track = Track::factory(nav.focus, nav.assignments[0]);
-    track.turn_algorithm(nav.view, None, 2);
+    track.turn_algorithm(nav.view, None, 3);
     let horn = track.sample_program();
     track.edit_panel(View::Scope, 0, [-8, 12, 9, -7], false);
     let edited = track.sample_program().timbre;
@@ -195,10 +217,10 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     assert_eq!(program.timbre.amp, amp);
     assert_ne!(program.timbre.filter, horn.timbre.filter);
     track.turn_algorithm(nav.view, None, 1);
-    assert_eq!(track.voice.waveform, 2);
+    assert_eq!(track.voice.waveform, 3);
 
     nav.press(PageButton::Env);
-    track.turn_algorithm(nav.view, None, -2);
+    track.turn_algorithm(nav.view, None, -3);
     assert_eq!(track.sample_program().timbre, Timbre::DRY);
     assert_eq!(track.sample_program().playback.mode, PlaybackMode::OneShot);
     nav.press(PageButton::Edit);
@@ -206,7 +228,7 @@ fn sampler_env_selects_independent_contours_and_recalls_each_sounds_program() {
     track.edit_panel(nav.view, 0, [0, 7, -12, 25], false);
     nav.press(PageButton::Edit);
     assert_eq!(nav.view, View::Scope);
-    track.turn_algorithm(nav.view, None, 2);
+    track.turn_algorithm(nav.view, None, 3);
     assert_eq!(track.sample_program(), program);
 }
 
@@ -264,4 +286,48 @@ fn replacing_the_808_plays_the_dry_amen_and_follows_live_tempo_without_retrigger
         );
         Ok(())
     })
+}
+
+#[test]
+fn house_m7_stacks_panel_and_midi_keys_on_the_same_strip() -> Result<(), Error> {
+    let keys_and_velocity = [(50, 101), (57, 83), (62, 118), (69, 91)];
+    let play = |mask: u8| {
+        let mut result = [0_i32; 128];
+        with_instrument(44_118, |engine| {
+            let mut keys = Keyboard::<4>::new();
+            keys.nav.assignments[0] = Assignment::new(Part::Sampler);
+            keys.tracks[0] = Track::new(keys.nav.assignments[0]);
+            keys.tracks[0].turn_algorithm(View::Scope, None, 1);
+            for (i, (key, velocity)) in keys_and_velocity.into_iter().enumerate() {
+                if mask & (1 << i) == 0 {
+                    continue;
+                }
+                if i < 2 {
+                    keys.press(note(key, velocity));
+                } else {
+                    let (channel, action) =
+                        decode_midi([9, 0x90, key, velocity]).expect("MIDI note");
+                    keys.keys.midi(channel, action, &mut keys.tracks[0]);
+                }
+            }
+            keys.snapshot();
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            for _ in 0..6 {
+                engine.render(keys.tracks, &mut buses)?;
+            }
+            result = buses[Channel::One.source_bus()].map(I24::inner);
+            Ok(())
+        })?;
+        Ok::<_, Error>(result)
+    };
+    let mut sum = [0_i32; 128];
+    for i in 0..4 {
+        let voice = play(1 << i)?;
+        assert!(voice.iter().any(|&s| s != 0));
+        for (dst, s) in sum.iter_mut().zip(voice) {
+            *dst += s;
+        }
+    }
+    assert_eq!(play(15)?, sum);
+    Ok(())
 }

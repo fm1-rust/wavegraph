@@ -14,9 +14,9 @@ late-block-probe = []
 # Opt in on hardware. The browser emulator currently lacks the paired 32-bit add.
 pi32v2-simd = ["wavegraph-supersaw/pi32v2-simd"]
 # Store the factory 909 cymbals as losslessly packed PCM16.
-packed-cymbals = ["dep:fm1-assets", "wavegraph-sampler/packed-pcm"]
+packed-cymbals = []
 # Use the same PCM1 format for the chromatic sampler bank.
-packed-samples = ["dep:fm1-assets", "wavegraph-sampler/packed-pcm"]
+packed-samples = []
 # A/B the master compressor detector on the same board and factory patch.
 short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 # Requires the board and host qualifications documented in the firmware README.
@@ -39,7 +39,7 @@ wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
 wavegraph-organ = { path = "../instruments/wavegraph-organ" }
 wavegraph-sample.workspace = true
-wavegraph-sampler = { path = "../instruments/wavegraph-sampler", features = ["ima-adpcm"] }
+wavegraph-sampler = { path = "../instruments/wavegraph-sampler", features = ["ima-adpcm", "packed-pcm"] }
 wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
@@ -56,7 +56,7 @@ static_cell = "2.1.1"
 critical-section = { version = "1.2", features = ["std"] }
 
 [build-dependencies]
-fm1-assets = { workspace = true, features = ["encode"], optional = true }
+fm1-assets = { workspace = true, features = ["encode"] }
 fm1-graphics.workspace = true
 midly = { version = "0.5.3", default-features = false, features = ["std", "strict"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303" }

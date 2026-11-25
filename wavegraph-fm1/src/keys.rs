@@ -406,7 +406,7 @@ impl<const PANEL: usize> Keys<PANEL> {
         let notes = keys.latest();
         track.voice.gate = Gate {
             note: notes[0].note,
-            // A sample starts at frame zero on every new strike, even in a legato phrase.
+            // Keep the last sampler strike so an uncovered one-shot is not launched twice.
             phrase: if track.assignment.part == Part::Sampler {
                 keys.serial
             } else {

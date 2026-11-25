@@ -4,6 +4,12 @@ Sampler pattern 01 holds C4 for the full four bars. The default AMEN BRK plays i
 beats at the current tempo (122 BPM by default). The other seven
 sampler patterns play D-minor phrases against the factory 303s.
 
+Selecting MIN7 STAB recalls the eight companion clips in `house-m7/`. Pattern 01
+answers the stock bassline with syncopated Dm7 and Am7 stabs. Its layered D/A
+hit adds the ninth and eleventh. Patterns 02–08 use D, G and A roots so all
+four recorded chord tones stay in D natural minor. A running lane switches
+banks on the next bar. Panel keys, MIDI and recorded edits remain chromatic.
+
 Slots 05–08 of the other banks adapt the **Acid Trip** and **Devil Fish** demo songs from
 **AfterBirth AB-3389**, copyright © 2026 verytired, under the MIT license.
 The editable MIDI files carry the credit and license in their copyright

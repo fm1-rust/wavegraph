@@ -46,7 +46,6 @@ pub(super) struct VoiceTone {
     filter: Envelope,
     amp_time: Timing,
     filter_time: Timing,
-    period: f32,
     key: i16,
     velocity: u8,
     base_cycles: f32,
@@ -68,7 +67,6 @@ impl VoiceTone {
             filter: Envelope::IDLE,
             amp_time: time,
             filter_time: time,
-            period,
             key: 0,
             velocity: 127,
             base_cycles: 0.0,
@@ -82,25 +80,25 @@ impl VoiceTone {
         }
     }
 
-    pub(super) fn strike(&mut self, program: Timbre, note: Note, root: u8) {
+    pub(super) fn strike(&mut self, program: Timbre, note: Note, root: u8, period: f32) {
         self.key = i16::from(note.number).saturating_sub(i16::from(root));
         self.velocity = note.velocity.min(127);
         self.amp = Envelope::IDLE;
         self.filter = Envelope::IDLE;
         self.state = [0.0; 4];
-        self.configure(program);
+        self.configure(program, period);
         self.amp.gate_on(&self.amp_time);
         self.filter.gate_on(&self.filter_time);
     }
 
-    pub(super) fn configure(&mut self, p: Timbre) {
+    pub(super) fn configure(&mut self, p: Timbre, period: f32) {
         if self.program.amp != p.amp {
-            let next = p.amp.adsr().at_sample_period(self.period);
+            let next = p.amp.adsr().at_sample_period(period);
             self.amp.retime(&self.amp_time, &next);
             self.amp_time = next;
         }
         if self.program.filter != p.filter {
-            let next = p.filter.adsr().at_sample_period(self.period);
+            let next = p.filter.adsr().at_sample_period(period);
             self.filter.retime(&self.filter_time, &next);
             self.filter_time = next;
         }
@@ -111,7 +109,7 @@ impl VoiceTone {
         let cycles = if p.cutoff_hz == Timbre::OPEN {
             0.45
         } else {
-            f32::from(p.cutoff_hz.max(1)) * self.period
+            f32::from(p.cutoff_hz.max(1)) * period
         };
         self.bypass = p.cutoff_hz == Timbre::OPEN
             && p.resonance == 0

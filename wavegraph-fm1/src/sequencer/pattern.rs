@@ -48,7 +48,17 @@ impl Slot {
     }
 
     pub(crate) fn clip(self, part: Part, channel: Channel) -> &'static Clip {
+        self.factory_clip(part, channel, false)
+    }
+
+    pub(crate) fn factory_clip(
+        self,
+        part: Part,
+        channel: Channel,
+        house_m7: bool,
+    ) -> &'static Clip {
         let bank = match (part, channel) {
+            (Part::Sampler, _) if house_m7 => 9,
             (Part::Bass, Channel::Two) => 7,
             // The electric piano starts with the organ chord clips. Recording
             // and slot selection remain keyed by the assigned part.

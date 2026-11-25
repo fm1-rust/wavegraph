@@ -363,6 +363,7 @@ fn fraction_32(mut phase: u32, threshold: u32) -> u8 {
 pub(crate) struct BankPosition {
     pub(crate) slot: Slot,
     pub(crate) bar: u8,
+    pub(crate) house_m7: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -383,6 +384,7 @@ impl Lane {
         position: BankPosition {
             slot: Slot::FIRST,
             bar: 0,
+            house_m7: false,
         },
         tick: 0,
         cursor: 0,
@@ -394,9 +396,13 @@ impl Lane {
         suppressed: Suppressed::EMPTY,
     };
 
-    fn start(slot: Slot) -> Self {
+    fn start(slot: Slot, house_m7: bool) -> Self {
         Self {
-            position: BankPosition { slot, bar: 0 },
+            position: BankPosition {
+                slot,
+                bar: 0,
+                house_m7,
+            },
             ..Self::EMPTY
         }
     }
@@ -631,7 +637,13 @@ impl PatternPlayer {
                 }
             }
             if restart || changed || !transport.playing() {
-                *lane = Lane::start(self.requested[i]);
+                *lane = Lane::start(
+                    self.requested[i],
+                    tracks[i]
+                        .assignment
+                        .part
+                        .uses_house_patterns(tracks[i].voice.waveform),
+                );
                 lane.waiting = changed && !restart && transport.playing();
             } else if enabled[i] && !self.enabled[i] {
                 lane.chase(&mut route)?;
@@ -666,9 +678,15 @@ impl PatternPlayer {
                     if lane.waiting && !downbeat {
                         continue;
                     }
-                    let old = lane.position.slot.clip(part, channel);
+                    let old =
+                        lane.position
+                            .slot
+                            .factory_clip(part, channel, lane.position.house_m7);
                     let wrap = lane.tick == old.length();
-                    let switch = downbeat && lane.position.slot != self.requested[i];
+                    let house_m7 = part.uses_house_patterns(tracks[i].voice.waveform);
+                    let switch = downbeat
+                        && (lane.position.slot != self.requested[i]
+                            || lane.position.house_m7 != house_m7);
                     if wrap || switch || lane.waiting {
                         if wrap {
                             lane.edited = Step::EMPTY;
@@ -692,10 +710,13 @@ impl PatternPlayer {
                         } else {
                             Automation::EMPTY
                         };
-                        *lane = Lane::start(slot);
+                        *lane = Lane::start(slot, house_m7);
                         lane.automation = controls;
                     }
-                    let clip = lane.position.slot.clip(part, channel);
+                    let clip =
+                        lane.position
+                            .slot
+                            .factory_clip(part, channel, lane.position.house_m7);
                     lane.position.bar =
                         u8::try_from(lane.tick / BAR).map_err(|_| Error::Capacity)?;
                     let phase = lane.tick % 8;
@@ -984,6 +1005,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn house_patterns_keep_the_whole_sampled_chord_in_d_minor() {
+        let part = Part::Sampler;
+        let channel = Channel::Three;
+        for (_, slot) in Slot::KEYS {
+            let clip = slot.factory_clip(part, channel, true);
+            assert_eq!(clip.bars, slot.clip(part, channel).bars);
+            for root in clip.pitches {
+                for interval in [0, 3, 7, 10] {
+                    assert!([2, 4, 5, 7, 9, 10, 0].contains(&((root + interval) % 12)));
+                }
+            }
+        }
+        let clip = Slot::FIRST.factory_clip(part, channel, true);
+        assert!(matches!(clip.events[0].message(), MidiMessage::On(n) if n.number == 62));
+        assert!(
+            clip.events
+                .windows(2)
+                .any(|pair| pair[0].tick() == pair[1].tick()
+                    && matches!(
+                        (pair[0].message(), pair[1].message()),
+                        (MidiMessage::On(_), MidiMessage::On(_))
+                    ))
+        );
+    }
+
+    #[test]
+    fn selecting_the_stab_releases_the_break_and_starts_on_d_at_the_next_bar() {
+        let channel = Channel::Three;
+        let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+        tracks[channel.index()] = Track::factory(channel, Assignment::new(Part::Sampler));
+        let mut player = PatternPlayer::new((3200, 1));
+        let transport = Transport {
+            bpm: 150,
+            ..playing()
+        }; // 5120 frames per bar
+        let mut notes = Vec::new();
+        for (offset, frames, sample) in [(0, 1, 0), (1, 5120, crate::assets::HOUSE_M7)] {
+            tracks[channel.index()].voice.waveform = sample;
+            player
+                .render(
+                    frames,
+                    transport,
+                    &tracks,
+                    [false, false, true, false],
+                    |_, _| Ok(()),
+                    |ch, event| {
+                        if ch == channel {
+                            match event.message {
+                                MidiMessage::On(n) => {
+                                    notes.push((offset + event.frame, n.number, true))
+                                }
+                                MidiMessage::Off(n) => notes.push((offset + event.frame, n, false)),
+                                _ => (),
+                            }
+                        }
+                    },
+                )
+                .expect("host event sink");
+        }
+        assert_eq!(notes, [(0, 60, true), (5120, 60, false), (5120, 62, true)]);
+    }
+
     fn render(
         player: &mut PatternPlayer,
         frames: usize,
@@ -1020,6 +1104,7 @@ mod tests {
                 beat_phase: 0,
             },
             BankPosition {
+                house_m7: false,
                 slot: Slot::FIRST,
                 bar: 1,
             },

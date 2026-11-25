@@ -39,8 +39,11 @@ chunk of a mono IMA WAV file encoded with 64-byte blocks. Supply the
 original frame count to exclude padding. Trims and pitch jumps skip whole
 blocks directly. Each voice decodes at most one block to seek to a frame.
 
-`PitchedSampler` plays a bank of PCM16 clips from MIDI note and velocity
-messages. Each `Clip::from_pcm16le(bytes, source_hz, root_note)` declares the
+`PitchedSampler` plays up to four independent notes from a shared bank into
+one mono output. A repeated pitch restarts its voice. A new pitch takes an idle
+slot, then the oldest released voice, then the oldest sounding key. Each voice
+owns its cursor, velocity, low-pass filter and two envelopes. The four outputs
+sum in a wide accumulator and saturate once at PCM16 full scale. Each `Clip::from_pcm16le(bytes, source_hz, root_note)` declares the
 recording rate and the MIDI key for native-speed playback. Construct the
 player with the bank and output rate. It uses a fractional cursor and linear
 interpolation. An octave up doubles speed and halves duration. Source buffers
@@ -49,20 +52,23 @@ stay borrowed and may live in flash.
 With the optional `packed-pcm` feature, `Clip::from_pcm1` validates a
 losslessly packed clip in the FM-1 PCM1 format. The pitch interpolator reads
 its two neighboring frames directly and skips whole 32-frame groups when
-necessary. Raw and packed clips can share a bank.
+necessary. `Clip::from_delta_pcm1` accepts PCM1-encoded second differences. Both
+predictors reset every 128 frames, so even a long trim skips straight to the
+destination block before reconstructing at most 128 source frames. Raw, packed
+and predictive clips can share a bank.
 
 `PitchedMessage::Select` and `PitchedMessage::Playback` set up the next
 strike. `Playback` selects a start and end in percent and one of three modes:
 one-shot, gated or forward loop. Gated and looped notes fade on a matching
 note-off. With the default flat amplitude contour a zero playback release uses
 a 64-frame de-click, and positive values set the fade in milliseconds.
-`Stop` cuts any tail immediately.
+`Stop` cuts all four voices immediately.
 
 `PitchedMessage::Timbre` sets a four-pole digital resonant low-pass filter
 and independent amplitude and filter envelopes. Both use the compact
 `wavegraph_adsr::Shape`. Cutoff can track the keyboard and strike velocity.
 Signed envelope depth selects rising or inverted sweeps. A timbre edit
-retimes a sounding contour without resetting sample position. A shaped
+retimes all sounding voices of the selected clip without resetting their cursors. A shaped
 amplitude contour uses its own ADSR release. `Timbre::DRY` passes the
 decoded PCM through at full velocity with the filter bypassed.
 

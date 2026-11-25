@@ -206,6 +206,7 @@ fn trim_and_forward_loop_preserve_pitch_and_release_over_the_selected_time() {
         render::<7>(
             &mut voice,
             &[
+                (0, Msg::Stop), // end the previous, independently looping pitch
                 (
                     0,
                     Msg::Playback(Playback {
@@ -419,4 +420,122 @@ fn velocity_and_key_tracking_change_filter_brightness_independently_of_level() {
     assert!(level(60, 64, 0, 36) < level(60, 64, 0, 0));
     assert_eq!(level(60, 127, 100, 0), level(60, 127, 0, 0));
     assert!(level(72, 127, 100, 0) > level(72, 127, 0, 0));
+}
+
+#[test]
+fn four_cursors_retrigger_by_pitch_and_steal_released_then_oldest() {
+    let pcm = [1000_i16, 2000, 4000, 8000, 16000].map(|v| [v.to_le_bytes(); 32]);
+    let bank = pcm
+        .each_ref()
+        .map(|v| Clip::from_pcm16le(v.as_flattened(), 1000, 60).expect("clip"));
+    let mut player = PitchedSampler::new(&bank, 1000).expect("clock");
+    let looped = Playback {
+        mode: PlaybackMode::Loop,
+        ..Playback::INITIAL
+    };
+    let mut start = vec![(0, Msg::Playback(looped))];
+    for i in 0..4_u8 {
+        start.extend([(0, Msg::Select(i)), (0, on(60 + i, 127))]);
+    }
+    assert_eq!(render::<4>(&mut player, &start), [15000; 4]);
+    // Key 62 is younger than 60, but its release tail is available first.
+    assert_eq!(
+        render::<3>(
+            &mut player,
+            &[
+                (0, on(62, 0)),
+                (0, Msg::Select(4)),
+                (0, on(64, 127)),
+                (1, Msg::NoteOff(62))
+            ]
+        ),
+        [27000; 3]
+    );
+    // A restrike replaces pitch 60 and makes it the newest. 61 is now the oldest.
+    assert_eq!(
+        render::<2>(
+            &mut player,
+            &[
+                (0, Msg::Select(2)),
+                (0, on(60, 127)),
+                (1, Msg::Select(0)),
+                (1, on(67, 127))
+            ]
+        ),
+        [30000, 29000]
+    );
+    assert_eq!(
+        render::<3>(&mut player, &[(0, Msg::NoteOff(61)), (1, Msg::Stop)]),
+        [29000, 0, 0]
+    );
+}
+
+#[test]
+fn overlapping_voices_sum_in_a_wide_accumulator() {
+    let pcm = [30_000_i16, 20_000, -24_000, -30_000].map(|v| [v.to_le_bytes(); 64]);
+    let bank = pcm
+        .each_ref()
+        .map(|v| Clip::from_pcm16le(v.as_flattened(), 1000, 60).expect("clip"));
+    let mut player = PitchedSampler::new(&bank, 1000).expect("clock");
+    let mut events = Vec::new();
+    for i in 0..4_u8 {
+        events.extend([
+            (usize::from(i), Msg::Select(i)),
+            (usize::from(i), on(60 + i, 127)),
+        ]);
+    }
+    assert_eq!(
+        render::<4>(&mut player, &events),
+        [30000, 32767, 26000, -4000]
+    );
+}
+
+#[cfg(feature = "packed-pcm")]
+#[test]
+fn predictive_pcm_matches_raw_through_block_seeks_loops_and_chords() {
+    let pcm: Vec<_> = (0_u16..773)
+        .map(|i| i.wrapping_mul(907).rotate_left(3).cast_signed())
+        .collect();
+    let mut residuals = pcm.clone();
+    for block in residuals.chunks_mut(128) {
+        let (mut prev, mut slope) = (0_i16, 0_i16);
+        for x in block {
+            let d = x.wrapping_sub(prev);
+            prev = *x;
+            *x = d.wrapping_sub(slope);
+            slope = d;
+        }
+    }
+    let encoded = fm1_assets::pcm::encode(&residuals).expect("PCM1");
+    let raw: Vec<_> = pcm.into_iter().flat_map(i16::to_le_bytes).collect();
+    let raw = [Clip::from_pcm16le(&raw, 22059, 43).expect("raw")];
+    let packed = [Clip::from_delta_pcm1(&encoded, 22059, 43).expect("predictive")];
+    let mut actual = PitchedSampler::new(&packed, 44118).expect("clock");
+    let mut reference = PitchedSampler::new(&raw, 44118).expect("clock");
+    for start in [0, 16, 33, 80, 95] {
+        let clip = Playback {
+            mode: PlaybackMode::Loop,
+            start,
+            end: 99,
+            release_ms: 15,
+        };
+        let events = [
+            (0, Msg::Stop),
+            (0, Msg::Playback(clip)),
+            (0, on(55, 54)),
+            (5, on(79, 21)),
+            (7, on(118, 44)),
+            (13, on(127, 24)),
+        ];
+        assert_eq!(
+            render::<29>(&mut reference, &events),
+            render::<29>(&mut actual, &events)
+        );
+        for _ in 0..8 {
+            assert_eq!(
+                render::<128>(&mut reference, &[]),
+                render::<128>(&mut actual, &[])
+            );
+        }
+    }
 }

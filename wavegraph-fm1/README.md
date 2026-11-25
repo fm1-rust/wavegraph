@@ -345,19 +345,32 @@ to the same live view.
 
 Press **GLO**, turn **SELECT** to highlight a strip, turn **PRESETS** to
 **SAMPLER**, then press **GLO** to play. A new strip starts on **AMEN BRK**.
-Turn **ALGORITHM** clockwise for **RAVE RISE**, **AIRHORN**, **LASER ZAP**,
-then **RAVE STAB**. The next strike uses the selected sound. The LCD shows the
-original-speed **ROOT** key. The effects and break use C4 (MIDI 60). The stab uses
-its recorded G2 (MIDI 43) so it plays in tune with the synths. An octave up
-doubles speed and halves duration. Each strip has an independent monophonic
-voice with strike velocity.
+Turn **ALGORITHM** one click for **MIN7 STAB**, then **RAVE RISE**, **AIRHORN**,
+**LASER ZAP** and **RAVE STAB**. Each strip plays four independent,
+velocity-sensitive sampler voices from the panel, MIDI or sequencer. The
+LCD shows the original-speed **ROOT** key. The break and effects use C4
+(MIDI 60), MIN7 STAB uses D4 (62), and RAVE STAB uses G2 (43). An octave up
+doubles the pitch and halves the duration.
+
+**MIN7 STAB** prints FM electric-piano tines, detuned reeds, a lower D and two
+short echoes into one sample. Play D4 for D–F–A–C. Hold D4 and add A4 to
+layer in E and G for Dm11. D3 and A3 double those two chords down an octave
+using all four voices. Its factory sequence stays in the rack’s D minor key.
+Pattern 01 leaves room for the 303 attacks and layers a fifth on the turnaround.
+
+Kevin Saunderson describes sampling a chord, playing another chord from it
+and layering the result. The source was the closing minor triad on Nitro
+Deluxe’s “Let’s Get Brutal.” WaveGraph’s minor seventh is an original recording.
+[Saunderson's interview](https://www.beatportal.com/articles/201936-producer-spotlight-kevin-saunderson) ·
+[“Big Fun” production credits](https://djmag.com/longreads/kevin-saunderson-e-dancer-returns) ·
+[Richard Harding’s harmonic analysis, pp. 161–162](https://salford-repository.worktribe.com/preview/2706131/Richard%20Harding%20-%2000560665%20-%20The%20Role%20of%20Harmony%20in%20the%20Construction%20of%20a%20Machine%20Aesthetic%20in%20Electronic%20Dance%20Music.pdf)
 
 On the Emulator II, a voice paired a recording with its tuning, loop points,
 four-pole resonant low-pass filter and separate filter and amplitude ADSRs.
 Velocity could change the tone as well as the level. Engineer David Jacobs
 described using a keyboard-pitched Emulator II kick alongside a DX7 and
 Jupiter-6 for the bass on “West End Girls.” Here each strip remembers those
-tone and region edits separately for each sample. The stab has a closing
+tone and region edits separately for each sample. RAVE STAB has a closing
 filter sweep, and soft horn and laser strikes play darker.
 [E-mu's 1985 design paper](https://quod.lib.umich.edu/cgi/p/pod/dod-idx/emulator-ii-computer-music-environment.pdf?c=icmc%3Bidno%3Dbbp2372.1985.018%3Bformat%3Dpdf) ·
 [Emulator II owner’s manual](https://synthark.org/resource/emu/EmulatorII%2B_OwnersManual.pdf) ·
@@ -370,7 +383,7 @@ filter sweep, and soft horn and laser strikes play darker.
 | EDIT | SHOT / GATE / LOOP | Start (%) | End (%) | Filter key tracking (0–100%) |
 
 On **ENV**, turn **SELECT** or press **SEL** to switch between AMP and VCF.
-Turning knobs shapes the sounding note. Set a positive or negative **ENV AMT**
+Edits shape all sounding voices of the selected sample. Set a positive or negative **ENV AMT**
 on the instrument page to hear the filter contour. At 100% key tracking the
 cutoff moves an octave for every octave played. On **EDIT**, SHOT plays the
 whole region after a tap, GATE releases on key-up, and LOOP repeats the region
@@ -380,15 +393,15 @@ page **SELECT** transposes live keys and **SEL** switches the scope tap.
 To replace the 808 with the break, assign **SAMPLER** to its strip and press
 **PLAY** with pattern **01**. It triggers C4 at full velocity every four
 bars. The break follows tempo changes in place by varying playback speed
-and pitch together. The other four recordings keep their keyboard tuning
+and pitch together. The other five recordings keep their keyboard tuning
 when the transport changes. Amen starts as a full-length one-shot with unity
 amplitude, a bypassed filter and the original relative levels of the drum
 hits. The filter and envelopes remain available if you want to reshape it.
 
-All five CC0 sounds stream from upper flash. The horn, zap and stab use the
-909's lossless PCM1 packing. The rising siren is an original recording, and
-the break is JapanYoshiTheGamer's independently programmed Amen remake.
-Both use 4-bit IMA ADPCM. The default image devotes 101,568 bytes to the
+All six CC0 sounds stream from upper flash. The horn, zap and both stabs
+use lossless PCM1 in the default image. The original rising siren and
+JapanYoshiTheGamer's independently programmed Amen remake use 4-bit IMA ADPCM.
+The default image devotes 101,568 bytes to the
 24,400 Hz break. Builds with either PCM bank unpacked use the same four bars
 at 12,505 Hz. No strip buffers a whole recording. [Sample credits](samples/rave/NOTICE.txt)
 
@@ -870,10 +883,15 @@ CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 ta
 By default the build packs the 909 closed hat, open hat and ride from their
 original `.s16le` files. In each group of 32 samples it stores only the bits
 needed to reproduce every signed PCM value. The three clips take 114,181 bytes
-in flash, down from 148,124, and each voice decodes one sample at a time. The sampler’s three PCM1 hits take 90,741
-bytes, down from 111,912 in raw PCM. Its reader skips whole groups when
-transposing up and keeps the loop start cursor ready for each wrap.
-For a raw PCM comparison build, run `./wavegraph-fm1/build.sh --no-default-features`.
+in flash, down from 148,124, and each voice decodes one sample at a time. The sampler’s four packed PCM16 hits use 83,819 bytes
+for 127,912 bytes of source PCM. They store second differences in PCM1 and
+restart the predictor every 128 frames for bounded seeking. The boot and
+playback paths stream from flash.
+
+For a raw sampler comparison with the 909 packed, run
+`./wavegraph-fm1/build.sh --no-default-features --features packed-cymbals`.
+With both packing features off, the hardware image still packs the zap and
+both stabs to fit alongside the raw 909. Host builds can compare all four raw clips.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
@@ -905,7 +923,7 @@ renderer read the assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | From `0x04000` | Application directory and `app.bin` (entry at physical `0x04120`). The locked BSP still limits the end of `app.bin` to `0x93000`. |
-| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the 909 hats and ride, the rave sample bank and its credits, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 72 compiled MIDI patterns and their attribution. |
+| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the 909 hats and ride, the rave sample bank and its credits, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 80 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can

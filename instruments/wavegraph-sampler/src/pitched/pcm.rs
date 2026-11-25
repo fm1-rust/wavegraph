@@ -12,6 +12,7 @@ pub(super) enum Pcm<'a> {
     Packed {
         groups: &'a [u8],
         frames: u32,
+        predictive: bool,
     },
 }
 
@@ -32,11 +33,27 @@ impl<'a> Pcm<'a> {
             #[cfg(feature = "ima-adpcm")]
             Self::Ima { blocks, .. } => Cursor::Ima(super::ima::Decoder::new(blocks)),
             #[cfg(feature = "packed-pcm")]
-            Self::Packed { groups, frames } => Cursor::Packed(PackedCursor {
+            Self::Packed {
                 groups,
-                remaining: frames,
-                position: 0,
-            }),
+                frames,
+                predictive,
+            } => {
+                let packed = PackedCursor {
+                    groups,
+                    remaining: frames,
+                    position: 0,
+                };
+                if predictive {
+                    Cursor::Predictive {
+                        packed,
+                        sample: 0,
+                        delta: 0,
+                        phase: 0,
+                    }
+                } else {
+                    Cursor::Packed(packed)
+                }
+            }
         }
     }
 }
@@ -48,6 +65,13 @@ pub(super) enum Cursor<'a> {
     Ima(super::ima::Decoder<'a>),
     #[cfg(feature = "packed-pcm")]
     Packed(PackedCursor<'a>),
+    #[cfg(feature = "packed-pcm")]
+    Predictive {
+        packed: PackedCursor<'a>,
+        sample: i16,
+        delta: i16,
+        phase: u8,
+    },
 }
 
 impl Cursor<'_> {
@@ -62,6 +86,37 @@ impl Cursor<'_> {
             Self::Ima(cursor) => cursor.nth(skip),
             #[cfg(feature = "packed-pcm")]
             Self::Packed(cursor) => cursor.nth(skip),
+            #[cfg(feature = "packed-pcm")]
+            Self::Predictive {
+                packed,
+                sample,
+                delta,
+                phase,
+            } => {
+                // Each 128-frame block resets both second-difference predictors. Seek over
+                // whole blocks in the PCM1 stream, then integrate only the destination block.
+                let target = skip.checked_add(u32::from(*phase))?;
+                let offset = target % 128;
+                let mut steps = skip;
+                if target >= 128 {
+                    let before = skip.saturating_sub(offset);
+                    if before != 0 {
+                        packed.nth(before.saturating_sub(1))?;
+                    }
+                    steps = offset;
+                    *phase = 0;
+                }
+                if *phase == 0 {
+                    *sample = 0;
+                    *delta = 0;
+                }
+                for _ in 0..=steps {
+                    *delta = delta.wrapping_add(packed.nth(0)?);
+                    *sample = sample.wrapping_add(*delta);
+                }
+                *phase = offset.to_le_bytes()[0].wrapping_add(1) & 127;
+                Some(*sample)
+            }
         }
     }
 }

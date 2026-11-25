@@ -36,12 +36,13 @@ use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
-use wavegraph_sampler::{PitchedMessage as SampleMessage, PitchedSampler, PlaybackMode};
+use wavegraph_sampler::{PitchedMessage as SampleMessage, PitchedSampler};
 use wavegraph_supersaw::{Message as SawMessage, Supersaw};
 use wavegraph_wavetable::{Message as WaveMessage, Scan, Wavetable};
 
 const _: () = assert!(wavegraph_wavetable::POLYPHONY == POLYPHONY);
 const _: () = assert!(wavegraph_fm::POLYPHONY == POLYPHONY);
+const _: () = assert!(wavegraph_sampler::POLYPHONY == POLYPHONY);
 
 const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
     (Waveform::Sine, b"SINE    "),
@@ -94,10 +95,18 @@ impl Part {
     }
 
     pub(super) const fn is_polyphonic(self) -> bool {
+        self.has_voice_modes() || matches!(self, Self::Sampler)
+    }
+
+    pub(super) const fn has_voice_modes(self) -> bool {
         matches!(
             self,
             Self::Organ | Self::Supersaw | Self::Wavetable | Self::Fm
         )
+    }
+
+    pub(super) const fn uses_house_patterns(self, waveform: u8) -> bool {
+        matches!(self, Self::Sampler) && waveform == crate::assets::HOUSE_M7
     }
 
     pub(super) fn note_on(
@@ -610,7 +619,8 @@ impl Track {
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
         let mut events = match self.assignment.part {
-            Part::Mono | Part::Sampler => self.monophonic_events(old),
+            Part::Mono => self.monophonic_events(old),
+            Part::Sampler => self.sampler_events(old),
             Part::Supersaw => {
                 let mut events = self.saw_controls(old);
                 self.poly_events(old, &mut events);
@@ -717,57 +727,50 @@ impl Track {
         events
     }
 
-    fn monophonic_events(self, previous: Option<Self>) -> EventBatch {
-        let part = self.assignment.part;
-        let mut events = if part == Part::Sampler {
-            let mut events = EventBatch::new();
-            if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform) {
-                events
-                    .push(at(Message::Sampler(SampleMessage::Select(
-                        self.voice.waveform,
-                    ))))
-                    .expect("one sample selection");
-            }
-            let program = self.sample_program();
-            let old = previous.map(|p| p.sample_program());
-            if old.is_none_or(|p| p.playback != program.playback) {
-                events
-                    .push(at(Message::Sampler(SampleMessage::Playback(
-                        program.playback,
-                    ))))
-                    .expect("one playback setup");
-            }
-            // A selection can return to a still-ringing clip. Refresh its live tone as well.
-            if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform)
-                || old.is_none_or(|p| p.timbre != program.timbre)
-            {
-                events
-                    .push(at(Message::Sampler(SampleMessage::Timbre(program.timbre))))
-                    .expect("one sampler tone");
-            }
+    fn sampler_events(self, previous: Option<Self>) -> EventBatch {
+        let mut events = EventBatch::new();
+        if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform) {
             events
-        } else {
-            self.mono_controls(previous)
-        };
+                .push(at(Message::Sampler(SampleMessage::Select(
+                    self.voice.waveform,
+                ))))
+                .expect("one sample selection");
+        }
+        let program = self.sample_program();
+        let old = previous.map(|p| p.sample_program());
+        if old.is_none_or(|p| p.playback != program.playback) {
+            events
+                .push(at(Message::Sampler(SampleMessage::Playback(
+                    program.playback,
+                ))))
+                .expect("one playback setup");
+        }
+        // A selection can return to a still-ringing clip. Refresh its live tone as well.
+        if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform)
+            || old.is_none_or(|p| p.timbre != program.timbre)
+        {
+            events
+                .push(at(Message::Sampler(SampleMessage::Timbre(program.timbre))))
+                .expect("one sampler tone");
+        }
+        self.poly_key_events(previous.as_ref(), &mut events);
+        events
+    }
+
+    fn monophonic_events(self, previous: Option<Self>) -> EventBatch {
+        let part = Part::Mono;
+        let mut events = self.mono_controls(previous);
         let before = previous.and_then(|p| p.voice.sounding());
         let next = self.voice.sounding();
         let fresh = previous.is_some_and(|p| p.voice.gate.phrase != self.voice.gate.phrase);
         // A release and new strike can both fall between two audio blocks.
         // Deliver the gate edges in order; overlapping keys only change pitch.
-        // The DSP latches the sampler mode on each strike. Always release the outgoing
-        // key, even if the user has since selected one-shot and an older key is held.
-        if let Some(last) =
-            before.filter(|_| next.is_none() || fresh || (part == Part::Sampler && next != before))
-        {
+        if let Some(last) = before.filter(|_| next.is_none() || fresh) {
             events
                 .push(at(part.note_off(last.number)))
                 .expect("one note-off");
         }
-        // Releasing a newer key must not retrigger an older, still-held one-shot.
-        let follow_held = part != Part::Sampler
-            || self.sample_program().playback.mode != PlaybackMode::OneShot
-            || before.is_none();
-        if let Some(note) = next.filter(|_| fresh || (follow_held && next != before)) {
+        if let Some(note) = next.filter(|_| fresh || next != before) {
             events
                 .push(at(part.note_on(note, false)))
                 .expect("one note-on");
@@ -838,6 +841,10 @@ impl Track {
             };
             events.push(at(msg)).expect("one voice mode");
         }
+        self.poly_key_events(previous.as_ref(), events);
+    }
+
+    fn poly_key_events(&self, previous: Option<&Self>, events: &mut EventBatch) {
         let old_keys = previous.map_or([PolyKey::EMPTY; POLYPHONY], |p| p.poly_keys);
         let old_transpose = previous.map_or(0, |p| p.voice.transpose);
         let now_transpose = self.voice.transpose;
@@ -864,9 +871,20 @@ impl Track {
                     .expect("at most four polyphonic note-offs");
             }
         }
+        // A fifth pad can hide an older held one-shot. Uncovering it isn't a new hit.
+        let last_strike = previous
+            .filter(|p| {
+                self.assignment.part == Part::Sampler
+                    && self.sample_program().playback.mode
+                        == wavegraph_sampler::PlaybackMode::OneShot
+                    && p.voice.gate.note.is_some()
+            })
+            .map(|p| p.voice.gate.phrase);
         // Apply simultaneous strikes oldest first so the newest velocity wins.
         for &new in self.poly_keys.iter().rev() {
             if let Some(note) = sounding(new, now_transpose)
+                && last_strike
+                    .is_none_or(|last| (1..(1 << 31)).contains(&new.strike.wrapping_sub(last)))
                 && !old_keys.iter().any(|&old| same(old, new))
             {
                 events
