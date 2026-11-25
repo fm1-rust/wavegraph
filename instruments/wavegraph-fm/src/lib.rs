@@ -4,8 +4,8 @@
 
 mod patch;
 
-pub use patch::{Patch, Ratio, Shape, Time};
-pub use wavegraph_adsr::Adsr;
+pub use patch::{Patch, Ratio};
+pub use wavegraph_adsr::{Adsr, Shape, Time};
 use wavegraph_adsr::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext, midi::Note, polyphony::Keyboard, sine_q15};
 pub use wavegraph_core::{Tuning, polyphony::VoiceMode};

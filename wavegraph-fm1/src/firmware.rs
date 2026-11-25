@@ -68,6 +68,7 @@ impl Settings {
             organ: track.organ,
             fm: track.fm,
             drums808: track.drums808,
+            sampler: track.sample_program(),
             saw: track.saw,
             wave: track.wave_program(),
             envelope_target: track.envelope_target,
@@ -94,11 +95,16 @@ impl Settings {
             }),
             View::MasterFx(Some(row)) => self.fx.enabled(row),
             View::Envelope
-                if matches!(self.nav.part(), Part::Supersaw | Part::Wavetable | Part::Fm) =>
+                if matches!(
+                    self.nav.part(),
+                    Part::Supersaw | Part::Wavetable | Part::Fm | Part::Sampler
+                ) =>
             {
                 self.tracks[self.nav.focus.index()].envelope_target != EnvelopeTarget::Amp
             }
-            View::Scope | View::Envelope => self.tracks[self.nav.focus.index()].voice_tap,
+            View::Scope | View::SampleEdit | View::Envelope => {
+                self.tracks[self.nav.focus.index()].voice_tap
+            }
             View::Sequencer => {
                 self.seq.page != Some(SeqPage::Step) && self.seq.enabled[self.seq.channel.index()]
             }
@@ -121,6 +127,7 @@ pub(super) struct Labels {
     pub(super) organ: OrganControls,
     pub(super) fm: crate::fm::Controls,
     pub(super) drums808: wavegraph_808::Controls,
+    pub(super) sampler: crate::sampler::Program,
     pub(super) saw: SawControls,
     pub(super) wave: WaveProgram,
     pub(super) envelope_target: EnvelopeTarget,
@@ -674,7 +681,8 @@ mod app {
                 .set(Button::Rec, self.seq.page == Some(SeqPage::Record));
             self.leds.set(
                 Button::Edit,
-                self.seq.page == Some(SeqPage::Step) || self.nav.view == View::VoiceMode,
+                self.seq.page == Some(SeqPage::Step)
+                    || matches!(self.nav.view, View::VoiceMode | View::SampleEdit),
             );
             self.leds.set(Button::Seq, self.seq.page.is_some());
             self.leds.set(
@@ -921,7 +929,7 @@ mod app {
                             .turn_knobs(channel, [0, knobs[1], knobs[2], 0]);
                     }
                 }
-                View::Scope | View::Envelope => {
+                View::Scope | View::SampleEdit | View::Envelope => {
                     let track = &mut self.settings.tracks[channel.index()];
                     track.turn_algorithm(view, nav.bass_knob(), algorithm);
                     track.edit_panel(view, select, knobs, sel);
@@ -1287,7 +1295,8 @@ mod app {
                         || old.focus != labels.focus
                         || old.voice_tap != labels.voice_tap
                 });
-                let voice_scope = labels.view == View::Scope && labels.voice_tap;
+                let voice_scope =
+                    matches!(labels.view, View::Scope | View::SampleEdit) && labels.voice_tap;
                 let bass_scope = voice_scope && labels.focus == Part::Bass;
                 // A label or knob edit does not break a contiguous stream from the same tap.
                 if block.gap || source_changed {

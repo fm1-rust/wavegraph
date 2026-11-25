@@ -6,6 +6,78 @@ use wavegraph_wavetable::{BANKS, Bank};
 
 pub(crate) use fm1_assets::flash_asset;
 
+pub(super) const SAMPLE_NAMES: [[u8; 9]; 5] = [
+    *b"AIRHORN  ",
+    *b"LASER ZAP",
+    *b"RAVE STAB",
+    *b"RAVE RISE",
+    *b"AMEN BRK ",
+];
+
+macro_rules! rave_clip {
+    ($file:literal, $rate:literal, $root:literal) => {{
+        #[cfg(feature = "packed-samples")]
+        let clip = wavegraph_sampler::Clip::from_pcm1(
+            flash_asset!(
+                u8,
+                include_bytes!(concat!(env!("OUT_DIR"), "/", $file, ".pcm1"))
+            ),
+            $rate,
+            $root,
+        );
+        #[cfg(not(feature = "packed-samples"))]
+        let clip = wavegraph_sampler::Clip::from_pcm16le(
+            flash_asset!(
+                u8,
+                include_bytes!(concat!("../samples/rave/", $file, ".s16le"))
+            ),
+            $rate,
+            $root,
+        );
+        clip.expect("valid factory sampler clip")
+    }};
+}
+
+// SAFETY: these immutable clip descriptors point into read-only upper flash.
+#[cfg_attr(target_os = "none", unsafe(link_section = ".fm1_assets"))]
+pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len()] = [
+    rave_clip!("horn", 22_059, 60),
+    rave_clip!("zap", 22_059, 60),
+    rave_clip!("stab", 14_706, 43),
+    wavegraph_sampler::Clip::from_ima_adpcm(
+        flash_asset!(u8, include_bytes!("../samples/rave/rise.ima")),
+        19_404,
+        14_700,
+        60,
+    )
+    .expect("validated rave rise"),
+    {
+        // The two encodings contain the same sixteen beats. Only one enters the image.
+        #[cfg(all(feature = "packed-samples", feature = "packed-cymbals"))]
+        let (bytes, frames, hz) = (
+            flash_asset!(u8, include_bytes!("../samples/rave/amen.ima")).as_slice(),
+            192_000,
+            24_400,
+        );
+        #[cfg(not(all(feature = "packed-samples", feature = "packed-cymbals")))]
+        let (bytes, frames, hz) = (
+            flash_asset!(u8, include_bytes!("../samples/rave/amen-compact.ima")).as_slice(),
+            98_400,
+            12_505,
+        );
+        wavegraph_sampler::Clip::from_ima_adpcm(bytes, frames, hz, 60)
+            .expect("validated four-bar Amen break")
+            .with_native_tempo(122)
+    },
+];
+
+#[cfg(target_os = "none")]
+#[used]
+// SAFETY: the linker keeps this immutable text in read-only upper flash.
+#[unsafe(link_section = ".fm1_assets.keep")]
+static RAVE_NOTICE: [u8; include_bytes!("../samples/rave/NOTICE.txt").len()] =
+    *include_bytes!("../samples/rave/NOTICE.txt");
+
 // Keep the upstream notice with standalone firmware and emulator images.
 #[cfg(target_os = "none")]
 #[used]

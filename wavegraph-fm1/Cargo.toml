@@ -9,12 +9,14 @@ build = "assets/bumper.rs"
 description = "Four assignable WaveGraph channels with synths, 808 and 909 kits, and an oscilloscope for FM-1"
 
 [features]
-default = ["packed-cymbals"]
+default = ["packed-cymbals", "packed-samples"]
 late-block-probe = []
 # Opt in on hardware. The browser emulator currently lacks the paired 32-bit add.
 pi32v2-simd = ["wavegraph-supersaw/pi32v2-simd"]
 # Store the factory 909 cymbals as losslessly packed PCM16.
-packed-cymbals = ["dep:fm1-assets", "dep:wavegraph-sampler"]
+packed-cymbals = ["dep:fm1-assets", "wavegraph-sampler/packed-pcm"]
+# Use the same PCM1 format for the chromatic sampler bank.
+packed-samples = ["dep:fm1-assets", "wavegraph-sampler/packed-pcm"]
 # A/B the master compressor detector on the same board and factory patch.
 short-detector-probe = ["wavegraph-fx/short-detector-probe"]
 # Requires the board and host qualifications documented in the firmware README.
@@ -37,7 +39,7 @@ wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
 wavegraph-organ = { path = "../instruments/wavegraph-organ" }
 wavegraph-sample.workspace = true
-wavegraph-sampler = { path = "../instruments/wavegraph-sampler", optional = true, features = ["packed-pcm"] }
+wavegraph-sampler = { path = "../instruments/wavegraph-sampler", features = ["ima-adpcm"] }
 wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 

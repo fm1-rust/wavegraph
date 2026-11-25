@@ -76,6 +76,7 @@ impl Assignment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum View {
     Scope,
+    SampleEdit,
     VoiceMode,
     Envelope,
     Arp,
@@ -95,6 +96,7 @@ impl View {
     pub(super) fn shows_trace(self, part: Part) -> bool {
         match self {
             Self::Scope | Self::Fx => true,
+            Self::SampleEdit => part == Part::Sampler,
             Self::Envelope => part.is_kit(), // Drum kits fall back to their scope.
             Self::VoiceMode
             | Self::Lfo
@@ -255,10 +257,15 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
+            PageButton::Edit if self.view == View::Scope && self.part() == Part::Sampler => {
+                View::SampleEdit
+            }
             PageButton::Edit if self.view == View::Scope && self.part().is_polyphonic() => {
                 View::VoiceMode
             }
-            PageButton::Edit if self.view != View::VoiceMode => self.view,
+            PageButton::Edit if !matches!(self.view, View::VoiceMode | View::SampleEdit) => {
+                self.view
+            }
             PageButton::Lfo if self.view == View::Scope && self.part() == Part::Bass => View::Lfo,
             PageButton::Lfo if self.view != View::Lfo => self.view,
             PageButton::Arp if self.view == View::Scope => View::Arp,
@@ -346,6 +353,7 @@ impl Navigation {
                 self.bass_slot = None;
             }
             if self.view == View::Envelope
+                || (self.view == View::SampleEdit && self.part() != Part::Sampler)
                 || (self.view == View::VoiceMode && !self.part().is_polyphonic())
                 || (self.view == View::Lfo && self.part() != Part::Bass)
             {

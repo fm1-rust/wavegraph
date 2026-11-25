@@ -10,6 +10,25 @@ pub(crate) const SLOTS: usize = 8;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Slot(u8);
 
+/// One four-bit pattern selection per strip. The panel and DSP copy this in every snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ChannelSlots(u16);
+
+impl ChannelSlots {
+    pub(super) const FIRST: Self = Self(0);
+
+    pub(super) fn get(self, channel: Channel) -> Slot {
+        Slot(((self.0 >> ((channel as u8) << 2)) & 15) as u8)
+    }
+
+    pub(super) fn set(&mut self, channel: Channel, slot: Slot) {
+        let shift = (channel as u8) << 2;
+        self.0 = (self.0 & !(15 << shift)) | (u16::from(slot.0) << shift);
+    }
+}
+
+const _: () = assert!(crate::panel::CHANNELS <= 4 && SLOTS <= 16);
+
 impl Slot {
     pub(crate) const FIRST: Self = Self(0);
     /// First eight white keys, F3 through F4, independent of the octave setting.

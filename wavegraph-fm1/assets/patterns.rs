@@ -4,7 +4,7 @@ use core::fmt::Write as _;
 use midly::{Format, MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use std::{fs, path::Path};
 
-const BANKS: [&str; 8] = [
+const BANKS: [&str; 9] = [
     "mono",
     "organ",
     "tb303-low",
@@ -13,15 +13,17 @@ const BANKS: [&str; 8] = [
     "supersaw",
     "wavetable",
     "tb303-high",
+    "sampler",
 ];
 const TICKS_PER_BEAT: u64 = 32;
 const BAR: u64 = TICKS_PER_BEAT * 4;
 
 pub(super) fn compile_banks(out: &Path) {
     println!("cargo:rerun-if-changed=assets/patterns.rs");
-    let mut code = String::from(
+    let mut code = format!(
         "#[cfg_attr(target_os = \"none\", unsafe(link_section = \".fm1_assets\"))]\n\
-         static BANKS: [[Clip; SLOTS]; 8] = [\n",
+         static BANKS: [[Clip; SLOTS]; {}] = [\n",
+        BANKS.len(),
     );
     for bank in BANKS {
         code.push_str("[\n");

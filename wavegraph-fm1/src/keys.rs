@@ -90,8 +90,10 @@ pub(super) struct PanelPads {
 
 impl PanelPads {
     pub(super) fn apply(self, track: &mut Track) {
-        if self.generation == track.assignment.generation {
-            track.panel_hits = self.strikes;
+        if self.generation == track.assignment.generation
+            && let Some(hits) = track.drum_hits_mut()
+        {
+            hits.panel = self.strikes;
         }
     }
 }
@@ -359,8 +361,10 @@ impl<const PANEL: usize> Keys<PANEL> {
         match action {
             MidiAction::On(note) if track.assignment.part.is_kit() => {
                 keys.event(Key::Midi(note.number), action);
-                if let Some(voice) = track.assignment.part.drum(note.number) {
-                    track.midi_hits.push(voice, note.velocity);
+                if let Some(voice) = track.assignment.part.drum(note.number)
+                    && let Some(hits) = track.drum_hits_mut()
+                {
+                    hits.midi.push(voice, note.velocity);
                 }
             }
             MidiAction::On(note) => keys.event(Key::Midi(note.number), action),
@@ -402,7 +406,12 @@ impl<const PANEL: usize> Keys<PANEL> {
         let notes = keys.latest();
         track.voice.gate = Gate {
             note: notes[0].note,
-            phrase: keys.phrase,
+            // A sample starts at frame zero on every new strike, even in a legato phrase.
+            phrase: if track.assignment.part == Part::Sampler {
+                keys.serial
+            } else {
+                keys.phrase
+            },
         };
         if track.assignment.part.is_polyphonic() {
             track.poly_keys = notes;

@@ -1022,6 +1022,8 @@ name = "wavegraph-sampler"
 version = "0.1.0"
 dependencies = [
  "fm1-assets",
+ "micromath",
+ "wavegraph-adsr",
  "wavegraph-core",
  "wavegraph-dsp",
  "wavegraph-sample",

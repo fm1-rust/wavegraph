@@ -26,6 +26,11 @@ impl Colors {
     pub(super) fn for_part(part: Part) -> Self {
         let (face, ink, accent) = match part {
             Part::Mono => (super::STYLE.background, palette::WHITE, super::STYLE.trace),
+            Part::Sampler => (
+                super::sampler::FACE,
+                super::sampler::PRINT,
+                super::sampler::LCD,
+            ),
             Part::Organ => (
                 super::ORGAN_STYLE.background,
                 palette::WHITE,

@@ -1,5 +1,6 @@
 //! Four assignable instrument nodes feed the shared effect send/return graph.
 
+use crate::sampler::Program as SampleProgram;
 use crate::wavetable::Program as WaveProgram;
 use crate::{
     arp::{self, ChannelArp},
@@ -34,6 +35,7 @@ use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
+use wavegraph_sampler::{PitchedMessage as SampleMessage, PitchedSampler, PlaybackMode};
 use wavegraph_supersaw::{Message as SawMessage, Supersaw};
 use wavegraph_wavetable::{Message as WaveMessage, Scan, Wavetable};
 
@@ -49,7 +51,7 @@ const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
 
 pub(super) const MAX_CUTOFF_STEP: u8 = 66;
 // Two semitones per detent, rounded to the nearest Hz from 20 kHz down.
-const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
+pub(super) const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
     10, 11, 12, 14, 16, 17, 20, 22, 25, 28, 31, 35, 39, 44, 49, 55, 62, 70, 78, 88, 98, 110, 124,
     139, 156, 175, 197, 221, 248, 278, 313, 351, 394, 442, 496, 557, 625, 702, 787, 884, 992, 1114,
     1250, 1403, 1575, 1768, 1984, 2227, 2500, 2806, 3150, 3536, 3969, 4454, 5000, 5612, 6300, 7071,
@@ -67,10 +69,11 @@ pub(super) enum Part {
     Supersaw,
     Wavetable,
     Fm,
+    Sampler,
 }
 
 impl Part {
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::Mono,
         Self::Organ,
         Self::Bass,
@@ -79,6 +82,7 @@ impl Part {
         Self::Supersaw,
         Self::Wavetable,
         Self::Fm,
+        Self::Sampler,
     ];
 
     pub(super) const fn is_kit(self) -> bool {
@@ -95,7 +99,13 @@ impl Part {
     pub(super) const fn has_envelope(self) -> bool {
         matches!(
             self,
-            Self::Mono | Self::Organ | Self::Bass | Self::Supersaw | Self::Wavetable | Self::Fm
+            Self::Mono
+                | Self::Organ
+                | Self::Bass
+                | Self::Supersaw
+                | Self::Wavetable
+                | Self::Fm
+                | Self::Sampler
         )
     }
 
@@ -108,6 +118,10 @@ impl Part {
         slide: bool,
     ) -> Message {
         match self {
+            Self::Sampler => Message::Sampler(SampleMessage::NoteOn(Note {
+                number: note,
+                velocity,
+            })),
             Self::Mono => MonoMessage::NoteOn { note, velocity }.into(),
             Self::Organ => OrganMessage::NoteOn { note, velocity }.into(),
             Self::Wavetable => WaveMessage::NoteOn { note, velocity }.into(),
@@ -125,6 +139,7 @@ impl Part {
 
     pub(super) fn note_off(self, note: u8) -> Message {
         match self {
+            Self::Sampler => Message::Sampler(SampleMessage::NoteOff(note)),
             Self::Mono => MonoMessage::NoteOff(note).into(),
             Self::Organ => OrganMessage::NoteOff(note).into(),
             Self::Wavetable => WaveMessage::NoteOff(note).into(),
@@ -174,6 +189,7 @@ impl Part {
             Self::Supersaw => "SUPER SAW",
             Self::Wavetable => "WAVETABLE",
             Self::Fm => "FM SYNTH",
+            Self::Sampler => "SAMPLER",
         }
     }
 }
@@ -207,10 +223,20 @@ impl Voice {
         transpose: 0,
     };
 
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "A u8 slot plus an i8 detent fits i16; the bank is nonempty."
+    )]
     pub(super) fn turn_waveform(&mut self, part: Part, detents: i8) {
         let position = self.waveform.wrapping_add_signed(detents);
         self.waveform = match part {
             Part::Mono => position % 4,
+            Part::Sampler => {
+                let slots =
+                    i16::try_from(crate::assets::SAMPLE_NAMES.len()).expect("small catalog");
+                let index = (i16::from(self.waveform) + i16::from(detents)).rem_euclid(slots);
+                u8::try_from(index).expect("wrapped sample index")
+            }
             Part::Organ | Part::Bass | Part::Wavetable => position % 2,
             Part::Tr808 | Part::Tr909 | Part::Supersaw | Part::Fm => 0,
         };
@@ -239,6 +265,7 @@ impl Voice {
             Part::Supersaw => b"SUPERSAW",
             Part::Wavetable => b"WAVETABLE",
             Part::Fm => b"FM SYNTH",
+            Part::Sampler => &crate::assets::SAMPLE_NAMES[usize::from(self.waveform)],
         }
     }
 
@@ -250,13 +277,15 @@ impl Voice {
     }
 
     pub(super) fn note_name(self) -> [u8; 4] {
+        self.sounding()
+            .map_or(*b"--  ", |note| Self::pitch_name(note.number))
+    }
+
+    pub(super) fn pitch_name(note: u8) -> [u8; 4] {
         const NAMES: [[u8; 2]; 12] = [
             *b"C ", *b"C#", *b"D ", *b"D#", *b"E ", *b"F ", *b"F#", *b"G ", *b"G#", *b"A ", *b"A#",
             *b"B ",
         ];
-        let Some(Note { number: note, .. }) = self.sounding() else {
-            return *b"--  ";
-        };
         let [letter, accidental] = NAMES[usize::from(note % 12)];
         let [octave, tail] = match (note / 12).checked_sub(1) {
             Some(octave) => [b'0'.saturating_add(octave), b' '],
@@ -278,6 +307,21 @@ pub(super) struct SawControls {
     pub(super) filter_envelope: EnvelopeControls,
 }
 
+// Only the assigned instrument uses this storage. Every channel snapshot carries a copy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Bank {
+    None,
+    Kit(DrumHits),
+    Wave([WaveProgram; 2]),
+    Sampler([SampleProgram; crate::assets::SAMPLE_NAMES.len()]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DrumHits {
+    pub(super) panel: HitLog<8>,
+    pub(super) midi: HitLog<32>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Track {
     pub(super) lfo: crate::lfo::Controls,
@@ -285,20 +329,18 @@ pub(super) struct Track {
     pub(super) arp_revision: u32,
     pub(super) assignment: Assignment,
     pub(super) voice: Voice,
+    bank: Bank,
     pub(super) bass: Controls,
     pub(super) inserts: [Insert; INSERT_SLOTS],
     pub(super) polyphony: crate::panel::Polyphony,
     pub(super) organ: OrganControls,
     pub(super) fm: crate::fm::Controls,
     pub(super) saw: SawControls,
-    wave_programs: [WaveProgram; 2],
     pub(super) poly_keys: [PolyKey; POLYPHONY],
     pub(super) voice_envelope: EnvelopeControls,
     pub(super) envelope_target: EnvelopeTarget,
     pub(super) voice_tap: bool,
     pub(super) drums808: wavegraph_808::Controls,
-    pub(super) panel_hits: HitLog<8>,
-    pub(super) midi_hits: HitLog<32>,
 }
 
 impl Track {
@@ -320,10 +362,18 @@ impl Track {
                 Part::Wavetable => EnvelopeControls::WAVETABLE,
                 _ => EnvelopeControls::INITIAL,
             },
-            wave_programs: [
-                WaveProgram::new(Scan::RESONANT),
-                WaveProgram::new(Scan::VOCAL),
-            ],
+            bank: match assignment.part {
+                Part::Tr808 | Part::Tr909 => Bank::Kit(DrumHits {
+                    panel: HitLog::EMPTY,
+                    midi: HitLog::EMPTY,
+                }),
+                Part::Wavetable => Bank::Wave([
+                    WaveProgram::new(Scan::RESONANT),
+                    WaveProgram::new(Scan::VOCAL),
+                ]),
+                Part::Sampler => Bank::Sampler(SampleProgram::BANK),
+                _ => Bank::None,
+            },
             envelope_target: EnvelopeTarget::Amp,
             saw: SawControls {
                 resonance: 0,
@@ -339,10 +389,9 @@ impl Track {
                     | Part::Supersaw
                     | Part::Wavetable
                     | Part::Fm
+                    | Part::Sampler
             ),
             drums808: wavegraph_808::Controls::INITIAL,
-            panel_hits: HitLog::EMPTY,
-            midi_hits: HitLog::EMPTY,
         }
     }
 
@@ -397,7 +446,12 @@ impl Track {
 
     pub(super) fn turn_select(&mut self, detents: i8) {
         match self.assignment.part {
-            Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable | Part::Fm => {
+            Part::Mono
+            | Part::Organ
+            | Part::Supersaw
+            | Part::Wavetable
+            | Part::Fm
+            | Part::Sampler => {
                 self.voice.transpose = self.voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
             Part::Bass | Part::Tr808 | Part::Tr909 => (),
@@ -413,7 +467,7 @@ impl Track {
             } else if self.envelope_target == EnvelopeTarget::Pitch {
                 self.fm.turn_depth(detents);
             }
-        } else {
+        } else if self.assignment.part != Part::Sampler || view != View::Envelope {
             self.voice.turn_waveform(self.assignment.part, detents);
         }
     }
@@ -430,7 +484,7 @@ impl Track {
             }
             Part::Organ => self.organ.turn_knobs(detents),
             Part::Fm => self.fm.turn(detents),
-            Part::Wavetable => self.wave_programs[usize::from(self.voice.waveform)].turn(detents),
+            Part::Wavetable => self.wave_program_mut().turn(detents),
             Part::Bass => self.bass.turn_knobs(detents),
             Part::Tr808 => {
                 let c = &mut self.drums808;
@@ -446,12 +500,54 @@ impl Track {
                     *value = value.saturating_add_signed(delta).min(127);
                 }
             }
+            Part::Sampler => self.sample_program_mut().turn(detents),
             Part::Tr909 => (),
         }
     }
 
+    pub(super) fn drum_hits_mut(&mut self) -> Option<&mut DrumHits> {
+        if let Bank::Kit(hits) = &mut self.bank {
+            Some(hits)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn sample_program(&self) -> SampleProgram {
+        match &self.bank {
+            Bank::Sampler(bank) => bank[usize::from(self.voice.waveform)],
+            _ => SampleProgram::DRY,
+        }
+    }
+
+    fn sample_program_mut(&mut self) -> &mut SampleProgram {
+        let Bank::Sampler(bank) = &mut self.bank else {
+            unreachable!("sampler assignment")
+        };
+        &mut bank[usize::from(self.voice.waveform)]
+    }
+
+    fn wave_program_mut(&mut self) -> &mut WaveProgram {
+        let Bank::Wave(bank) = &mut self.bank else {
+            unreachable!("wavetable assignment")
+        };
+        &mut bank[usize::from(self.voice.waveform)]
+    }
+
     pub(super) fn edit_panel(&mut self, view: View, select: i8, knobs: [i8; 4], sel: bool) {
         match (view, self.assignment.part) {
+            (View::SampleEdit, Part::Sampler) => {
+                self.turn_select(select);
+                self.sample_program_mut().edit(knobs);
+            }
+            (View::Envelope, Part::Sampler) => {
+                self.envelope_target = self
+                    .envelope_target
+                    .turn(i16::from(select).saturating_add(i16::from(sel)), false);
+                let target = self.envelope_target;
+                self.sample_program_mut().shape(target).turn(knobs);
+                return;
+            }
             (View::Envelope, part @ (Part::Supersaw | Part::Wavetable | Part::Fm)) => {
                 if part == Part::Fm {
                     self.envelope_target = self
@@ -467,9 +563,7 @@ impl Track {
                     } else if part == Part::Supersaw {
                         self.saw.filter_envelope.turn(knobs);
                     } else {
-                        self.wave_programs[usize::from(self.voice.waveform)]
-                            .position_envelope
-                            .turn(knobs);
+                        self.wave_program_mut().position_envelope.turn(knobs);
                     }
                 }
                 return;
@@ -506,7 +600,7 @@ impl Track {
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
         let mut events = match self.assignment.part {
-            Part::Mono => self.oscillator_events(old),
+            Part::Mono | Part::Sampler => self.monophonic_events(old),
             Part::Supersaw => {
                 let mut events = self.saw_controls(old);
                 self.poly_events(old, &mut events);
@@ -606,20 +700,57 @@ impl Track {
         events
     }
 
-    fn oscillator_events(self, previous: Option<Self>) -> EventBatch {
+    fn monophonic_events(self, previous: Option<Self>) -> EventBatch {
         let part = self.assignment.part;
-        let mut events = self.mono_controls(previous);
+        let mut events = if part == Part::Sampler {
+            let mut events = EventBatch::new();
+            if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform) {
+                events
+                    .push(at(Message::Sampler(SampleMessage::Select(
+                        self.voice.waveform,
+                    ))))
+                    .expect("one sample selection");
+            }
+            let program = self.sample_program();
+            let old = previous.map(|p| p.sample_program());
+            if old.is_none_or(|p| p.playback != program.playback) {
+                events
+                    .push(at(Message::Sampler(SampleMessage::Playback(
+                        program.playback,
+                    ))))
+                    .expect("one playback setup");
+            }
+            // A selection can return to a still-ringing clip. Refresh its live tone as well.
+            if previous.is_none_or(|p| p.voice.waveform != self.voice.waveform)
+                || old.is_none_or(|p| p.timbre != program.timbre)
+            {
+                events
+                    .push(at(Message::Sampler(SampleMessage::Timbre(program.timbre))))
+                    .expect("one sampler tone");
+            }
+            events
+        } else {
+            self.mono_controls(previous)
+        };
         let before = previous.and_then(|p| p.voice.sounding());
         let next = self.voice.sounding();
         let fresh = previous.is_some_and(|p| p.voice.gate.phrase != self.voice.gate.phrase);
         // A release and new strike can both fall between two audio blocks.
         // Deliver the gate edges in order; overlapping keys only change pitch.
-        if let Some(last) = before.filter(|_| next.is_none() || fresh) {
+        // The DSP latches the sampler mode on each strike. Always release the outgoing
+        // key, even if the user has since selected one-shot and an older key is held.
+        if let Some(last) =
+            before.filter(|_| next.is_none() || fresh || (part == Part::Sampler && next != before))
+        {
             events
                 .push(at(part.note_off(last.number)))
                 .expect("one note-off");
         }
-        if let Some(note) = next.filter(|_| next != before || fresh) {
+        // Releasing a newer key must not retrigger an older, still-held one-shot.
+        let follow_held = part != Part::Sampler
+            || self.sample_program().playback.mode != PlaybackMode::OneShot
+            || before.is_none();
+        if let Some(note) = next.filter(|_| fresh || (follow_held && next != before)) {
             events
                 .push(at(part.note_on(note, false)))
                 .expect("one note-on");
@@ -643,7 +774,10 @@ impl Track {
         events
     }
     pub(super) fn wave_program(&self) -> WaveProgram {
-        self.wave_programs[usize::from(self.voice.waveform % 2)]
+        match &self.bank {
+            Bank::Wave(bank) => bank[usize::from(self.voice.waveform)],
+            _ => WaveProgram::new(Scan::RESONANT),
+        }
     }
 
     fn wave_events(self, previous: Option<Self>) -> EventBatch {
@@ -733,6 +867,7 @@ pub(super) enum Message {
     Supersaw(SawMessage),
     Fm(FmMessage),
     Wavetable(WaveMessage),
+    Sampler(SampleMessage),
     WaveFrame(u8),
     Organ(OrganMessage),
     Bass(BassMessage),
@@ -818,6 +953,7 @@ enum Player<'a> {
     Supersaw(Supersaw<'a>),
     Fm(Fm<'a>),
     Wavetable(Wavetable<'a>),
+    Sampler(PitchedSampler<'a>),
     Organ(Organ),
     Bass(Tb303),
     Drums(DrumMachine),
@@ -870,6 +1006,10 @@ impl Process<Message, I24> for Node<'_> {
                 ),
                 Part::Fm => Player::Fm(Fm::new(self.tuning)),
                 Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
+                Part::Sampler => Player::Sampler(
+                    PitchedSampler::at_sample_rate(&crate::assets::RAVE_BANK, self.sample_rate)
+                        .expect("factory sample bank and audio clock"),
+                ),
                 // Reserve headroom before the resonant signal is converted to Q23.
                 Part::Bass => Player::Bass(
                     Tb303::new(self.sample_rate)
@@ -899,6 +1039,10 @@ impl Process<Message, I24> for Node<'_> {
             }),
             Player::Fm(node) => dispatch(node, cx, |m| match m {
                 Message::Fm(m) => Some(m),
+                _ => None,
+            }),
+            Player::Sampler(node) => dispatch(node, cx, |m| match m {
+                Message::Sampler(message) => Some(message),
                 _ => None,
             }),
             Player::Supersaw(node) => dispatch(node, cx, |m| match m {
@@ -1086,6 +1230,7 @@ impl Channel {
         let scale = |s: I24| match part {
             Part::Tr909 => s.inner() >> 4,
             Part::Tr808 => s.inner() >> 3,
+            Part::Sampler => s.inner() >> 2,
             Part::Bass | Part::Wavetable if view == View::Fx => s.inner() >> 3,
             Part::Supersaw => (s.inner() * 3) >> 3,
             _ => s.inner(),
@@ -1153,6 +1298,7 @@ impl Programs {
             half_gain: false,
             mixer: Mixer::DRY,
             previous_mixer: None,
+            previous_bpm: 0,
             fx: Fx::INITIAL,
             cue: Cue::EMPTY,
             previous_fx: None,
@@ -1178,6 +1324,7 @@ pub(super) struct Instrument<'a> {
     pub(super) half_gain: bool,
     mixer: Mixer,
     previous_mixer: Option<Mixer>,
+    previous_bpm: u16,
     fx: Fx,
     pub(super) cue: Cue,
     previous_fx: Option<Fx>,
@@ -1355,6 +1502,13 @@ impl Instrument<'_> {
                 part.is_kit() || track.voice.gate.note.is_none()
             };
             let mut panel = track.direct().events(old.map(Track::direct))?;
+            if part == Part::Sampler && (old.is_none() || self.previous_bpm != self.transport.bpm) {
+                panel
+                    .push(at(Message::Sampler(SampleMessage::Tempo(
+                        self.transport.bpm,
+                    ))))
+                    .map_err(|_| Error::Capacity)?;
+            }
             if enabled[i]
                 && old.is_some()
                 && let Some(owned) = self.player.automation(Channel::ALL[i])
@@ -1412,13 +1566,17 @@ impl Instrument<'_> {
                     )
                 })?;
             }
-            if part.is_kit() && !track.arp.enabled {
-                track
-                    .panel_hits
-                    .append_since(old.map_or(0, |t| t.panel_hits.total()), events)?;
-                track
-                    .midi_hits
-                    .append_since(old.map_or(0, |t| t.midi_hits.total()), events)?;
+            if let Bank::Kit(hits) = &track.bank
+                && !track.arp.enabled
+            {
+                let old_hits = old.as_ref().and_then(|t| match &t.bank {
+                    Bank::Kit(hits) => Some(hits),
+                    _ => None,
+                });
+                hits.panel
+                    .append_since(old_hits.map_or(0, |h| h.panel.total()), events)?;
+                hits.midi
+                    .append_since(old_hits.map_or(0, |h| h.midi.total()), events)?;
             }
             live_counts[i] = events.len();
         }
@@ -1503,6 +1661,7 @@ impl Instrument<'_> {
         self.reduction = reduction;
         self.previous = Some(*tracks);
         self.previous_mixer = Some(self.mixer);
+        self.previous_bpm = self.transport.bpm;
         self.previous_fx = Some(self.fx);
         self.cue = Cue::EMPTY;
         Ok(&buses[if self.half_gain {
@@ -1546,6 +1705,7 @@ fn event_order(event: &Event<Message>) -> u8 {
         | Message::Fm(FmMessage::NoteOff(_))
         | Message::Supersaw(SawMessage::NoteOff(_))
         | Message::Organ(OrganMessage::NoteOff(_))
+        | Message::Sampler(SampleMessage::NoteOff(_) | SampleMessage::Stop)
         | Message::Bass(BassMessage::NoteOff(_) | BassMessage::Reset)
         | Message::Drum(DrumMessage::Stop) => 1,
         Message::Mono(MonoMessage::NoteOn { .. })
@@ -1553,6 +1713,7 @@ fn event_order(event: &Event<Message>) -> u8 {
         | Message::Fm(FmMessage::NoteOn { .. })
         | Message::Supersaw(SawMessage::NoteOn { .. })
         | Message::Organ(OrganMessage::NoteOn { .. })
+        | Message::Sampler(SampleMessage::NoteOn(_))
         | Message::Bass(BassMessage::NoteOn { .. })
         | Message::Drum(DrumMessage::Trigger(_, _)) => 3,
         _ => 2,
@@ -1562,6 +1723,7 @@ fn event_order(event: &Event<Message>) -> u8 {
 #[cfg(test)]
 mod tests {
     mod arpeggiator;
+    mod sampler;
     use super::*;
     use crate::{
         keys::{Keys, MidiAction, Piano, decode_midi},
@@ -2078,7 +2240,7 @@ mod tests {
         let initial = parts;
         assert_eq!(initial[0].voice.cutoff_hz(), 5000);
         assert_eq!(
-            initial[0].oscillator_events(None).as_slice(),
+            initial[0].monophonic_events(None).as_slice(),
             &[
                 at(MonoMessage::Waveform(Waveform::Sine)),
                 at(MonoMessage::CutoffHz(5000)),
@@ -2095,7 +2257,7 @@ mod tests {
         mono.turn_waveform(Part::Mono, 2);
         mono.gate.note = Some(note(69, 80));
         assert_eq!(
-            parts[0].oscillator_events(Some(initial[0])).as_slice(),
+            parts[0].monophonic_events(Some(initial[0])).as_slice(),
             &[
                 at(MonoMessage::Waveform(Waveform::Sawtooth)),
                 at(MonoMessage::CutoffHz(2500)),
@@ -2109,14 +2271,14 @@ mod tests {
         let held = parts;
         parts[0].voice.turn_cutoff(i8::MIN);
         assert_eq!(
-            parts[0].oscillator_events(Some(held[0])).as_slice(),
+            parts[0].monophonic_events(Some(held[0])).as_slice(),
             &[at(MonoMessage::CutoffHz(10))]
         );
         parts[0].voice.turn_cutoff(i8::MAX);
         assert_eq!(parts[0].voice.cutoff_hz(), 20000);
         let open = parts;
         parts[0].voice.turn_cutoff(1);
-        assert!(parts[0].oscillator_events(Some(open[0])).is_empty());
+        assert!(parts[0].monophonic_events(Some(open[0])).is_empty());
         assert_eq!(parts[2].bass.readout(Knob::Cutoff).1, 1000);
     }
 
@@ -2139,7 +2301,7 @@ mod tests {
         keys.press(note(60, 80));
         parts[0].voice.gate = keys.gates()[0];
         assert_eq!(
-            parts[0].oscillator_events(Some(first[0])).as_slice(),
+            parts[0].monophonic_events(Some(first[0])).as_slice(),
             &[at(MonoMessage::NoteOff(60)), play(60)]
         );
 
@@ -2147,14 +2309,14 @@ mod tests {
         keys.press(note(67, 80));
         parts[0].voice.gate = keys.gates()[0];
         assert_eq!(
-            parts[0].oscillator_events(Some(repeated[0])).as_slice(),
+            parts[0].monophonic_events(Some(repeated[0])).as_slice(),
             &[play(67)]
         );
         let legato = parts;
         keys.release(67);
         parts[0].voice.gate = keys.gates()[0];
         assert_eq!(
-            parts[0].oscillator_events(Some(legato[0])).as_slice(),
+            parts[0].monophonic_events(Some(legato[0])).as_slice(),
             &[play(60)]
         );
     }
@@ -2696,7 +2858,11 @@ mod tests {
                 [SidechainDucker::<2>::new(44_118, 32, 176).expect("valid insert"); 2];
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             for (block, kit) in [0, 3, 3].into_iter().enumerate() {
-                tracks[kit].midi_hits.push(Drum::Kick, 127);
+                tracks[kit]
+                    .drum_hits_mut()
+                    .expect("kit")
+                    .midi
+                    .push(Drum::Kick, 127);
                 if block == 2 {
                     // Removing a ringing kit removes it from the key immediately.
                     tracks[0] = Track::factory(Channel::One, Assignment::new(Part::Organ));
@@ -2754,7 +2920,11 @@ mod tests {
             tracks[1].bass_fx().key = KeySource::Kick808;
             tracks[1].voice.gate.note = Some(note(48, 120));
             tracks[0].voice.gate.note = Some(note(36, 120));
-            tracks[2].midi_hits.push(Drum::Kick, 127);
+            tracks[2]
+                .drum_hits_mut()
+                .expect("kit")
+                .midi
+                .push(Drum::Kick, 127);
             let mut reference =
                 SidechainDucker::<2>::new(44_118, 32, 176).expect("insert settings");
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
@@ -3141,7 +3311,11 @@ mod tests {
             let mut tracks = Track::rack(nav.assignments);
             assert_eq!(instrument.sequences, [true; 4]);
             tracks[1].voice.gate.note = Some(note(65, 100));
-            tracks[2].midi_hits.push(Drum::Kick, 96);
+            tracks[2]
+                .drum_hits_mut()
+                .expect("kit")
+                .midi
+                .push(Drum::Kick, 96);
             instrument.transport.toggle();
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             for (key, source) in [
@@ -3247,7 +3421,8 @@ mod tests {
             let mut keys = Keyboard::<4>::new();
             keys.nav.press(PageButton::Glo);
             keys.nav.turn(1, 0);
-            keys.nav.turn(0, -1);
+            let steps = (Part::Fm as i8).saturating_sub(keys.nav.part() as i8);
+            keys.nav.turn(0, steps);
             assert_eq!(keys.nav.part(), Part::Fm);
             let channel = keys.nav.focus;
             let i = channel.index();
@@ -3710,7 +3885,11 @@ mod tests {
                     generation: 1,
                 },
             );
-            tracks[0].midi_hits.push(Drum::Clap, 127);
+            tracks[0]
+                .drum_hits_mut()
+                .expect("kit")
+                .midi
+                .push(Drum::Clap, 127);
             let previous_phase = instrument.position;
             instrument.render(tracks, &mut buses)?;
             assert_ne!(instrument.position, previous_phase);

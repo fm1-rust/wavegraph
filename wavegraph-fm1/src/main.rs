@@ -44,6 +44,8 @@ mod overload;
 #[cfg(any(target_os = "none", test))]
 mod panel;
 #[cfg(any(target_os = "none", test))]
+mod sampler;
+#[cfg(any(target_os = "none", test))]
 mod scope;
 #[cfg(target_os = "none")]
 mod screen;

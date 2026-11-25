@@ -1,6 +1,11 @@
 # Factory MIDI clips
 
-Slots 05–08 adapt the **Acid Trip** and **Devil Fish** demo songs from
+Sampler pattern 01 holds C4 for the full four bars. Select AMEN BRK to play
+a breakbeat in time with the transport. At C4 the full take lasts sixteen
+beats at the current tempo (122 BPM by default). The other seven
+sampler patterns play D-minor phrases against the factory 303s.
+
+Slots 05–08 of the other banks adapt the **Acid Trip** and **Devil Fish** demo songs from
 **AfterBirth AB-3389**, copyright © 2026 verytired, under the MIT license.
 The editable MIDI files carry the credit and license in their copyright
 metadata. The firmware includes the same notice in upper flash. [Notice](NOTICE.txt) · [AfterBirth source revision][afterbirth]

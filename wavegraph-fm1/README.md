@@ -15,8 +15,9 @@ All four patterns start enabled. GLO lets any channel host any instrument,
 including the [monosynth](../instruments/wavegraph-monosynth/),
 [M1-inspired organ](../instruments/wavegraph-organ/),
 [two-operator FM synth](../instruments/wavegraph-fm/),
-[Super Saw](../instruments/wavegraph-supersaw/) and
-[wavetable synth](../instruments/wavegraph-wavetable/).
+[Super Saw](../instruments/wavegraph-supersaw/),
+[wavetable synth](../instruments/wavegraph-wavetable/) and
+[chromatic sampler](#chromatic-sampler).
 The transport starts stopped. You can play the panel keys immediately.
 The default build tries to start USB MIDI at boot. The current AC791N BSP
 returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
@@ -51,15 +52,16 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, or load the next FM program. While a 303 knob is selected, ALGORITHM adjusts its value. |
-| SELECT encoder on the scope | Transpose the monosynth, FM, organ, Super Saw or wavetable by ±12 semitones, or cycle through all eight 303 knobs. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, load the next FM program, or choose a sampler clip. While a 303 knob is selected, ALGORITHM adjusts its value. |
+| SELECT encoder on the scope | Transpose the monosynth, FM, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through all eight 303 knobs. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | Knobs 1–4 on the FM synth | Modulator-to-carrier frequency ratio, modulation index, modulator envelope decay (0–10 s), and modulator feedback. Harder strikes sound brighter. |
 | Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. In ENV mode knob 3 sets position attack. |
 | Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
-| ENV | Open or close the monosynth, FM, organ, 303, Super Saw or wavetable envelope page. ENV stays lit while the page is open. |
-| Knobs 1–4 in monosynth, FM, organ, Super Saw or wavetable ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to choose the envelope on FM (carrier, modulator, pitch), Super Saw (amp, filter) or wavetable (amp, position). |
+| EDIT on the sampler | Open or close the sample region and keyboard tracking controls. |
+| ENV | Open or close the monosynth, FM, organ, 303, Super Saw, wavetable or sampler envelope page. ENV stays lit while the page is open. |
+| Knobs 1–4 in monosynth, FM, organ, Super Saw, wavetable or sampler ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to choose the envelope on FM (carrier, modulator, pitch), Super Saw or sampler (amp, filter), or wavetable (amp, position). |
 | Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
 | HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
@@ -319,6 +321,58 @@ to the same live view.
 | Open hat | C4 | 46 |
 | Ride | D4 | 51 |
 
+## Chromatic sampler
+
+Press **GLO**, turn **SELECT** to highlight a strip, turn **PRESETS** to
+**SAMPLER**, then press **GLO** to play. A new strip starts on **AIRHORN**.
+Turn **ALGORITHM** clockwise for **LASER ZAP**, **RAVE STAB**, **RAVE RISE**,
+then **AMEN BRK**. The next strike uses the selected sound. The LCD shows the
+original-speed **ROOT** key. The effects and break use C4 (MIDI 60). The stab uses
+its recorded G2 (MIDI 43) so it plays in tune with the synths. An octave up
+doubles speed and halves duration. Each strip has an independent monophonic
+voice with strike velocity.
+
+On the Emulator II, a voice paired a recording with its tuning, loop points,
+four-pole resonant low-pass filter and separate filter and amplitude ADSRs.
+Velocity could change the tone as well as the level. Engineer David Jacobs
+described using a keyboard-pitched Emulator II kick alongside a DX7 and
+Jupiter-6 for the bass on “West End Girls.” Here each strip remembers those
+tone and region edits separately for each sample. The stab has a closing
+filter sweep, and soft horn and laser strikes play darker.
+[E-mu's 1985 design paper](https://quod.lib.umich.edu/cgi/p/pod/dod-idx/emulator-ii-computer-music-environment.pdf?c=icmc%3Bidno%3Dbbp2372.1985.018%3Bformat%3Dpdf) ·
+[Emulator II owner’s manual](https://synthark.org/resource/emu/EmulatorII%2B_OwnersManual.pdf) ·
+[1986 studio interview](https://www.muzines.co.uk/articles/track-record-the-pet-shop-boys/11054)
+
+| Page | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
+| --- | --- | --- | --- | --- |
+| Instrument | Filter cutoff (Hz or OPEN) | Resonance | Filter envelope depth (−48 to +48 semitones) | Velocity to filter (0–48 semitones) |
+| ENV | Attack | Decay | Sustain | Release |
+| EDIT | SHOT / GATE / LOOP | Start (%) | End (%) | Filter key tracking (0–100%) |
+
+On **ENV**, turn **SELECT** or press **SEL** to switch between AMP and VCF.
+Turning knobs shapes the sounding note. Set a positive or negative **ENV AMT**
+on the instrument page to hear the filter contour. At 100% key tracking the
+cutoff moves an octave for every octave played. On **EDIT**, SHOT plays the
+whole region after a tap, GATE releases on key-up, and LOOP repeats the region
+while held. Mode and trim take effect on the next strike. On the instrument
+page **SELECT** transposes live keys and **SEL** switches the scope tap.
+
+To replace the 808 with the break, assign **SAMPLER** to its strip, turn
+**ALGORITHM** one click left from **AIRHORN** to **AMEN BRK**, and press
+**PLAY** with pattern **01**. It triggers C4 at full velocity every four
+bars. The break follows tempo changes in place by varying playback speed
+and pitch together. The other four recordings keep their keyboard tuning
+when the transport changes. Amen starts as a full-length one-shot with unity
+amplitude, a bypassed filter and the original relative levels of the drum
+hits. The filter and envelopes remain available if you want to reshape it.
+
+All five CC0 sounds stream from upper flash. The horn, zap and stab use the
+909's lossless PCM1 packing. The rising siren is an original recording, and
+the break is JapanYoshiTheGamer's independently programmed Amen remake.
+Both use 4-bit IMA ADPCM. The default image devotes 101,568 bytes to the
+24,400 Hz break. Builds with either PCM bank unpacked use the same four bars
+at 12,505 Hz. No strip buffers a whole recording. [Sample credits](samples/rave/NOTICE.txt)
+
 ## Pattern banks
 
 Press **SEQ**, turn **PRESETS** to the instrument you want, and press one of the
@@ -500,7 +554,7 @@ SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
 Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the eight instruments,
+the new assignment immediately. Any slot can run any of the nine instruments,
 including four independent TB-303s. The slot keeps its MIDI channel, fader,
 sends and sequence mute. The new processor starts from its factory settings.
 
@@ -795,7 +849,9 @@ CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 ta
 By default the build packs the 909 closed hat, open hat and ride from their
 original `.s16le` files. In each group of 32 samples it stores only the bits
 needed to reproduce every signed PCM value. The three clips take 114,181 bytes
-in flash, down from 148,124, and each voice decodes one sample at a time.
+in flash, down from 148,124, and each voice decodes one sample at a time. The sampler’s three PCM1 hits take 90,741
+bytes, down from 111,912 in raw PCM. Its reader skips whole groups when
+transposing up and keeps the loop start cursor ready for each wrap.
 For a raw PCM comparison build, run `./wavegraph-fm1/build.sh --no-default-features`.
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
@@ -828,7 +884,7 @@ renderer read the assets directly through the flash controller's XIP mapping.
 | --- | --- |
 | `0x00000..0x04000` | Installed bootloader and unit configuration. M-Flasher preserves this area on a firmware install. |
 | From `0x04000` | Application directory and `app.bin` (entry at physical `0x04120`). The locked BSP still limits the end of `app.bin` to `0x93000`. |
-| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the 909 hats and ride, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 64 compiled MIDI patterns and their attribution. |
+| Next sector after `app.bin`, up to `0xE0000` | The `assets.bin` file holds the 909 hats and ride, the rave sample bank and its credits, both wavetable banks and their catalog, the boot cue and its seek table, both splash bitmaps, the display font atlases and panel lettering, the 72 compiled MIDI patterns and their attribution. |
 | `0xE0000..0x100000` | Outside the package, including the final unit-specific MAC sector. |
 
 M-Flasher installs through the last occupied asset sector. A first install can

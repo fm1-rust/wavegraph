@@ -1,4 +1,6 @@
 [default.extend-identifiers]
+# Original Freesound sample title by Funky_Audio.
+LASRGun_Retro = "LASRGun_Retro"
 # WaveEdit Online source filename.
 VOCAL_FO = "VOCAL_FO"
 
