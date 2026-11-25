@@ -43,6 +43,11 @@ impl Channel {
         self as usize
     }
 
+    #[cfg(target_os = "none")]
+    pub(super) const fn label(self) -> &'static str {
+        ["CH 1", "CH 2", "CH 3", "CH 4"][self.index()]
+    }
+
     /// Each channel produces its source signal followed by an isolated kick.
     pub(super) const fn source_bus(self) -> usize {
         self.index() << 1
@@ -88,7 +93,32 @@ pub(super) enum View {
     Sequencer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PresetRole {
+    Channel,
+    Instrument,
+    Insert(u8),
+}
+
 impl View {
+    pub(super) fn presets(self, slot: Option<u8>) -> PresetRole {
+        match (self, slot) {
+            (Self::Channel, _) => PresetRole::Instrument,
+            (Self::Fx, Some(slot)) => PresetRole::Insert(slot),
+            _ => PresetRole::Channel,
+        }
+    }
+
+    fn editor(part: Part) -> Self {
+        if part == Part::Sampler {
+            Self::SampleEdit
+        } else if part.is_polyphonic() {
+            Self::VoiceMode
+        } else {
+            Self::Scope
+        }
+    }
+
     pub(super) fn is_mixer(self) -> bool {
         matches!(self, Self::Mixer | Self::Channel)
     }
@@ -97,8 +127,8 @@ impl View {
         match self {
             Self::Scope | Self::Fx => true,
             Self::SampleEdit => part == Part::Sampler,
-            Self::Envelope => part.is_kit(), // Drum kits fall back to their scope.
-            Self::VoiceMode
+            Self::Envelope
+            | Self::VoiceMode
             | Self::Lfo
             | Self::Arp
             | Self::Mixer
@@ -257,25 +287,15 @@ impl Navigation {
             PageButton::Home => View::Scope,
             PageButton::Glo if self.view.is_mixer() => View::Scope,
             PageButton::Glo => View::Mixer,
-            PageButton::Edit if self.view == View::Scope && self.part() == Part::Sampler => {
-                View::SampleEdit
-            }
-            PageButton::Edit if self.view == View::Scope && self.part().is_polyphonic() => {
-                View::VoiceMode
-            }
+            PageButton::Edit if self.view == View::Scope => View::editor(self.part()),
             PageButton::Edit if !matches!(self.view, View::VoiceMode | View::SampleEdit) => {
                 self.view
             }
-            PageButton::Lfo if self.view == View::Scope && self.part() == Part::Bass => View::Lfo,
-            PageButton::Lfo if self.view != View::Lfo => self.view,
-            PageButton::Arp if self.view == View::Scope => View::Arp,
-            PageButton::Arp if self.view != View::Arp => self.view,
+            PageButton::Lfo if self.view != View::Lfo => View::Lfo,
+            PageButton::Arp if self.view != View::Arp => View::Arp,
             PageButton::Fx if self.view != View::Fx => View::Fx,
             PageButton::Seq if self.view != View::Sequencer => View::Sequencer,
-            PageButton::Env if self.view != View::Envelope && self.part().has_envelope() => {
-                View::Envelope
-            }
-            PageButton::Env if !self.part().has_envelope() => self.view,
+            PageButton::Env if self.view != View::Envelope => View::Envelope,
             _ => View::Scope,
         };
         if self.view != next {
@@ -334,30 +354,28 @@ impl Navigation {
         if presets == 0 {
             return;
         }
-        if let Some(slot) = self.insert_slot() {
-            let kind = &mut self.insert_kinds[self.focus.index()][usize::from(slot)];
-            *kind = kind.turn(presets);
-            return;
-        }
-        if self.view == View::Channel {
-            let assignment = &mut self.assignments[self.focus.index()];
-            let old = assignment.part;
-            assignment.part.turn(presets);
-            if assignment.part != old {
-                assignment.generation = assignment.generation.wrapping_add(1);
+        match self.view.presets(self.insert_slot()) {
+            PresetRole::Insert(slot) => {
+                let kind = &mut self.insert_kinds[self.focus.index()][usize::from(slot)];
+                *kind = kind.turn(presets);
             }
-        } else {
-            let previous_channel = self.focus;
-            self.focus.turn(presets);
-            if self.focus != previous_channel || self.view == View::Envelope {
-                self.bass_slot = None;
+            PresetRole::Instrument => {
+                let assignment = &mut self.assignments[self.focus.index()];
+                let old = assignment.part;
+                assignment.part.turn(presets);
+                if assignment.part != old {
+                    assignment.generation = assignment.generation.wrapping_add(1);
+                }
             }
-            if self.view == View::Envelope
-                || (self.view == View::SampleEdit && self.part() != Part::Sampler)
-                || (self.view == View::VoiceMode && !self.part().is_polyphonic())
-                || (self.view == View::Lfo && self.part() != Part::Bass)
-            {
-                self.view = View::Scope;
+            PresetRole::Channel => {
+                let previous = self.focus;
+                self.focus.turn(presets);
+                if self.focus != previous {
+                    self.bass_slot = None;
+                    if matches!(self.view, View::SampleEdit | View::VoiceMode) {
+                        self.view = View::editor(self.part());
+                    }
+                }
             }
         }
     }
@@ -385,8 +403,29 @@ mod tests {
             );
             assert_eq!(
                 view.shows_trace(Part::Tr909),
-                matches!(view, View::Scope | View::Fx | View::Envelope)
+                matches!(view, View::Scope | View::Fx)
             );
+        }
+    }
+
+    #[test]
+    fn presets_keep_the_channel_page_across_duplicate_parts_and_drum_kits() {
+        for (button, view) in [
+            (PageButton::Fx, View::Fx),
+            (PageButton::Env, View::Envelope),
+            (PageButton::Lfo, View::Lfo),
+            (PageButton::Arp, View::Arp),
+            (PageButton::Seq, View::Sequencer),
+        ] {
+            let mut nav = Navigation::INITIAL;
+            nav.press(button);
+            for channel in [Channel::Two, Channel::Three, Channel::Four, Channel::One] {
+                nav.turn(0, 1);
+                assert_eq!((nav.focus, nav.view), (channel, view));
+                assert_eq!(nav.view.presets(nav.insert_slot()), PresetRole::Channel);
+            }
+            nav.turn(0, -1);
+            assert_eq!((nav.focus, nav.view), (Channel::Four, view));
         }
     }
 
@@ -561,7 +600,7 @@ mod tests {
         nav.press(PageButton::Home);
         assert_eq!(nav.view, View::Scope);
         nav.press(PageButton::Env);
-        assert_eq!(nav.view, View::Scope);
+        assert_eq!(nav.view, View::Envelope);
         nav.press(PageButton::Seq);
         nav.press(PageButton::Fx);
         assert_eq!(nav.view, View::Fx);

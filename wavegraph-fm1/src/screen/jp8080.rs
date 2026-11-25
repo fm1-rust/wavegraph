@@ -1,35 +1,27 @@
 //! JP-8080 rack panel above and below the channel's full-width oscilloscope.
 
-use super::{BAND, GRID, mixer::Band, selector::Selector};
+use super::{BAND, mixer::Band, selector::Selector};
 use crate::{
     envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
 };
 use core::fmt::Write;
+use fm1_graphics::Rgb565;
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
     bsp::display::{Display, Error, SIZE},
     time::Clock,
 };
 
-pub(super) const FACE: Rgb565 = Rgb565::new(3, 8, 13);
-pub(super) const EDGE: Rgb565 = Rgb565::new(8, 37, 25);
-pub(super) const AMBER: Rgb565 = Rgb565::new(31, 41, 6);
-pub(super) const PRINT: Rgb565 = Rgb565::new(22, 50, 28);
+pub(super) const FACE: Rgb565 = super::style::JP8080.face;
+pub(super) const EDGE: Rgb565 = super::style::JP8080.muted;
+pub(super) const AMBER: Rgb565 = super::style::JP8080.accent;
+pub(super) const PRINT: Rgb565 = super::style::JP8080.ink;
 const BLACK: Rgb565 = Rgb565::new(1, 3, 4);
-const RIM: Rgb565 = Rgb565::new(10, 23, 19);
+const RIM: Rgb565 = super::style::JP8080.surface;
 const LCD: Rgb565 = Rgb565::new(12, 43, 24);
-pub(super) const STYLE: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(1, 6, 7),
-    grid: Rgb565::new(2, 14, 12),
-    center: Rgb565::new(4, 23, 18),
-    trace: Rgb565::new(14, 57, 25),
-    grid_x: GRID,
-    grid_y: GRID,
-};
 
 #[derive(Default)]
 pub(super) struct Panel {
@@ -63,12 +55,10 @@ impl Panel {
                 );
                 band.rect(Point::new(0, 30), Size::new(240, 1), ink(EDGE));
                 band.rect(Point::new(0, 31), Size::new(240, 1), ink(BLACK));
-                band.compose_badge(&mut selector.badge);
                 lcd.write_rect_buffered(0, y, SIZE, 8, band.pixels.as_flattened())
                     .await?;
             }
             wordmark(pixels, ink(FACE), ink(AMBER));
-            selector.badge.compose(7, 2, 100, &mut pixels[..1600]);
             lcd.write_rect_buffered(7, 2, 100, 16, pixels[..1600].as_flattened())
                 .await?;
         }

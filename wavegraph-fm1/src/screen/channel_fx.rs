@@ -1,8 +1,8 @@
 //! Two channel insert slots above a pre-fader scope, with the shared sends below it.
 
 use super::{
-    BAND, Selector, WIDTH,
-    mixer::{BACKGROUND, Band, LABEL, OUTLINE, POINTER, SELECTED, percent},
+    BAND, InstrumentStyle, Selector, WIDTH,
+    mixer::{Band, RackColors, percent},
 };
 use crate::{
     firmware::Labels,
@@ -13,7 +13,6 @@ use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_graphics::palette;
 use fm1_rticx::{
     bsp::display::{Display, Error, SIZE},
     time::Clock,
@@ -41,9 +40,10 @@ impl Rack {
         clock: &mut Clock,
         pixels: &mut [[u8; 2]; BAND * WIDTH],
         labels: &Labels,
-        entering: bool,
+        (theme, entering): (&InstrumentStyle, bool),
         selector: &mut Selector,
     ) -> Result<(), Error> {
+        let colors = RackColors::channel(theme);
         let strip = labels.mixer.0[labels.channel.index()];
         let controls = Controls {
             inserts: labels.inserts,
@@ -75,13 +75,13 @@ impl Rack {
             }
             // A trim change updates the header without erasing the overload lamp.
             let width = if y < 16 && !entering { SIZE - 12 } else { SIZE };
-            let mut band = Band::new(pixels, 0, y, width, BAND as u16, BACKGROUND)
+            let mut band = Band::new(pixels, 0, y, width, BAND as u16, theme.face)
                 .with_panel_type(super::lettering::panel_type(labels.focus));
             match y {
                 0..16 => {
                     let title = heapless::format!(24; "CH{} / {} FX", labels.channel.index() + 1, labels.focus.name())
                         .expect("channel and instrument title");
-                    band.title(&title, Point::new(8, 1), palette::WHITE);
+                    band.title(&title, Point::new(8, 1), colors.ink);
                     band.label(
                         if controls.half_gain {
                             "OUT HALF"
@@ -90,7 +90,7 @@ impl Rack {
                         },
                         Point::new(222, 3),
                         Alignment::Right,
-                        LABEL,
+                        colors.label,
                     );
                 }
                 16..56 => insert(
@@ -99,6 +99,7 @@ impl Rack {
                     "1",
                     controls.inserts[0],
                     controls.selected == Some(0),
+                    &colors,
                 ),
                 56..96 => insert(
                     &mut band,
@@ -106,11 +107,21 @@ impl Rack {
                     "2",
                     controls.inserts[1],
                     controls.selected == Some(1),
+                    &colors,
                 ),
                 96..112 => {
-                    band.title("POST FX", Point::new(8, 97), POINTER);
-                    band.label("PRE-FADER", Point::new(65, 99), Alignment::Left, LABEL);
-                    band.rect(Point::new(0, 111), Size::new(u32::from(SIZE), 1), OUTLINE);
+                    band.title("POST FX", Point::new(8, 97), colors.accent);
+                    band.label(
+                        "PRE-FADER",
+                        Point::new(65, 99),
+                        Alignment::Left,
+                        colors.label,
+                    );
+                    band.rect(
+                        Point::new(0, 111),
+                        Size::new(u32::from(SIZE), 1),
+                        theme.muted,
+                    );
                     band.label(
                         if controls.selected.is_some() {
                             "PRESETS FX"
@@ -119,17 +130,17 @@ impl Rack {
                         },
                         Point::new(231, 99),
                         Alignment::Right,
-                        LABEL,
+                        colors.label,
                     );
                 }
                 _ => {
                     let ink = if controls.selected.is_some() {
-                        LABEL
+                        colors.label
                     } else {
-                        palette::CYAN
+                        colors.accent
                     };
                     if controls.selected.is_none() {
-                        band.rect(Point::new(4, 225), Size::new(232, 14), SELECTED);
+                        band.rect(Point::new(4, 225), Size::new(232, 14), colors.selected);
                     }
                     band.label(
                         if controls.selected.is_some() {
@@ -156,7 +167,6 @@ impl Rack {
                 }
             }
             band.compose(selector);
-            band.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(0, y, width, BAND as u16, band.pixels.as_flattened())
                 .await?;
         }
@@ -170,11 +180,18 @@ impl Rack {
     clippy::arithmetic_side_effects,
     reason = "Control ranges and both rack rows fit u32 and i32"
 )]
-fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
-    let ink = band.rack_row(y, selected);
-    band.label(slot, Point::new(11, y + 7), Alignment::Left, LABEL);
+fn insert(
+    band: &mut Band<'_>,
+    y: i32,
+    slot: &str,
+    fx: Insert,
+    selected: bool,
+    colors: &RackColors,
+) {
+    let ink = band.rack_row(y, selected, colors);
+    band.label(slot, Point::new(11, y + 7), Alignment::Left, colors.label);
     if fx == Insert::None {
-        band.title("NONE", Point::new(26, y + 5), LABEL);
+        band.title("NONE", Point::new(26, y + 5), colors.label);
         return;
     }
     let name = match fx {
@@ -185,15 +202,15 @@ fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
         Insert::Eq(_) => "EQ",
         Insert::None => "NONE",
     };
-    band.title(name, Point::new(26, y + 5), palette::WHITE);
+    band.title(name, Point::new(26, y + 5), colors.ink);
     band.label(
         if fx.enabled() { "ON" } else { "BYPASS" },
         Point::new(26, y + 23),
         Alignment::Left,
-        if fx.enabled() { ink } else { LABEL },
+        if fx.enabled() { ink } else { colors.label },
     );
     let mut dial = |x, name, position, value: &str| {
-        band.rack_dial(Point::new(x, y), name, position, value, ink);
+        band.rack_dial(Point::new(x, y), name, position, value, ink, colors);
     };
     match fx {
         Insert::None => (),

@@ -7,9 +7,9 @@ use crate::{
     envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion, Timing},
     instrument::Part,
-    panel::{CHANNELS, Channel, View, preset_age},
-    scope::{Damage, GRID, Palette, Pen, Sweep, TRAIL},
-    sequencer::{BankPosition, Position, SeqPage, Sequencer},
+    panel::{CHANNELS, Channel, PresetRole, View, preset_age},
+    scope::{Damage, GRID, Palette, Pen, Sweep},
+    sequencer::{BankPosition, Position, SeqPage},
 };
 use core::{
     future::{Future, poll_fn},
@@ -47,6 +47,8 @@ mod sampler;
 mod selector;
 mod sequencer;
 mod splash;
+mod style;
+use style::InstrumentStyle;
 mod tb303;
 mod tr808;
 
@@ -54,42 +56,9 @@ use envelope_plot::Plot;
 use selector::{Menu, Selector};
 
 const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
-const STYLE: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(0, 2, 1),
-    grid: Rgb565::new(2, 12, 4),
-    center: Rgb565::new(4, 21, 7),
-    trace: Rgb565::new(9, 51, 11),
-    grid_x: GRID,
-    grid_y: GRID,
-};
-const ENV_STYLE: WaveformStyle = WaveformStyle {
-    trace: Rgb565::new(18, 63, 20),
-    ..STYLE
-};
-const SILVER: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(24, 49, 24),
-    grid: Rgb565::new(21, 43, 21),
-    center: Rgb565::new(17, 35, 17),
-    trace: Rgb565::new(4, 8, 4),
-    grid_x: GRID,
-    grid_y: GRID,
-};
-// Inspired by Korg's modern M1 plug-in: charcoal housing, electric lime
-// selection accents and a cool-blue numeric readout. Not a copied skin.
-const ORGAN_STYLE: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(3, 5, 7),
-    grid: Rgb565::new(5, 13, 9),
-    center: Rgb565::new(8, 22, 11),
-    trace: Rgb565::new(22, 59, 7),
-    grid_x: GRID,
-    grid_y: GRID,
-};
-const ORGAN_LIME: Rgb565 = Rgb565::new(25, 63, 5);
-const ORGAN_MUTED: Rgb565 = Rgb565::new(12, 26, 18);
-const MENU_TICKS: u32 = 100; // One second after the last PRESETS detent.
-const OXIDE_RED: Rgb565 = Rgb565::new(15, 6, 3);
-const BASS_MUTED: Rgb565 = Rgb565::new(7, 15, 8);
-const LANE_INKS: [Rgb565; 3] = [SILVER.trace, OXIDE_RED, Rgb565::new(1, 18, 15)];
+// The timing monitor uses the original green CRT.
+const STYLE: WaveformStyle = style::MONO.scope;
+const MENU_TICKS: u32 = 100;
 const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
@@ -118,13 +87,14 @@ enum Page {
     Scope(Channel, Part, wavegraph_organ::VoiceMode),
     Arp(Channel, Part),
     VoiceMode(Channel, Part, wavegraph_organ::VoiceMode),
-    Lfo(Channel, crate::lfo::Controls),
+    Lfo(Channel, Part, crate::lfo::Controls),
     Fx(Channel, Part),
     MasterFx,
     Mixer,
     Sequencer(SeqPage, Channel, Part),
-    Envelope(Part, EnvelopeTarget, EnvelopeControls, bool, i16),
-    BassEnvelope(Controls, Option<Knob>),
+    Envelope(Channel, Part, EnvelopeTarget, EnvelopeControls, bool, i16),
+    BassEnvelope(Channel, Controls, Option<Knob>),
+    DrumEnvelope(Channel, Part, drums::Envelope),
 }
 
 pub(super) struct Screen {
@@ -146,6 +116,7 @@ pub(super) struct Screen {
     sequence: sequencer::Grid,
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
+    badge: Option<Channel>,
     dot: Option<Severity>,
     dot_background: Rgb565,
     page: Option<Page>,
@@ -178,6 +149,7 @@ impl Screen {
             arp: arp::Panel::default(),
             sequence: sequencer::Grid::new(),
             page: None,
+            badge: None,
             dot: None,
             dot_background: STYLE.background,
             sweep: None,
@@ -186,7 +158,6 @@ impl Screen {
     }
 
     fn change_view(&mut self, style: WaveformStyle) {
-        self.selector.badge.change_view(style.background);
         self.dot = None;
         self.dot_background = style.background;
         // A new page can reuse the same colors over different artwork.
@@ -221,6 +192,7 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         labels: &Labels,
+        theme: &InstrumentStyle,
         target: EnvelopeTarget,
         controls: EnvelopeControls,
     ) -> Result<(), Error> {
@@ -233,48 +205,26 @@ impl Screen {
         } else {
             0
         };
-        let page = Page::Envelope(focus, target, controls, show_mode_hint, cents);
+        let page = Page::Envelope(
+            labels.channel,
+            focus,
+            target,
+            controls,
+            show_mode_hint,
+            cents,
+        );
         let previous = self.page.replace(page);
         if previous != Some(page) {
-            let entering = !matches!(previous, Some(Page::Envelope(part, ..)) if part == focus);
-            let rack = matches!(focus, Part::Supersaw | Part::Wavetable | Part::Sampler);
-            let (style, title, ink) = if focus == Part::Organ {
-                (
-                    WaveformStyle {
-                        trace: ORGAN_LIME,
-                        ..ORGAN_STYLE
-                    },
-                    b"ORGAN VCA ENV".as_slice(),
-                    ORGAN_LIME,
-                )
-            } else if focus == Part::Sampler {
-                (sampler::STYLE, b"".as_slice(), sampler::LCD)
-            } else if focus == Part::Fm {
-                (fm::PANEL_STYLE, b"".as_slice(), fm::GREEN)
-            } else if focus == Part::Supersaw {
-                (jp8080::STYLE, b"".as_slice(), jp8080::AMBER)
-            } else if focus == Part::Wavetable {
-                (microwave::STYLE, b"".as_slice(), microwave::LIME)
+            let entering = !matches!(previous, Some(Page::Envelope(ch, part, ..)) if (ch, part) == (labels.channel, focus));
+            let style = theme.scope;
+            let (face, label, ink, unit) = (theme.face, theme.ink, theme.accent, theme.muted);
+            let header = if matches!(focus, Part::Organ | Part::Mono) {
+                16
             } else {
-                (ENV_STYLE, b"VCA ENVELOPE".as_slice(), palette::GREEN)
-            };
-            let (face, label, unit, header) = if focus == Part::Supersaw {
-                (jp8080::FACE, jp8080::PRINT, jp8080::EDGE, 32)
-            } else if focus == Part::Wavetable {
-                (microwave::FACE, microwave::PRINT, microwave::PRINT, 32)
-            } else if focus == Part::Sampler {
-                (sampler::FACE, sampler::PRINT, sampler::LCD, 32)
-            } else if focus == Part::Fm {
-                (fm::FACE, fm::PRINT, fm::GREEN, 32)
-            } else {
-                (style.background, palette::WHITE, palette::MUTED, 16)
+                32
             };
             if entering {
-                self.change_view(style);
-                if rack {
-                    self.dot_background = face;
-                    *self.text = TextGrid::with_background(face);
-                }
+                self.change_view(theme.panel());
             }
             let mut trace = controls.trace();
             if target == EnvelopeTarget::Pitch {
@@ -296,7 +246,7 @@ impl Screen {
                     .await?;
             }
             if entering
-                || !matches!(previous, Some(Page::Envelope(_, old, _, hint, depth)) if old == target && hint == show_mode_hint && depth == cents)
+                || !matches!(previous, Some(Page::Envelope(_, _, old, _, hint, depth)) if old == target && hint == show_mode_hint && depth == cents)
             {
                 match focus {
                     Part::Sampler => {
@@ -306,7 +256,7 @@ impl Screen {
                             b"SAMPLER VCF ENV"
                         };
                         self.text.text(0, 0, title, ink);
-                        self.text.text(0, 1, b"SEL  AMP / FILTER", sampler::PRINT);
+                        self.text.text(0, 1, b"SEL  AMP / FILTER", label);
                     }
                     Part::Fm => {
                         self.text.text(
@@ -319,12 +269,11 @@ impl Screen {
                             },
                             ink,
                         );
-                        self.text.text(0, 1, b"SEL NEXT           ", fm::PRINT);
+                        self.text.text(0, 1, b"SEL NEXT           ", label);
                         if target == EnvelopeTarget::Pitch {
-                            self.text.text(9, 1, b"ALG", fm::GREEN);
-                            self.text
-                                .signed_number(12, 1, 5, i32::from(cents), fm::PRINT);
-                            self.text.text(17, 1, b"ct", fm::PRINT);
+                            self.text.text(9, 1, b"ALG", ink);
+                            self.text.signed_number(12, 1, 5, i32::from(cents), label);
+                            self.text.text(17, 1, b"ct", label);
                         }
                     }
                     Part::Wavetable => {
@@ -334,7 +283,8 @@ impl Screen {
                     Part::Supersaw => {
                         jp8080::envelope_header(lcd, clock, self.strip, target, entering).await?
                     }
-                    _ => self.text.text(0, 0, title, ink),
+                    Part::Organ => self.text.text(0, 0, b"ORGAN VCA ENV", ink),
+                    _ => self.text.text(0, 0, b"VCA ENVELOPE", ink),
                 }
             }
             let adsr = controls.adsr();
@@ -350,11 +300,13 @@ impl Screen {
         self.text.paint_async(lcd, clock).await
     }
 
-    fn bass_envelope_labels(&mut self, controls: Controls, selected: Option<Knob>) {
-        let (ink, muted) = (
-            self.selector.shade(OXIDE_RED),
-            self.selector.shade(BASS_MUTED),
-        );
+    fn bass_envelope_labels(
+        &mut self,
+        controls: Controls,
+        selected: Option<Knob>,
+        theme: &InstrumentStyle,
+    ) {
+        let (ink, muted) = (theme.accent, theme.muted);
         self.text.text(0, 0, b"TB-303", ink);
         self.text
             .text(7, 0, if selected.is_some() { b"ALG" } else { b"   " }, ink);
@@ -381,32 +333,38 @@ impl Screen {
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
-        controls: Controls,
-        selected: Option<Knob>,
+        labels: &Labels,
+        theme: &InstrumentStyle,
     ) -> Result<(), Error> {
-        let page = Page::BassEnvelope(controls, selected);
+        let (controls, selected) = (labels.bass, labels.bass_knob);
+        let lanes = style::ACID_LANES;
+        let page = Page::BassEnvelope(labels.channel, controls, selected);
         let previous = self.page.replace(page);
         if previous != Some(page) {
-            if !matches!(previous, Some(Page::BassEnvelope(..))) {
-                self.change_view(SILVER);
+            let entering =
+                !matches!(previous, Some(Page::BassEnvelope(ch, ..)) if ch == labels.channel);
+            if entering {
+                self.change_view(theme.panel());
                 lcd.as_async(clock)?
-                    .fill_rect(0, 0, SIZE, SIZE, SILVER.background.into_storage())
+                    .fill_rect(0, 0, SIZE, SIZE, theme.face.into_storage())
                     .await?;
                 for lane in &mut *self.lanes {
                     lane.invalidate();
                 }
-                self.text.text(12, 0, b"ENV", OXIDE_RED);
+                self.text.text(12, 0, b"ENV", theme.accent);
                 for (i, x) in bass_env::STRIKES.into_iter().enumerate() {
                     let label: &[u8] = if i == 0 { b"PLAIN" } else { b"A" };
                     self.text
-                        .text((usize::from(LANE_X) + x) / 12, 3, label, BASS_MUTED);
+                        .text((usize::from(LANE_X) + x) / 12, 3, label, theme.muted);
                 }
                 for (i, label) in [b"VCF", b"ACC", b"VCA"].into_iter().enumerate() {
-                    self.text.text(0, 5 + i * 3, label, LANE_INKS[i]);
+                    self.text.text(0, 5 + i * 3, label, lanes[i]);
                 }
-                self.text.text(0, 14, b"PREVIEW    96 MS/DIV", BASS_MUTED);
+                self.text.text(0, 14, b"PREVIEW    96 MS/DIV", theme.muted);
             }
-            if !matches!(previous, Some(Page::BassEnvelope(old, _)) if old == controls) {
+            if entering
+                || !matches!(previous, Some(Page::BassEnvelope(_, old, _)) if old == controls)
+            {
                 for (i, (lane, trace)) in self
                     .lanes
                     .iter_mut()
@@ -414,10 +372,10 @@ impl Screen {
                     .enumerate()
                 {
                     let style = WaveformStyle {
-                        trace: LANE_INKS[i],
+                        trace: lanes[i],
                         grid_y: 0,
-                        center: SILVER.grid,
-                        ..SILVER
+                        center: theme.scope.grid,
+                        ..theme.scope
                     };
                     lane.paint(
                         lcd,
@@ -430,7 +388,7 @@ impl Screen {
                     .await?;
                 }
             }
-            self.bass_envelope_labels(controls, selected);
+            self.bass_envelope_labels(controls, selected, theme);
         }
         self.text.paint_async(lcd, clock).await
     }
@@ -440,29 +398,19 @@ impl Screen {
         lcd: &mut Display,
         clock: &mut Clock,
         view: SeqPage,
-        seq: Sequencer,
-        part: Part,
+        labels: &Labels,
+        theme: &InstrumentStyle,
         playback: (Option<Position>, BankPosition),
     ) -> Result<(), Error> {
         let (position, bank) = playback;
-        let style = sequencer::style(part);
-        let ink = sequencer::ink(part);
-        let muted = if part == Part::Tr909 {
-            drums::GRAPHITE
-        } else {
-            palette::MUTED
-        };
-        let green = if part == Part::Tr909 {
-            Rgb565::new(3, 25, 7)
-        } else {
-            palette::GREEN
-        };
+        let (seq, part) = (labels.seq, labels.focus);
+        let style = theme.panel();
+        let (ink, muted, active) = (theme.ink, theme.muted, theme.accent);
         let page = Page::Sequencer(view, seq.channel, part);
         if self.page.replace(page) != Some(page) {
             self.change_view(style);
-            self.selector
-                .badge
-                .fill_rows(&mut lcd.as_async(clock)?, 0..SIZE, style.background)
+            lcd.as_async(clock)?
+                .fill_rect(0, 0, SIZE, SIZE, style.background.into_storage())
                 .await?;
             self.text.text(
                 12,
@@ -477,7 +425,7 @@ impl Screen {
             } else {
                 self.text.text(0, 4, b"TEMPO 2/2", muted);
                 self.text.text(0, 6, b"MASTER TEMPO", ink);
-                self.text.text(0, 8, b"KNOB 3", green);
+                self.text.text(0, 8, b"KNOB 3", active);
                 self.text.text(0, 14, b"SELECT FOR PATTERN", muted);
             }
             self.text.text(8, 1, b"BPM", muted);
@@ -494,9 +442,9 @@ impl Screen {
             Part::Fm => b"SEQ FM",
             Part::Sampler => b"SEQ SAMPLER",
         };
-        self.selector.badge.header_text(self.text, 0, title, ink);
-        self.selector.badge.header_text(
-            self.text,
+        self.text.text(0, 0, title, ink);
+        self.text.text(
+            0,
             1,
             if view == SeqPage::Record {
                 b"REC "
@@ -510,7 +458,7 @@ impl Screen {
             if view == SeqPage::Record {
                 palette::RED
             } else if seq.transport.playing() {
-                green
+                active
             } else {
                 palette::RED
             },
@@ -521,7 +469,7 @@ impl Screen {
             12,
             1,
             if enabled { b"ON " } else { b"OFF" },
-            if enabled { green } else { palette::MUTED },
+            if enabled { active } else { muted },
         );
         if view != SeqPage::Tempo {
             self.sequence
@@ -530,7 +478,7 @@ impl Screen {
                     clock,
                     self.text,
                     self.strip,
-                    (seq, part),
+                    (seq, part, theme),
                     position,
                     bank,
                 )
@@ -634,7 +582,23 @@ impl Screen {
         severity: Option<Severity>,
         motion: Motion,
     ) -> Result<(), Error> {
-        self.paint_page(lcd, clock, frame, motion).await?;
+        let labels = &frame.labels;
+        let theme = InstrumentStyle::for_part(labels.focus);
+        let feedback = labels
+            .preset_since
+            .and_then(|since| preset_age(since, ticks()));
+        let channel = feedback
+            .filter(|_| labels.view.presets(labels.insert_slot) == PresetRole::Channel)
+            .map(|_| labels.channel);
+        if self.badge.is_some() && channel.is_none() {
+            self.page = None; // Restore the covered header from its current instrument state.
+        }
+        self.badge = channel;
+        self.paint_page(lcd, clock, frame, motion, theme, feedback)
+            .await?;
+        if let Some(channel) = channel {
+            badge::paint(lcd, clock, self.strip, channel, theme).await?;
+        }
         if severity != self.dot {
             let color = match severity {
                 None => self.dot_background,
@@ -668,32 +632,22 @@ impl Screen {
         clock: &mut Clock,
         frame: &Frame,
         motion: Motion,
+        theme: &InstrumentStyle,
+        elapsed: Option<u32>,
     ) -> Result<(), Error> {
         let labels = frame.labels;
-        let elapsed = labels
-            .preset_since
-            .and_then(|since| preset_age(since, ticks()));
-        self.selector
-            .badge
-            .select(
-                lcd,
-                clock,
-                self.strip,
-                self.text,
-                (labels.view == View::Scope && elapsed.is_some()).then_some(labels.channel),
-            )
-            .await?;
         let menu = if elapsed.is_some_and(|age| age < MENU_TICKS) {
-            match labels.view {
-                View::Scope => Some(Menu::Channels {
+            match labels.view.presets(labels.insert_slot) {
+                PresetRole::Channel if labels.view == View::Scope => Some(Menu::Channels {
                     parts: labels.assignments,
                     focus: labels.channel,
                 }),
-                View::Channel => Some(Menu::Instruments(labels.focus)),
-                View::Fx => labels
-                    .insert_slot
-                    .map(|slot| Menu::Effects(labels.inserts[usize::from(slot)].kind())),
-                _ => None,
+                PresetRole::Instrument => Some(Menu::Instruments(labels.focus)),
+                PresetRole::Insert(slot) => Some(Menu::Effects(
+                    labels.focus,
+                    labels.inserts[usize::from(slot)].kind(),
+                )),
+                PresetRole::Channel => None,
             }
         } else {
             None
@@ -708,8 +662,8 @@ impl Screen {
                     lcd,
                     clock,
                     page,
-                    labels.seq,
-                    labels.focus,
+                    &labels,
+                    theme,
                     (motion.position, motion.banks[labels.seq.channel.index()]),
                 )
                 .await;
@@ -721,38 +675,32 @@ impl Screen {
             }
             let entering = !matches!(self.page, Some(Page::VoiceMode(channel, part, _)) if (channel, part) == (labels.channel, labels.focus));
             if entering {
-                self.change_view(match labels.focus {
-                    Part::Organ => ORGAN_STYLE,
-                    Part::Fm => fm::PANEL_STYLE,
-                    Part::Supersaw => jp8080::STYLE,
-                    _ => microwave::STYLE,
-                });
+                self.change_view(theme.panel());
             }
-            let mut draw = pin!(polyphony::paint(lcd, clock, self.strip, &labels, entering));
+            let mut draw = pin!(polyphony::paint(
+                lcd, clock, self.strip, &labels, theme, entering
+            ));
             poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
             self.page = Some(page);
             return Ok(());
         }
         if labels.view == View::Lfo {
-            let page = Page::Lfo(labels.channel, labels.lfo);
+            let page = Page::Lfo(labels.channel, labels.focus, labels.lfo);
             if self.page == Some(page) {
                 return Ok(());
             }
             let previous = match self.page {
-                Some(Page::Lfo(channel, c)) if channel == labels.channel => Some(c),
+                Some(Page::Lfo(channel, part, c))
+                    if (channel, part) == (labels.channel, labels.focus) =>
+                {
+                    Some(c)
+                }
                 _ => {
-                    self.change_view(SILVER);
+                    self.change_view(theme.panel());
                     None
                 }
             };
-            let mut draw = pin!(lfo::paint(
-                lcd,
-                clock,
-                self.strip,
-                labels.channel,
-                labels.lfo,
-                previous
-            ));
+            let mut draw = pin!(lfo::paint(lcd, clock, self.strip, &labels, theme, previous));
             poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
             self.page = Some(page);
             return Ok(());
@@ -761,10 +709,7 @@ impl Screen {
             let page = Page::Arp(labels.channel, labels.focus);
             let entering = self.page.replace(page) != Some(page);
             if entering {
-                self.change_view(WaveformStyle {
-                    background: arp::Colors::for_part(labels.focus).face,
-                    ..STYLE
-                });
+                self.change_view(theme.panel());
             }
             return self
                 .arp
@@ -774,7 +719,7 @@ impl Screen {
                     self.strip,
                     &labels,
                     motion.arp_notes[labels.channel.index()],
-                    entering,
+                    (theme, entering),
                 )
                 .await;
         }
@@ -794,7 +739,6 @@ impl Screen {
                     self.strip,
                     (labels.fx, selected),
                     motion.reduction,
-                    &mut self.selector.badge,
                 )
                 .await;
         }
@@ -808,10 +752,10 @@ impl Screen {
         if labels.view == View::Fx {
             let page = Page::Fx(labels.channel, labels.focus);
             let entering = self.page.replace(page) != Some(page);
-            let style = self.selector.style(STYLE);
+            let style = self.selector.style(theme.scope);
             if entering {
                 self.change_view(style);
-                self.dot_background = self.selector.shade(mixer::BACKGROUND);
+                self.dot_background = self.selector.shade(theme.face);
             }
             {
                 let mut draw = pin!(self.channel_fx.paint(
@@ -819,7 +763,7 @@ impl Screen {
                     clock,
                     self.strip,
                     &labels,
-                    entering,
+                    (theme, entering),
                     self.selector
                 ));
                 poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
@@ -832,22 +776,13 @@ impl Screen {
                 .map(|y| (rows.start + 2 + u16::from(y) * (height - 4) / HEIGHT as u16) as u8);
             let center = rows.start + height / 2;
             return self
-                .paint_scope(
-                    lcd,
-                    clock,
-                    Sweep { trace, head },
-                    style,
-                    Part::Mono,
-                    (rows, center),
-                )
+                .paint_scope(lcd, clock, Sweep { trace, head }, theme, (rows, center))
                 .await;
         }
         if labels.view == View::Envelope {
             match labels.focus {
                 Part::Bass => {
-                    return self
-                        .paint_bass_envelope(lcd, clock, labels.bass, labels.bass_knob)
-                        .await;
+                    return self.paint_bass_envelope(lcd, clock, &labels, theme).await;
                 }
                 Part::Mono
                 | Part::Organ
@@ -878,14 +813,32 @@ impl Screen {
                         }
                         _ => (EnvelopeTarget::Amp, labels.voice_envelope),
                     };
-                    let mut page = pin!(self.paint_envelope(lcd, clock, &labels, target, controls));
+                    let mut page =
+                        pin!(self.paint_envelope(lcd, clock, &labels, theme, target, controls));
                     return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
                 }
-                Part::Tr808 | Part::Tr909 => (),
+                Part::Tr808 | Part::Tr909 => {
+                    let state = drums::Envelope::new(&labels, motion.drums[labels.channel.index()]);
+                    let page = Page::DrumEnvelope(labels.channel, labels.focus, state);
+                    let previous = match self.page.replace(page) {
+                        Some(Page::DrumEnvelope(ch, part, old))
+                            if (ch, part) == (labels.channel, labels.focus) =>
+                        {
+                            Some(old)
+                        }
+                        _ => {
+                            self.change_view(theme.panel());
+                            None
+                        }
+                    };
+                    let mut draw =
+                        pin!(state.paint(lcd, clock, self.strip, &labels, theme, previous));
+                    return poll_fn(|cx| poll_page(draw.as_mut(), cx)).await;
+                }
             }
         }
         // Poll the instrument face separately to keep pi32v2 branches in range.
-        let mut page = pin!(self.paint_instrument(lcd, clock, frame, motion, head));
+        let mut page = pin!(self.paint_instrument(lcd, clock, frame, motion, head, theme));
         poll_fn(|cx| poll_page(page.as_mut(), cx)).await
     }
 
@@ -896,6 +849,7 @@ impl Screen {
         frame: &Frame,
         motion: Motion,
         head: Option<usize>,
+        theme: &InstrumentStyle,
     ) -> Result<(), Error> {
         let labels = frame.labels;
         let bass = labels.focus == Part::Bass;
@@ -905,47 +859,9 @@ impl Screen {
         let saw = labels.focus == Part::Supersaw;
         let wave = labels.focus == Part::Wavetable;
         let fm = labels.focus == Part::Fm;
-        let (style, ink, muted, bright) = if bass {
-            (SILVER, OXIDE_RED, BASS_MUTED, SILVER.trace)
-        } else if fm {
-            (fm::STYLE, fm::PRINT, fm::GREEN, fm::STYLE.trace)
-        } else if saw {
-            (
-                jp8080::STYLE,
-                jp8080::AMBER,
-                jp8080::EDGE,
-                jp8080::STYLE.trace,
-            )
-        } else if wave {
-            (
-                microwave::STYLE,
-                microwave::PRINT,
-                microwave::FACE,
-                microwave::STYLE.trace,
-            )
-        } else if sampler {
-            (sampler::STYLE, sampler::PRINT, sampler::FACE, sampler::LCD)
-        } else if labels.focus == Part::Tr808 && drums {
-            (
-                drums::STYLE_808,
-                drums::HOT,
-                drums::CREAM,
-                drums::STYLE_808.trace,
-            )
-        } else if drums {
-            (
-                drums::STYLE,
-                drums::ORANGE,
-                drums::GRAPHITE,
-                drums::STYLE.trace,
-            )
-        } else if organ {
-            (ORGAN_STYLE, ORGAN_LIME, ORGAN_MUTED, palette::CYAN)
-        } else {
-            (STYLE, palette::GREEN, palette::MUTED, palette::WHITE)
-        };
-        let style = self.selector.style(style);
-        let [ink, muted, bright] = [ink, muted, bright].map(|color| self.selector.shade(color));
+        let style = self.selector.style(theme.scope);
+        let [ink, muted, bright] =
+            [theme.accent, theme.muted, theme.ink].map(self.selector.shader());
         let page = Page::Scope(labels.channel, labels.focus, labels.mode);
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
@@ -985,28 +901,16 @@ impl Screen {
             (16, 16)
         };
         if changed_page {
-            if sampler {
-                self.dot_background = self.selector.shade(sampler::FACE);
-            } else if bass {
-                self.dot_background = self.selector.shade(tb303::METAL);
-            } else if fm {
-                self.dot_background = self.selector.shade(fm::FACE);
-            } else if saw {
-                self.dot_background = self.selector.shade(jp8080::FACE);
-            } else if wave {
-                self.dot_background = self.selector.shade(microwave::FACE);
-            }
+            self.dot_background = self.selector.shade(theme.face);
             let mut lcd = lcd.as_async(clock)?;
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
-                self.selector
-                    .badge
-                    .fill_rows(&mut lcd, y..y + height, self.dot_background)
-                    .await?;
+                if height > 0 {
+                    lcd.fill_rect(0, y, SIZE, height, self.dot_background.into_storage())
+                        .await?;
+                }
             }
             if bass {
-                self.selector
-                    .badge
-                    .fill_rows(&mut lcd, header - 1..header, muted)
+                lcd.fill_rect(0, header - 1, SIZE, 1, muted.into_storage())
                     .await?;
             }
         }
@@ -1018,15 +922,8 @@ impl Screen {
         } else {
             SIZE / 2
         };
-        self.paint_scope(
-            lcd,
-            clock,
-            sweep,
-            style,
-            labels.focus,
-            (header..SIZE - footer, center),
-        )
-        .await?;
+        self.paint_scope(lcd, clock, sweep, theme, (header..SIZE - footer, center))
+            .await?;
         if bass {
             let automation = motion
                 .bass_automation
@@ -1093,7 +990,7 @@ impl Screen {
                     self.strip,
                     self.selector,
                     changed_page,
-                    labels.focus,
+                    (labels.focus, theme),
                     motion.drums[labels.channel.index()],
                 )
                 .await?;
@@ -1135,9 +1032,7 @@ impl Screen {
         let part = labels.focus;
         let voice = labels.voice;
         if organ {
-            self.selector
-                .badge
-                .header_text(self.text, 0, b"M1 ORGAN", ink);
+            self.text.text(0, 0, b"M1 ORGAN", ink);
             if changed_page {
                 // The grid folds lowercase to uppercase. Preserve the exact chord symbol.
                 let mut band = mixer::Band::new(self.strip, 144, 224, 48, 16, style.background);
@@ -1164,7 +1059,7 @@ impl Screen {
             self.text.number(10, 13, 4, u32::from(value), bright);
             self.text.text(15, 13, units, muted);
         } else {
-            self.selector.badge.header_text(self.text, 0, b"CUT", muted);
+            self.text.text(0, 0, b"CUT", muted);
             self.text.number(4, 0, 5, u32::from(voice.cutoff_hz()), ink);
             self.text.text(9, 0, b"HZ", muted);
         }
@@ -1223,74 +1118,13 @@ fn env_time(
     text.text(x + 6, y, unit, muted);
 }
 
-// The brightest point leads. Its one-pixel halo disappears before the tail.
-fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
-    if track.is_kit() {
-        return match age {
-            0..=3 => (drums::HOT, Some(drums::GLOW)),
-            4..=12 => (drums::ORANGE, None),
-            13..TRAIL => (drums::EMBER, None),
-            _ => (drums::style(track).trace, None),
-        };
-    }
-    if track == Part::Bass {
-        return match age {
-            0..=3 => (Rgb565::new(24, 10, 3), Some(Rgb565::new(21, 34, 16))),
-            4..=9 => (OXIDE_RED, None),
-            10..TRAIL => (Rgb565::new(8, 9, 5), None),
-            _ => (SILVER.trace, None),
-        };
-    }
-    if track == Part::Fm {
-        return (fm::STYLE.trace, None);
-    }
-    if track == Part::Sampler {
-        return match age {
-            0..=3 => (palette::WHITE, Some(sampler::STYLE.trace)),
-            4..=12 => (Rgb565::new(21, 63, 26), None),
-            13..TRAIL => (Rgb565::new(8, 36, 16), None),
-            _ => (sampler::STYLE.trace, None),
-        };
-    }
-    if track == Part::Wavetable {
-        return match age {
-            0..=3 => (palette::WHITE, Some(microwave::STYLE.trace)),
-            4..=12 => (microwave::PRINT, None),
-            _ => (microwave::STYLE.trace, None),
-        };
-    }
-    if track == Part::Supersaw {
-        return match age {
-            0..=3 => (palette::WHITE, Some(jp8080::EDGE)),
-            4..=12 => (Rgb565::new(24, 63, 28), None),
-            _ => (jp8080::STYLE.trace, None),
-        };
-    }
-    if track == Part::Organ {
-        return match age {
-            0..=4 => (ORGAN_LIME, Some(palette::CYAN)),
-            5..=12 => (Rgb565::new(19, 53, 9), None),
-            13..TRAIL => (Rgb565::new(11, 37, 7), None),
-            _ => (ORGAN_STYLE.trace, None),
-        };
-    }
-    match age {
-        0..=3 => (Rgb565::new(26, 63, 23), Some(Rgb565::new(9, 40, 10))),
-        4..=9 => (Rgb565::new(18, 61, 17), Some(Rgb565::new(5, 28, 7))),
-        10..=19 => (Rgb565::new(14, 58, 14), Some(Rgb565::new(3, 20, 5))),
-        20..TRAIL => (Rgb565::new(11, 54, 12), None),
-        _ => (STYLE.trace, None),
-    }
-}
-
 impl Screen {
     async fn paint_scope(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
         sweep: Sweep,
-        style: WaveformStyle,
-        track: Part,
+        theme: &InstrumentStyle,
         (rows, center): (Range<u16>, u16),
     ) -> Result<(), Error> {
         if self.sweep.as_ref() == Some(&sweep) {
@@ -1298,12 +1132,13 @@ impl Screen {
         }
         let list = &mut *self.selector;
         let palette = self.scope_palette.get_or_insert_with(|| {
+            let style = list.style(theme.scope);
             Palette::new(
                 style.background.to_be_bytes(),
                 style.grid.to_be_bytes(),
                 style.center.to_be_bytes(),
                 core::array::from_fn(|age| {
-                    let (ink, halo) = phosphor(track, age);
+                    let (ink, halo) = theme.phosphor(age);
                     Pen {
                         ink: list.shade(ink).to_be_bytes(),
                         halo: halo.map(|color| list.shade(color).to_be_bytes()),
@@ -1312,17 +1147,11 @@ impl Screen {
             )
         });
         let damage = if let Some(old) = self.sweep.take() {
-            use crate::scope::Stripes;
-            let stripes = match track {
-                Part::Bass | Part::Organ | Part::Supersaw => Stripes::Fine,
-                Part::Tr808 | Part::Tr909 => Stripes::Wide,
-                Part::Mono | Part::Wavetable | Part::Fm | Part::Sampler => Stripes::Normal,
-            };
-            sweep.damage(&old, palette, stripes)
+            sweep.damage(&old, palette, theme.stripes)
         } else {
             Damage::full(
                 usize::from(rows.start)..usize::from(rows.end),
-                list.bounds(),
+                list.scope_overhang(),
             )
         };
         let mut lcd = lcd.as_async(clock)?;
@@ -1331,7 +1160,6 @@ impl Screen {
                 let pixels = &mut self.strip[..w.width * w.height];
                 sweep.render(w, palette, usize::from(center), pixels);
                 list.overlay(w, pixels);
-                list.badge.compose(w.x, w.y, w.width, pixels);
                 lcd.write_rect_buffered(
                     w.x as u16,
                     w.y as u16,

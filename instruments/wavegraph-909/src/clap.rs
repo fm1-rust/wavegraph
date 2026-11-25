@@ -44,8 +44,8 @@ impl HandClap {
         let g = core::f32::consts::PI * 963.0 / rate;
         let a1 = 1.0 / (1.0 + g * (g + 1.0 / 2.14));
         let a2 = g * a1;
-        // One-pole RC decay; all divisions happen when the voice is constructed.
-        Self {
+        // One-pole RC decay; coefficients change at control boundaries.
+        let mut voice = Self {
             band_state: 0.0,
             low_state: 0.0,
             direct_low: 0.0,
@@ -60,13 +60,25 @@ impl HandClap {
             direct: 0.0,
             tail: 0.0,
             burst_decay: clock.decay(0.0022),
-            body_decay: clock.decay(0.018 * decay),
-            tail_decay: clock.decay(0.095 * decay),
+            body_decay: 0.0,
+            tail_decay: 0.0,
             burst_spacing: clock.frames(0.0107),
             until_burst: 0,
             bursts_left: 0,
-            hit_frames: clock.frames(0.04 + 0.96 * decay).max(4),
+            hit_frames: 0,
             remaining: 0,
+        };
+        voice.set_decay(clock, decay);
+        voice
+    }
+
+    pub(crate) fn set_decay(&mut self, clock: Clock, decay: f32) {
+        let elapsed = self.hit_frames.saturating_sub(self.remaining);
+        self.body_decay = clock.decay(0.018 * decay);
+        self.tail_decay = clock.decay(0.095 * decay);
+        self.hit_frames = clock.frames(0.04 + 0.96 * decay).max(4);
+        if self.remaining != 0 {
+            self.remaining = self.hit_frames.saturating_sub(elapsed);
         }
     }
 

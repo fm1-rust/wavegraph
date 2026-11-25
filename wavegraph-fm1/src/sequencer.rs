@@ -741,6 +741,7 @@ fn event(frame: usize, message: Message) -> Event<Message> {
 pub(super) enum DrumMessage {
     Trigger(Voice, u8),
     Controls808(wavegraph_808::Controls),
+    Decay909([u8; 3]),
     Stop,
 }
 
@@ -751,6 +752,8 @@ pub(super) enum DrumLamp {
     Tail,
     Strike,
 }
+
+pub(super) const DECAY_909: u8 = 55;
 
 /// Prepare both factory kits outside the audio interrupt. Each assignment takes
 /// an independent copy of just its selected kit into the channel's player.
@@ -764,7 +767,7 @@ impl DrumKits {
     pub(super) fn new(rate: (u32, u32)) -> Self {
         Self {
             tr808: wavegraph_808::Tr808::new(rate.0, rate.1).expect("808 clock"),
-            tr909: crate::assets::tr909(rate, 55).expect("909 clock and PCM"),
+            tr909: crate::assets::tr909(rate, DECAY_909).expect("909 clock and PCM"),
             flash_frames: rate.0.checked_div(rate.1).expect("nonzero kit clock") / 16,
         }
     }
@@ -822,7 +825,9 @@ impl Kit {
             (Self::Tr808(kit), DrumMessage::Stop) => kit.send(wavegraph_808::Message::Stop),
             (Self::Tr909(kit), DrumMessage::Trigger(voice, _)) => kit.trigger(voice),
             (Self::Tr909(kit), DrumMessage::Stop) => kit.stop(),
-            (Self::Tr909(_), DrumMessage::Controls808(_)) => (),
+            (Self::Tr909(kit), DrumMessage::Decay909(decay)) => kit.set_decay(decay),
+            (Self::Tr909(_), DrumMessage::Controls808(_))
+            | (Self::Tr808(_), DrumMessage::Decay909(_)) => (),
         }
     }
 }

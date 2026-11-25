@@ -1,6 +1,6 @@
-//! TB-303 modulation panel. Only rows whose controls changed are transferred.
-use super::{BAND, OXIDE_RED, SILVER, WIDTH, mixer::Band};
-use crate::{lfo::Controls, panel::Channel};
+//! Channel modulation panel. Only rows whose controls changed are transferred.
+use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
+use crate::{firmware::Labels, lfo::Controls};
 use core::fmt::Write;
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
@@ -11,33 +11,24 @@ use fm1_rticx::{
     time::Clock,
 };
 use heapless::String;
-use wavegraph_303::Destination;
 use wavegraph_lfo::Shape;
 
 pub(super) async fn paint(
     lcd: &mut Display,
     clock: &mut Clock,
     pixels: &mut [[u8; 2]; BAND * WIDTH],
-    channel: Channel,
-    c: Controls,
+    labels: &Labels,
+    theme: &InstrumentStyle,
     previous: Option<Controls>,
 ) -> Result<(), Error> {
+    let c = labels.lfo;
     let shape = match c.shape() {
         Shape::Sine => "SINE",
         Shape::Triangle => "TRIANGLE",
         Shape::Saw => "SAW",
         Shape::Square => "SQUARE",
     };
-    let target = match c.target() {
-        Destination::Pitch => "PITCH",
-        Destination::Cutoff => "CUTOFF",
-        Destination::Resonance => "RESONANCE",
-        Destination::EnvMod => "ENV MOD",
-        Destination::Decay => "DECAY",
-        Destination::Accent => "ACCENT",
-        Destination::Attack => "ATTACK",
-        Destination::Overdrive => "OVERDRIVE",
-    };
+    let target = c.target(labels.focus).name;
     let mut rate = String::<12>::new();
     if c.sync {
         rate.push_str(c.division_name()).expect("musical division");
@@ -68,28 +59,29 @@ pub(super) async fn paint(
                             && p.division_name() == c.division_name()
                     }
                     2 => p.depth == c.depth,
-                    3 => p.target() == c.target(),
+                    3 => p.target(labels.focus).route == c.target(labels.focus).route,
                     4 => p.sync == c.sync,
                     _ => p.enabled == c.enabled,
                 }
         }) {
             continue;
         }
-        let mut band =
-            Band::new(pixels, 0, y, SIZE, BAND as u16, SILVER.background).with_panel_type(true);
+        let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, theme.face)
+            .with_panel_type(super::lettering::panel_type(labels.focus));
         if y < 40 {
-            band.title("TB-303 LFO", Point::new(10, 8), SILVER.trace);
+            let title = heapless::format!(20; "{} LFO", labels.focus.name()).expect("short title");
+            band.title(&title, Point::new(10, 8), theme.ink);
             band.label(
-                ["CH 1", "CH 2", "CH 3", "CH 4"][channel.index()],
+                labels.channel.label(),
                 Point::new(220, 11),
                 Alignment::Right,
-                SILVER.trace,
+                theme.ink,
             );
-            band.rect(Point::new(10, 35), Size::new(220, 2), OXIDE_RED);
+            band.rect(Point::new(10, 35), Size::new(220, 2), theme.accent);
         } else if let Some(&(label, value)) = rows.get(row) {
             let top = 46 + i32::from(y.saturating_sub(40) / 32) * 32;
-            band.label(label, Point::new(10, top), Alignment::Left, SILVER.trace);
-            band.label(value, Point::new(229, top), Alignment::Right, OXIDE_RED);
+            band.label(label, Point::new(10, top), Alignment::Left, theme.ink);
+            band.label(value, Point::new(229, top), Alignment::Right, theme.accent);
         }
         lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
             .await?;

@@ -1,7 +1,8 @@
 //! Drum faceplates and per-voice activity beneath the live kit scope.
 
-use super::{mixer::Band, selector::Selector, tr808};
+use super::{InstrumentStyle, mixer::Band, selector::Selector, tr808};
 use crate::{instrument::Part, panel::Channel, sequencer::DrumLamp};
+use fm1_graphics::Rgb565;
 use fm1_graphics::embedded_graphics::{
     Drawable,
     pixelcolor::{IntoStorage, raw::ToBytes},
@@ -9,43 +10,17 @@ use fm1_graphics::embedded_graphics::{
     primitives::{PrimitiveStyle, Rectangle, RoundedRectangle},
     text::Alignment,
 };
-use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Error, SIZE},
     time::Clock,
 };
 use wavegraph_909::Voice;
 
-pub(super) const GRAPHITE: Rgb565 = Rgb565::new(7, 15, 7);
-pub(super) const ORANGE: Rgb565 = Rgb565::new(22, 17, 2);
-pub(super) const HOT: Rgb565 = Rgb565::new(31, 26, 1);
-pub(super) const GLOW: Rgb565 = Rgb565::new(31, 48, 17);
+pub(super) const GRAPHITE: Rgb565 = super::style::TR909.ink;
+pub(super) const HOT: Rgb565 = super::style::TR808.accent;
 pub(super) const EMBER: Rgb565 = Rgb565::new(17, 13, 4);
-pub(super) const STYLE: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(29, 57, 26),
-    grid: Rgb565::new(25, 50, 23),
-    center: Rgb565::new(20, 40, 18),
-    trace: GRAPHITE,
-    grid_x: super::GRID,
-    grid_y: super::GRID,
-};
 
-pub(super) const CREAM: Rgb565 = Rgb565::new(30, 53, 20);
-pub(super) const STYLE_808: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(3, 6, 3),
-    grid: Rgb565::new(7, 12, 4),
-    center: Rgb565::new(12, 20, 6),
-    trace: Rgb565::new(29, 32, 5),
-    ..STYLE
-};
-
-pub(super) fn style(part: Part) -> WaveformStyle {
-    if part == Part::Tr808 {
-        STYLE_808
-    } else {
-        STYLE
-    }
-}
+pub(super) const CREAM: Rgb565 = super::style::TR808.ink;
 
 const KEY_W: usize = 39;
 const KEY_H: usize = 47;
@@ -69,32 +44,23 @@ impl Panel {
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         part: Part,
+        theme: &InstrumentStyle,
     ) -> Result<(), Error> {
         // The 808 controls repaint from x=114. Keep the whole title tile to their left.
-        let (mask, split, model) = if part == Part::Tr808 {
-            (super::lettering::TR808, 46, CREAM)
+        let (mask, split) = if part == Part::Tr808 {
+            (super::lettering::TR808, 46)
         } else {
-            (super::lettering::TR909, 51, GRAPHITE)
+            (super::lettering::TR909, 51)
         };
         let width = mask.width as u16;
         for y in (0..32).step_by(8) {
-            let mut band = Band::new(
-                strip,
-                0,
-                y,
-                width,
-                8,
-                selector.shade(style(part).background),
-            );
+            let mut band = Band::new(strip, 0, y, width, 8, selector.shade(theme.face));
             band.mask(
                 Point::zero(),
                 mask,
                 split,
-                [model, ORANGE].map(|c| selector.shade(c)),
+                [theme.ink, theme.accent].map(|c| selector.shade(c)),
             );
-            selector
-                .badge
-                .compose(10, usize::from(y + 1), mask.width, band.pixels);
             lcd.write_rect_buffered(10, y + 1, width, 8, band.pixels.as_flattened())
                 .await?;
         }
@@ -172,15 +138,15 @@ impl Panel {
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         entering: bool,
-        part: Part,
+        (part, theme): (Part, &InstrumentStyle),
         lamps: [DrumLamp; 6],
     ) -> Result<(), Error> {
         if !entering && self.previous == Some(lamps) {
             return Ok(());
         }
         if entering {
-            Self::title(lcd, strip, selector, part).await?;
-            let rule = selector.shade(ORANGE);
+            Self::title(lcd, strip, selector, part, theme).await?;
+            let rule = selector.shade(theme.accent);
             for y in [52, 185] {
                 lcd.fill_rect(0, y, SIZE, 2, rule.into_storage()).await?;
             }
@@ -207,7 +173,7 @@ impl Panel {
                     0,
                     KEY_W as u16,
                     KEY_H as u16,
-                    selector.shade(STYLE.background),
+                    selector.shade(theme.face),
                 )
                 .with_panel_type(true);
                 Self::key_face(&mut key, voice, i, selector);
@@ -224,8 +190,11 @@ impl Panel {
             }
             let (lens, core) = match lamp {
                 DrumLamp::Off => (Rgb565::new(7, 14, 6), Rgb565::new(10, 19, 8)),
-                DrumLamp::Tail => (EMBER, Rgb565::new(25, 21, 4)),
-                DrumLamp::Strike => (HOT, Rgb565::new(31, 53, 13)),
+                DrumLamp::Tail => (EMBER, theme.peak),
+                DrumLamp::Strike => {
+                    let core = Rgb565::new(31, 53, 13);
+                    (super::style::mix(theme.peak, core), core)
+                }
             };
             let [rim, lens, core] =
                 [GRAPHITE, lens, core].map(|color| selector.shade(color).to_be_bytes());
@@ -251,5 +220,137 @@ impl Panel {
         }
         self.previous = Some(lamps);
         Ok(())
+    }
+}
+
+/// Percussion contours follow individual strikes, independent of key release.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct Envelope {
+    values: [u8; 4],
+    lamps: [DrumLamp; 6],
+}
+
+impl Envelope {
+    pub(super) fn new(labels: &crate::firmware::Labels, lamps: [DrumLamp; 6]) -> Self {
+        let c = labels.drums808;
+        let [kick, snare, clap] = labels.decay909;
+        let values = if labels.focus == Part::Tr808 {
+            [c.kick_tone, c.kick_decay, c.snare_tone, c.snappy]
+        } else {
+            [kick, snare, clap, 0]
+        };
+        Self { values, lamps }
+    }
+
+    pub(super) async fn paint(
+        self,
+        lcd: &mut fm1_rticx::bsp::display::Display,
+        clock: &mut Clock,
+        pixels: &mut [[u8; 2]],
+        labels: &crate::firmware::Labels,
+        theme: &InstrumentStyle,
+        old: Option<Self>,
+    ) -> Result<(), Error> {
+        if old == Some(self) {
+            return Ok(());
+        }
+        let is_808 = labels.focus == Part::Tr808;
+        let controls: &[(&str, Voice)] = if is_808 {
+            &[
+                ("KICK TONE", Voice::Kick),
+                ("KICK DECAY", Voice::Kick),
+                ("SNARE TONE", Voice::Snare),
+                ("SNAPPY", Voice::Snare),
+            ]
+        } else {
+            &[
+                ("KICK DECAY", Voice::Kick),
+                ("SNARE DECAY", Voice::Snare),
+                ("CLAP DECAY", Voice::Clap),
+            ]
+        };
+        let mut lcd = lcd.as_async(clock)?;
+        for y in (0..SIZE).step_by(super::BAND) {
+            let row = usize::from(y.saturating_sub(48) / 40);
+            let control = (48..208).contains(&y).then(|| controls.get(row)).flatten();
+            if old.is_some_and(|old| {
+                control.is_none_or(|&(_, voice)| {
+                    old.values[row] == self.values[row]
+                        && old.lamps[voice as usize] == self.lamps[voice as usize]
+                })
+            }) {
+                continue;
+            }
+            let mut band =
+                Band::new(pixels, 0, y, SIZE, super::BAND as u16, theme.face).with_panel_type(true);
+            if y < 48 {
+                band.title(
+                    if is_808 { "TR-808 ENV" } else { "TR-909 ENV" },
+                    Point::new(10, 7),
+                    theme.ink,
+                );
+                band.label(
+                    labels.channel.label(),
+                    Point::new(222, 9),
+                    Alignment::Right,
+                    theme.muted,
+                );
+                band.label(
+                    "ONE-SHOT VOICES",
+                    Point::new(10, 28),
+                    Alignment::Left,
+                    theme.accent,
+                );
+            } else if let Some(&(name, voice)) = control {
+                let top = 48 + i32::try_from(row).expect("four rows") * 40;
+                let value = self.values[row];
+                let unit = if is_808 { "/127" } else { "%" };
+                let readout = heapless::format!(8; "{value}{unit}").expect("short drum value");
+                band.rect(Point::new(6, top), Size::new(228, 36), theme.surface);
+                band.knob(
+                    Point::new(22, top + 18),
+                    value,
+                    if is_808 { 127 } else { 100 },
+                    [theme.face, theme.muted, theme.accent],
+                );
+                band.label(
+                    ["1", "2", "3", "4"][row],
+                    Point::new(40, top + 12),
+                    Alignment::Left,
+                    theme.muted,
+                );
+                band.title(name, Point::new(54, top + 4), theme.ink);
+                band.label(
+                    match self.lamps[voice as usize] {
+                        DrumLamp::Strike => "HIT",
+                        DrumLamp::Tail => "TAIL",
+                        DrumLamp::Off => "IDLE",
+                    },
+                    Point::new(54, top + 21),
+                    Alignment::Left,
+                    theme.muted,
+                );
+                band.label(
+                    &readout,
+                    Point::new(223, top + 13),
+                    Alignment::Right,
+                    theme.accent,
+                );
+            } else if y >= 208 {
+                band.label(
+                    if is_808 {
+                        "CLOSED HAT CHOKES OPEN HAT"
+                    } else {
+                        "HATS / RIDE  -  SAMPLE TAILS"
+                    },
+                    Point::new(10, 221),
+                    Alignment::Left,
+                    theme.ink,
+                );
+            }
+            lcd.write_rect_buffered(0, y, SIZE, super::BAND as u16, band.pixels.as_flattened())
+                .await?;
+        }
+        lcd.flush().await
     }
 }

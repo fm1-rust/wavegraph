@@ -161,7 +161,7 @@ impl Row {
         reason = "All coordinates fit within one rack row"
     )]
     fn draw(self, band: &mut Band<'_>, y: i32, reduction: u8) {
-        let ink = band.rack_row(y, self.selected);
+        let ink = band.rack_row(y, self.selected, &super::mixer::RackColors::MASTER);
         band.title(
             ["REVERB", "DELAY", "3-BAND EQ", "COMP/LIM"][self.device as usize],
             Point::new(10, y + 5),
@@ -170,7 +170,14 @@ impl Row {
         self.status(band, y, reduction);
         for (x, dial) in [91, 131, 171, 211].into_iter().zip(self.dials) {
             if let Some(d) = dial {
-                band.rack_dial(Point::new(x, y), d.label, d.position(), &d.readout(), ink);
+                band.rack_dial(
+                    Point::new(x, y),
+                    d.label,
+                    d.position(),
+                    &d.readout(),
+                    ink,
+                    &super::mixer::RackColors::MASTER,
+                );
             }
         }
     }
@@ -194,7 +201,6 @@ impl Rack {
         pixels: &mut [[u8; 2]; BAND * WIDTH],
         state: (Fx, Option<Device>),
         reduction: u8,
-        badge: &mut super::badge::ChannelBadge,
     ) -> Result<(), Error> {
         let db = gr_db(reduction);
         if self.previous == Some(state) && self.gr_db == db {
@@ -244,7 +250,6 @@ impl Rack {
                 band.label(top, Point::new(120, 211), Alignment::Center, POINTER);
                 band.label(bottom, Point::new(120, 225), Alignment::Center, LABEL);
             }
-            band.compose_badge(badge);
             lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
                 .await?;
         }

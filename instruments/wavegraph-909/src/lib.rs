@@ -86,6 +86,7 @@ impl Samples<'static> {
 /// A hybrid drum kit with one mix and six independent voice outputs.
 #[derive(Clone, Copy, Debug)]
 pub struct Tr909<'a> {
+    clock: analog::Clock,
     closed_hat: Sampler<'a>,
     open_hat: Sampler<'a>,
     ride: Sampler<'a>,
@@ -154,6 +155,7 @@ impl<'a> Tr909<'a> {
         ride.stop();
         let decay = f32::from(decay_percent.min(100)) / 100.0;
         Some(Self {
+            clock,
             clap: HandClap::from_clock(clock, decay),
             kick: BassDrum::from_clock(clock, decay),
             snare: SnareDrum::from_clock(clock, decay),
@@ -162,6 +164,15 @@ impl<'a> Tr909<'a> {
             ride,
             opened_this_frame: false,
         })
+    }
+
+    /// Set kick, snare and clap amplitude decays independently, as percentages
+    /// of their stock time constants. Updates preserve each sounding voice.
+    pub fn set_decay(&mut self, percent: [u8; 3]) {
+        let [kick, snare, clap] = percent.map(|p| f32::from(p.min(100)) / 100.0);
+        self.kick.set_decay(self.clock, kick);
+        self.snare.set_decay(self.clock, snare);
+        self.clap.set_decay(self.clock, clap);
     }
 
     /// Strike a voice at the current audio frame.

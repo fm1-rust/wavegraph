@@ -223,3 +223,35 @@ fn the_demo_has_a_kick_on_every_quarter_and_uses_the_whole_kit() {
         assert!(pattern.iter().any(|step| step.contains(&voice)));
     }
 }
+
+#[test]
+fn editing_a_live_decay_changes_only_its_modeled_voice() {
+    for (index, voice) in [Kick, Snare, Clap].into_iter().enumerate() {
+        let mut stock = Tr909::with_decay(SAMPLES, 44_100, 1, 55).expect("kit clock");
+        for v in [Kick, Snare, Clap] {
+            stock.trigger(v);
+        }
+        for _ in 0..2400 {
+            stock.next_voices();
+        }
+        stock.trigger(OpenHat);
+        stock.trigger(Ride);
+        let mut short = stock;
+        let mut decay = [55; 3];
+        decay[index] = 5;
+        short.set_decay(decay);
+        let mut changed = false;
+        for _ in 0..2048 {
+            let a = short.next_voices();
+            let b = stock.next_voices();
+            for v in Voice::ALL {
+                if v == voice {
+                    changed |= a[v as usize] != b[v as usize];
+                } else {
+                    assert_eq!(a[v as usize], b[v as usize]);
+                }
+            }
+        }
+        assert!(changed, "{voice:?} decay affects its ringing tail");
+    }
+}

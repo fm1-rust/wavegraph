@@ -1,6 +1,6 @@
 //! Six fixed sound knobs above the scope and two auxiliary knobs beside the wordmark.
 
-use super::{OXIDE_RED, mixer::Band, selector::Selector};
+use super::{mixer::Band, selector::Selector};
 use crate::{
     bass::{Controls, Knob, cutoff_detent},
     firmware::Labels,
@@ -12,7 +12,7 @@ use core::{fmt::Write, str};
 use fm1_graphics::Rgb565;
 use fm1_graphics::embedded_graphics::{
     Drawable,
-    prelude::{Point, Primitive, RgbColor, Size},
+    prelude::{Point, Primitive, Size},
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Alignment,
 };
@@ -24,13 +24,10 @@ use heapless::String;
 
 const KNOB_ROW: u16 = 32;
 pub(super) const SCOPE_TOP: u16 = KNOB_ROW + CELL_HEIGHT + 1;
-pub(super) const METAL: Rgb565 = Rgb565::new(27, 54, 27);
-const GRAPHITE: Rgb565 = Rgb565::new(4, 9, 5);
-const CAP: Rgb565 = Rgb565::new(8, 17, 9);
-const DIRECT_CAP: Rgb565 = Rgb565::new(8, 24, 15);
-const FRAME: Rgb565 = Rgb565::new(9, 27, 16);
-const NEON: Rgb565 = Rgb565::new(8, 63, 4);
-const SHADOW: Rgb565 = Rgb565::new(14, 28, 14);
+pub(super) const METAL: Rgb565 = super::style::TB303.face;
+const GRAPHITE: Rgb565 = super::style::TB303.ink;
+const OXIDE: Rgb565 = super::style::TB303.accent;
+const SHADOW: Rgb565 = super::style::TB303.muted;
 const IVORY: Rgb565 = Rgb565::new(30, 60, 29);
 const LAMP: Rgb565 = Rgb565::new(31, 27, 12);
 
@@ -129,9 +126,9 @@ impl Dial {
         let shade = |c| selector.shade(c);
         let encoder = Knob::direct().iter().position(|&k| k == knob);
         let (skirt, bevel, cap, pointer) = if self.selected {
-            (Rgb565::BLACK, NEON, NEON, Rgb565::BLACK)
+            (GRAPHITE, LAMP, OXIDE, IVORY)
         } else {
-            let cap = if encoder.is_some() { DIRECT_CAP } else { CAP };
+            let cap = if encoder.is_some() { SHADOW } else { GRAPHITE };
             (GRAPHITE, SHADOW, cap, IVORY)
         };
         // The skirt casts a shadow below the cap. Its upper-left bevel catches the light.
@@ -160,7 +157,7 @@ impl Dial {
                 Point::new(x, 0),
                 Size::new(u32::from(CELL_WIDTH) * 4 - 2, u32::from(CELL_HEIGHT)),
             )
-            .into_styled(PrimitiveStyle::with_stroke(shade(FRAME), 1))
+            .into_styled(PrimitiveStyle::with_stroke(shade(OXIDE), 1))
             .draw(band)
             .expect("infallible strip");
             band.label(
@@ -172,7 +169,11 @@ impl Dial {
         }
         // The cap shows the stored setting. The red witness mark follows the sequencer.
         if let Some(marker) = self.marker {
-            band.rect(center + marker, Size::new(3, 3), shade(OXIDE_RED));
+            band.rect(
+                center + marker,
+                Size::new(3, 3),
+                shade(super::style::TB303.accent),
+            );
         }
         band.label(
             match knob {
@@ -222,7 +223,6 @@ impl Panel {
         if entering {
             let mut logo = Band::new(pixels, 0, 0, 78, 20, paper).with_panel_type(true);
             wordmark(&mut logo, selector);
-            logo.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(0, 0, 78, 20, logo.pixels.as_flattened())
                 .await?;
         }
@@ -236,7 +236,6 @@ impl Panel {
         if old.is_none_or(|s| s.status != state.status) {
             let mut status = Band::new(pixels, 0, 0, 158, 10, paper).with_panel_type(true);
             state.status.draw(&mut status, selector.shade(GRAPHITE));
-            selector.badge.compose(0, 21, 158, status.pixels);
             lcd.write_rect_buffered(0, 21, 158, 10, status.pixels.as_flattened())
                 .await?;
         }
@@ -297,7 +296,7 @@ fn readout(band: &mut Band<'_>, controls: Controls, selected: Option<Knob>, sele
             "ALG",
             Point::new(2, 0),
             Alignment::Left,
-            selector.shade(NEON),
+            selector.shade(LAMP),
         );
     }
     band.label(
@@ -327,6 +326,6 @@ fn wordmark(band: &mut Band<'_>, selector: &Selector) {
         Point::zero(),
         super::lettering::BASS,
         36,
-        [GRAPHITE, OXIDE_RED].map(|c| selector.shade(c)),
+        [GRAPHITE, super::style::TB303.accent].map(|c| selector.shade(c)),
     );
 }
