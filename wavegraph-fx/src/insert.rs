@@ -1,5 +1,8 @@
 //! Small, allocation-free Q23 insert effects.
 
+mod flanger;
+pub use flanger::Flanger;
+
 use super::{Message, clamp_pcm, pcm};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::I24;
@@ -27,9 +30,9 @@ impl SaturatorControls {
     };
 }
 
-/// Phaser controls, all in 0..=128 units.
+/// Controls shared by the phaser and flanger, all in 0..=128 units.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PhaserControls {
+pub struct ModulationControls {
     /// LFO rate, from 0.10 to 3.94 Hz.
     pub rate: u8,
     /// Sweep depth.
@@ -42,7 +45,7 @@ pub struct PhaserControls {
     pub enabled: bool,
 }
 
-impl PhaserControls {
+impl ModulationControls {
     /// Factory controls.
     pub const INITIAL: Self = Self {
         rate: 14,
@@ -60,6 +63,25 @@ impl PhaserControls {
     )]
     pub fn centihz(self) -> u16 {
         10 + 3 * u16::from(self.rate.min(128))
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        reason = "Sample rate is nonzero and phase increments wrap in one turn"
+    )]
+    fn phase_step(self, rate_hz: u32) -> u32 {
+        ((u64::from(self.centihz()) << 32) / (100 * u64::from(rate_hz))) as u32
+    }
+}
+
+#[allow(clippy::arithmetic_side_effects, reason = "The high word fits i32")]
+fn triangle(phase: u32) -> i32 {
+    let ramp = i32::from((phase >> 16) as u16);
+    if ramp < 32768 {
+        2 * ramp - 32768
+    } else {
+        98302 - 2 * ramp
     }
 }
 
@@ -140,7 +162,7 @@ impl Saturator {
 #[derive(Clone, Copy, Debug)]
 pub struct Phaser {
     rate_hz: u32,
-    controls: PhaserControls,
+    controls: ModulationControls,
     phase: u32,
     step: u32,
     state: [i32; 4],
@@ -157,23 +179,21 @@ impl Phaser {
         }
         let mut fx = Self {
             rate_hz,
-            controls: PhaserControls::INITIAL,
+            controls: ModulationControls::INITIAL,
             phase: 0,
             step: 0,
             state: [0; 4],
             last: 0,
             blend: 0,
         };
-        fx.set_controls(PhaserControls::INITIAL);
+        fx.set_controls(ModulationControls::INITIAL);
         Some(fx)
     }
 
     /// Update parameters without resetting phase or filter history.
-    #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_truncation)]
-    pub fn set_controls(&mut self, controls: PhaserControls) {
+    pub fn set_controls(&mut self, controls: ModulationControls) {
         self.controls = controls;
-        self.step =
-            ((u64::from(controls.centihz()) << 32) / (100 * u64::from(self.rate_hz))) as u32;
+        self.step = controls.phase_step(self.rate_hz);
     }
 
     /// Process a single signed Q23 sample.
@@ -194,15 +214,9 @@ impl Phaser {
             self.last = 0;
             return sample;
         }
-        let ramp = (self.phase >> 16) as i32;
-        let triangle = if ramp < 32768 {
-            2 * ramp - 32768
-        } else {
-            98302 - 2 * ramp
-        };
         // g = 0.55 +/- 0.35; never reaches either unstable endpoint.
         let depth = (11469 * i32::from(c.depth.min(128))) >> 7;
-        let g = 18022 + mul_q15(triangle, depth);
+        let g = 18022 + mul_q15(triangle(self.phase), depth);
         let x = sample.inner();
         let feedback = (96 * i32::from(c.feedback.min(128))) >> 7;
         let mut wet = clamp_pcm(x + mul_q7(self.last, feedback));
@@ -220,7 +234,7 @@ impl Phaser {
 
 // Also expose these as normal WaveGraph nodes with sample-offset control.
 macro_rules! node {
-    ($ty:ty, $control:ident) => {
+    ($ty:ty, $control:ident $(, $set_enabled:ident)?) => {
         impl Process<Message, I24> for $ty {
             fn inlets(&self) -> &[Port] {
                 &[Port::Signal]
@@ -237,8 +251,10 @@ macro_rules! node {
                     {
                         *out = self.tick(*input);
                     }
-                    if let Message::$control(controls) = event.message {
-                        self.set_controls(controls);
+                    match event.message {
+                        Message::$control(controls) => self.set_controls(controls),
+                        $(Message::Enabled(on) => self.$set_enabled(on),)?
+                        _ => (),
                     }
                     start = event.frame;
                 }
@@ -254,6 +270,7 @@ macro_rules! node {
 }
 node!(Saturator, Saturator);
 node!(Phaser, Phaser);
+node!(Flanger, Flanger, set_enabled);
 node!(super::ThreeBandEq, Eq);
 
 #[cfg(test)]
@@ -289,9 +306,9 @@ mod tests {
         }
         assert!(changed);
         assert_ne!(fx.phase, 0);
-        fx.set_controls(PhaserControls {
+        fx.set_controls(ModulationControls {
             enabled: false,
-            ..PhaserControls::INITIAL
+            ..ModulationControls::INITIAL
         });
         let x = I24::new_unchecked(1 << 20);
         for _ in 0..64 {
