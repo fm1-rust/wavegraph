@@ -436,24 +436,24 @@ impl Grid {
             let mut button = Band::new(strip, 0, 0, WIDTH, 16, theme.face)
                 .with_panel_type(super::lettering::panel_type(part));
             if !state.dark {
-                let (cap, text) = if state.selected {
-                    (theme.ink, theme.face)
-                } else {
-                    (theme.surface, theme.ink)
-                };
-                button.rect(Point::new(1, 2), Size::new(u32::from(WIDTH - 4), 14), cap);
+                let row = theme.row(state.selected);
+                button.rect(
+                    Point::new(1, 2),
+                    Size::new(u32::from(WIDTH - 4), 14),
+                    row.fill,
+                );
                 button.label(
                     label,
                     Point::new(i32::from(WIDTH / 2), 4),
                     Alignment::Center,
-                    text,
+                    row.ink,
                 );
             }
             if state.queued {
                 button.rect(
                     Point::new(2, 14),
                     Size::new(u32::from(WIDTH - 6), 2),
-                    theme.accent,
+                    theme.selected.fill,
                 );
             }
             lcd.write_rect_buffered(
@@ -577,7 +577,7 @@ impl Grid {
                         pixels[(y - top) * WIDTH + x] = if cursor == Some(step)
                             && (x == 0 || x == WIDTH - 1 || y == 0 || y == HEIGHT - 1)
                         {
-                            theme.ink
+                            theme.selected.fill
                         } else {
                             self.roll.pixel(
                                 (part, theme),

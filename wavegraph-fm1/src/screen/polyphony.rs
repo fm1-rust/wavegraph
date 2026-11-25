@@ -55,7 +55,7 @@ pub(super) async fn paint(
                     band.rect(
                         Point::new(x, 66),
                         Size::new(68, 32),
-                        if active { accent } else { ink },
+                        if active { theme.selected.fill } else { ink },
                     );
                     if !active {
                         band.rect(Point::new(x + 1, 67), Size::new(66, 30), face);
@@ -64,7 +64,7 @@ pub(super) async fn paint(
                         label,
                         Point::new(x + 34, 77),
                         Alignment::Center,
-                        if active { face } else { ink },
+                        if active { theme.selected.ink } else { ink },
                     );
                 }
             }
@@ -77,7 +77,7 @@ pub(super) async fn paint(
                         ink,
                     );
                 }
-                band.title(value, Point::new(12, 143), accent);
+                band.title(value, Point::new(12, 143), theme.selected.fill);
             }
             192.. => {
                 band.label(

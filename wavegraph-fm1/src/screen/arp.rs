@@ -130,7 +130,7 @@ impl Panel {
                     band.title(
                         if on { "ON" } else { "OFF" },
                         Point::new(10, 219),
-                        if on { colors.accent } else { colors.ink },
+                        if on { colors.selected.fill } else { colors.ink },
                     );
                     band.label(
                         "SELECT / LATCH",
@@ -141,7 +141,11 @@ impl Panel {
                     band.title(
                         if c.latch { "HOLD" } else { "OFF" },
                         Point::new(128, 219),
-                        colors.accent,
+                        if c.latch {
+                            colors.selected.fill
+                        } else {
+                            colors.ink
+                        },
                     );
                 }
             }
@@ -155,21 +159,24 @@ impl Panel {
 
 fn keyboard(band: &mut Band<'_>, note: Option<u8>, colors: &InstrumentStyle) {
     let pitch = note.map(|n| n % 12);
+    let mut keycap = |key, x, width, height, idle| {
+        let down = pitch == Some(key);
+        let fill = if down { colors.selected.fill } else { idle };
+        band.rect(Point::new(x, 151), Size::new(width, height), fill);
+        // The inset stripe stays visible on a white or black key under every palette.
+        if down {
+            band.rect(
+                Point::new(x + 4, 151 + height as i32 - 7),
+                Size::new(width - 8, 3),
+                colors.selected.ink,
+            );
+        }
+    };
     for (i, key) in (0..7).zip([0, 2, 4, 5, 7, 9, 11]) {
-        let fill = if pitch == Some(key) {
-            colors.accent
-        } else {
-            palette::WHITE
-        };
-        band.rect(Point::new(11 + 31 * i, 151), Size::new(30, 41), fill);
+        keycap(key, 11 + 31 * i, 30, 41, palette::WHITE);
     }
     for (i, key) in [(1, 1), (2, 3), (4, 6), (5, 8), (6, 10)] {
-        let fill = if pitch == Some(key) {
-            colors.accent
-        } else {
-            Rgb565::new(1, 2, 1)
-        };
-        band.rect(Point::new(2 + 31 * i, 151), Size::new(18, 25), fill);
+        keycap(key, 2 + 31 * i, 18, 25, Rgb565::new(1, 2, 1));
     }
     if let Some(n) = note {
         let mut label = String::<6>::new();
@@ -181,7 +188,7 @@ fn keyboard(band: &mut Band<'_>, note: Option<u8>, colors: &InstrumentStyle) {
             &label,
             Point::new(229, 136),
             Alignment::Right,
-            colors.accent,
+            colors.selected.fill,
         );
     }
 }

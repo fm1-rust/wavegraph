@@ -11,12 +11,28 @@ pub(super) struct InstrumentStyle {
     pub ink: Rgb565,
     pub muted: Rgb565,
     pub accent: Rgb565,
+    pub selected: RowColors,
     pub scope: WaveformStyle,
     pub peak: Rgb565,
     pub stripes: Stripes,
 }
 
+/// A fill and the text or marker painted directly on it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RowColors {
+    pub fill: Rgb565,
+    pub ink: Rgb565,
+}
+
+impl RowColors {
+    pub const fn new(fill: Rgb565, ink: Rgb565) -> Self {
+        Self { fill, ink }
+    }
+}
+
 type Color = Rgb565;
+const DARK_INK: Color = rgb(1, 2, 2);
+
 const fn scope(background: Color, grid: Color, center: Color, trace: Color) -> WaveformStyle {
     WaveformStyle {
         background,
@@ -40,6 +56,7 @@ pub(super) const MONO: InstrumentStyle = InstrumentStyle {
     ink: rgb(27, 62, 28),
     muted: rgb(14, 37, 17),
     accent: rgb(10, 56, 18),
+    selected: RowColors::new(rgb(12, 54, 15), DARK_INK),
     peak: rgb(26, 63, 23),
     scope: scope(rgb(0, 2, 1), rgb(2, 12, 4), rgb(4, 21, 7), rgb(9, 51, 11)),
 };
@@ -51,6 +68,7 @@ pub(super) const ORGAN: InstrumentStyle = InstrumentStyle {
     ink: rgb(28, 61, 29),
     muted: rgb(17, 36, 23),
     accent: rgb(27, 59, 4),
+    selected: RowColors::new(rgb(25, 57, 9), DARK_INK),
     peak: rgb(30, 62, 11),
     scope: scope(rgb(4, 7, 8), rgb(7, 13, 9), rgb(11, 21, 10), rgb(23, 50, 4)),
 };
@@ -62,6 +80,7 @@ pub(super) const TB303: InstrumentStyle = InstrumentStyle {
     ink: rgb(4, 8, 4),
     muted: rgb(9, 19, 10),
     accent: rgb(17, 6, 3),
+    selected: RowColors::new(rgb(17, 3, 2), Color::WHITE),
     peak: rgb(22, 8, 4),
     scope: scope(
         rgb(24, 49, 24),
@@ -81,6 +100,7 @@ pub(super) const TR808: InstrumentStyle = InstrumentStyle {
     ink: rgb(30, 53, 20),
     muted: rgb(22, 34, 13),
     accent: rgb(31, 29, 2),
+    selected: RowColors::new(rgb(31, 35, 5), DARK_INK),
     peak: rgb(31, 51, 13),
     scope: scope(rgb(3, 6, 3), rgb(7, 12, 4), rgb(12, 20, 6), rgb(29, 32, 5)),
 };
@@ -92,6 +112,7 @@ pub(super) const TR909: InstrumentStyle = InstrumentStyle {
     ink: rgb(5, 12, 7),
     muted: rgb(10, 22, 12),
     accent: rgb(18, 13, 1),
+    selected: RowColors::new(rgb(16, 10, 1), Color::WHITE),
     peak: rgb(20, 14, 0),
     scope: scope(
         rgb(29, 57, 26),
@@ -108,6 +129,7 @@ pub(super) const JP8080: InstrumentStyle = InstrumentStyle {
     ink: rgb(26, 54, 30),
     muted: rgb(14, 38, 26),
     accent: rgb(31, 44, 7),
+    selected: RowColors::new(rgb(31, 48, 10), DARK_INK),
     peak: rgb(25, 63, 31),
     scope: scope(
         rgb(1, 6, 10),
@@ -124,6 +146,7 @@ pub(super) const MICROWAVE: InstrumentStyle = InstrumentStyle {
     ink: rgb(29, 57, 31),
     muted: rgb(20, 35, 26),
     accent: rgb(31, 23, 17),
+    selected: RowColors::new(rgb(31, 52, 24), DARK_INK),
     peak: rgb(31, 47, 24),
     scope: scope(
         rgb(3, 4, 9),
@@ -140,6 +163,7 @@ pub(super) const FM: InstrumentStyle = InstrumentStyle {
     ink: rgb(30, 59, 27),
     muted: rgb(18, 39, 20),
     accent: rgb(12, 54, 22),
+    selected: RowColors::new(rgb(14, 56, 24), DARK_INK),
     peak: rgb(2, 6, 4),
     scope: scope(
         rgb(20, 45, 13),
@@ -156,6 +180,7 @@ pub(super) const SAMPLER: InstrumentStyle = InstrumentStyle {
     ink: rgb(30, 60, 31),
     muted: rgb(22, 43, 29),
     accent: rgb(19, 54, 31),
+    selected: RowColors::new(rgb(24, 62, 31), DARK_INK),
     peak: rgb(28, 61, 31),
     scope: scope(
         rgb(2, 7, 13),
@@ -188,6 +213,14 @@ impl InstrumentStyle {
         }
     }
 
+    pub(super) fn row(&self, selected: bool) -> RowColors {
+        if selected {
+            self.selected
+        } else {
+            RowColors::new(self.surface, self.ink)
+        }
+    }
+
     pub(super) fn panel(&self) -> WaveformStyle {
         scope(
             self.face,
@@ -203,6 +236,49 @@ impl InstrumentStyle {
             0..=3 => (self.peak, Some(mix(self.scope.background, self.peak))),
             4..=12 => (mix(self.peak, trace), None),
             _ => (trace, None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // WCAG relative luminance, with the encoded sRGB channels normalized from RGB565.
+    fn luminance(color: Color) -> f64 {
+        fn linear(value: u8, max: u8) -> f64 {
+            let s = f64::from(value) / f64::from(max);
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        0.2126 * linear(color.r(), 31)
+            + 0.7152 * linear(color.g(), 63)
+            + 0.0722 * linear(color.b(), 31)
+    }
+
+    #[test]
+    fn selectors_stand_out_on_both_row_and_panel() {
+        for part in Part::ALL {
+            let theme = InstrumentStyle::for_part(part);
+            let selected = theme.row(true);
+            let normal = theme.row(false);
+            for (role, a, b, minimum) in [
+                ("selected vs idle fill", selected.fill, normal.fill, 4.5),
+                ("selected vs panel", selected.fill, theme.face, 4.5),
+                ("selected text", selected.ink, selected.fill, 7.0),
+                ("idle text", normal.ink, normal.fill, 4.5),
+                ("panel text", normal.ink, theme.face, 4.5),
+            ] {
+                let (a, b) = (luminance(a), luminance(b));
+                let ratio = (a.max(b) + 0.05) / (a.min(b) + 0.05);
+                assert!(
+                    ratio >= minimum,
+                    "{part:?} {role}: {ratio:.3}:1 < {minimum}:1"
+                );
+            }
         }
     }
 }

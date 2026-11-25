@@ -41,7 +41,6 @@ pub(super) const LABEL: Rgb565 = Rgb565::new(20, 41, 25);
 #[derive(Clone, Copy)]
 pub(super) struct RackColors {
     pub surface: Rgb565,
-    pub selected: Rgb565,
     pub label: Rgb565,
     pub ink: Rgb565,
     pub accent: Rgb565,
@@ -54,7 +53,6 @@ impl RackColors {
     /// GLO's mixer and master rack share one palette across all channels.
     pub const GLOBAL: Self = Self {
         surface: STRIP,
-        selected: SELECTED,
         label: LABEL,
         ink: palette::WHITE,
         accent: palette::CYAN,
@@ -63,13 +61,25 @@ impl RackColors {
         pointer: POINTER,
     };
 
-    pub fn channel(theme: &InstrumentStyle) -> Self {
+    pub fn global_row(selected: bool) -> Self {
+        if selected {
+            Self {
+                surface: SELECTED,
+                pointer: palette::CYAN,
+                ..Self::GLOBAL
+            }
+        } else {
+            Self::GLOBAL
+        }
+    }
+
+    pub fn channel_row(theme: &InstrumentStyle, selected: bool) -> Self {
+        let row = theme.row(selected);
         Self {
-            surface: theme.surface,
-            selected: super::style::mix(theme.surface, theme.face),
-            label: theme.muted,
-            ink: theme.ink,
-            accent: theme.accent,
+            surface: row.fill,
+            label: row.ink,
+            ink: row.ink,
+            accent: row.ink,
             cap: theme.face,
             rim: theme.muted,
             pointer: theme.ink,
@@ -374,18 +384,10 @@ impl<'a> Band<'a> {
         }
     }
 
-    pub(super) fn rack_row(&mut self, y: i32, selected: bool, colors: &RackColors) -> Rgb565 {
-        let face = if selected {
-            colors.selected
-        } else {
-            colors.surface
-        };
-        self.rect(Point::new(4, y), Size::new(232, 38), face);
+    pub(super) fn rack_row(&mut self, y: i32, selected: bool, colors: &RackColors) {
+        self.rect(Point::new(4, y), Size::new(232, 38), colors.surface);
         if selected {
             self.rect(Point::new(4, y), Size::new(2, 38), colors.accent);
-            colors.accent
-        } else {
-            colors.pointer
         }
     }
 
@@ -395,7 +397,6 @@ impl<'a> Band<'a> {
         label: &str,
         position: u8,
         readout: &str,
-        ink: Rgb565,
         colors: &RackColors,
     ) {
         self.label(label, top, Alignment::Center, colors.label);
@@ -403,7 +404,7 @@ impl<'a> Band<'a> {
             top + Point::new(0, 17),
             position,
             UNITY,
-            [colors.cap, colors.rim, ink],
+            [colors.cap, colors.rim, colors.pointer],
         );
         self.label(
             readout,

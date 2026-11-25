@@ -1,6 +1,6 @@
 //! Six fixed sound knobs above the scope and two auxiliary knobs beside the wordmark.
 
-use super::{mixer::Band, selector::Selector};
+use super::{mixer::Band, selector::Selector, style::TB303};
 use crate::{
     bass::{Controls, Knob, cutoff_detent},
     firmware::Labels,
@@ -24,10 +24,10 @@ use heapless::String;
 
 const KNOB_ROW: u16 = 32;
 pub(super) const SCOPE_TOP: u16 = KNOB_ROW + CELL_HEIGHT + 1;
-pub(super) const METAL: Rgb565 = super::style::TB303.face;
-const GRAPHITE: Rgb565 = super::style::TB303.ink;
-const OXIDE: Rgb565 = super::style::TB303.accent;
-const SHADOW: Rgb565 = super::style::TB303.muted;
+pub(super) const METAL: Rgb565 = TB303.face;
+const GRAPHITE: Rgb565 = TB303.ink;
+const OXIDE: Rgb565 = TB303.accent;
+const SHADOW: Rgb565 = TB303.muted;
 const IVORY: Rgb565 = Rgb565::new(30, 60, 29);
 const LAMP: Rgb565 = Rgb565::new(31, 27, 12);
 
@@ -125,8 +125,13 @@ impl Dial {
     fn draw(&self, band: &mut Band<'_>, selector: &Selector, knob: Knob, center: Point) {
         let shade = |c| selector.shade(c);
         let encoder = Knob::direct().iter().position(|&k| k == knob);
+        let [legend, tick, mark] = if self.selected {
+            [TB303.selected.ink; 3]
+        } else {
+            [GRAPHITE, SHADOW, OXIDE]
+        };
         let (skirt, bevel, cap, pointer) = if self.selected {
-            (GRAPHITE, LAMP, OXIDE, IVORY)
+            (GRAPHITE, LAMP, IVORY, GRAPHITE)
         } else {
             let cap = if encoder.is_some() { SHADOW } else { GRAPHITE };
             (GRAPHITE, SHADOW, cap, IVORY)
@@ -144,7 +149,7 @@ impl Dial {
                 .expect("infallible strip");
         }
         for (dx, dy) in [(-13, 3), (-11, -6), (0, -11), (11, -6), (13, 3)] {
-            band.rect(center + Point::new(dx, dy), Size::new(1, 2), shade(SHADOW));
+            band.rect(center + Point::new(dx, dy), Size::new(1, 2), shade(tick));
         }
         Line::new(center + self.pointer / 3, center + self.pointer)
             .into_styled(PrimitiveStyle::with_stroke(shade(pointer), 2))
@@ -157,23 +162,19 @@ impl Dial {
                 Point::new(x, 0),
                 Size::new(u32::from(CELL_WIDTH) * 4 - 2, u32::from(CELL_HEIGHT)),
             )
-            .into_styled(PrimitiveStyle::with_stroke(shade(OXIDE), 1))
+            .into_styled(PrimitiveStyle::with_stroke(shade(mark), 1))
             .draw(band)
             .expect("infallible strip");
             band.label(
                 ["1", "2", "3", "4"][index],
                 Point::new(3, 4),
                 Alignment::Left,
-                shade(GRAPHITE),
+                shade(legend),
             );
         }
-        // The cap shows the stored setting. The red witness mark follows the sequencer.
+        // The cap shows the stored setting. The witness mark follows the sequencer.
         if let Some(marker) = self.marker {
-            band.rect(
-                center + marker,
-                Size::new(3, 3),
-                shade(super::style::TB303.accent),
-            );
+            band.rect(center + marker, Size::new(3, 3), shade(mark));
         }
         band.label(
             match knob {
@@ -183,7 +184,7 @@ impl Dial {
             },
             Point::new(center.x, 21),
             Alignment::Center,
-            shade(GRAPHITE),
+            shade(legend),
         );
     }
 }
@@ -273,7 +274,12 @@ impl Panel {
             let dy = area.top_left.y as u16;
             let w = area.size.width as u16;
             let h = area.size.height as u16;
-            let mut cell = Band::new(pixels, dx, dy, w, h, paper).with_panel_type(true);
+            let fill = if dial.selected {
+                selector.shade(TB303.selected.fill)
+            } else {
+                paper
+            };
+            let mut cell = Band::new(pixels, dx, dy, w, h, fill).with_panel_type(true);
             dial.draw(&mut cell, selector, knob, center);
             lcd.write_rect_buffered(x + dx, y + dy, w, h, cell.pixels.as_flattened())
                 .await?;
@@ -326,6 +332,6 @@ fn wordmark(band: &mut Band<'_>, selector: &Selector) {
         Point::zero(),
         super::lettering::BASS,
         36,
-        [GRAPHITE, super::style::TB303.accent].map(|c| selector.shade(c)),
+        [GRAPHITE, TB303.accent].map(|c| selector.shade(c)),
     );
 }

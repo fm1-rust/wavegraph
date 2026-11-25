@@ -43,7 +43,6 @@ impl Rack {
         (theme, entering): (&InstrumentStyle, bool),
         selector: &mut Selector,
     ) -> Result<(), Error> {
-        let colors = RackColors::channel(theme);
         let strip = labels.mixer.0[labels.channel.index()];
         let controls = Controls {
             inserts: labels.inserts,
@@ -81,7 +80,7 @@ impl Rack {
                 0..16 => {
                     let title = heapless::format!(24; "CH{} / {} FX", labels.channel.index() + 1, labels.focus.name())
                         .expect("channel and instrument title");
-                    band.title(&title, Point::new(8, 1), colors.ink);
+                    band.title(&title, Point::new(8, 1), theme.ink);
                     band.label(
                         if controls.half_gain {
                             "OUT HALF"
@@ -90,7 +89,7 @@ impl Rack {
                         },
                         Point::new(222, 3),
                         Alignment::Right,
-                        colors.label,
+                        theme.ink,
                     );
                 }
                 16..56 => insert(
@@ -99,7 +98,7 @@ impl Rack {
                     "1",
                     controls.inserts[0],
                     controls.selected == Some(0),
-                    &colors,
+                    theme,
                 ),
                 56..96 => insert(
                     &mut band,
@@ -107,16 +106,11 @@ impl Rack {
                     "2",
                     controls.inserts[1],
                     controls.selected == Some(1),
-                    &colors,
+                    theme,
                 ),
                 96..112 => {
-                    band.title("POST FX", Point::new(8, 97), colors.accent);
-                    band.label(
-                        "PRE-FADER",
-                        Point::new(65, 99),
-                        Alignment::Left,
-                        colors.label,
-                    );
+                    band.title("POST FX", Point::new(8, 97), theme.accent);
+                    band.label("PRE-FADER", Point::new(65, 99), Alignment::Left, theme.ink);
                     band.rect(
                         Point::new(0, 111),
                         Size::new(u32::from(SIZE), 1),
@@ -130,28 +124,17 @@ impl Rack {
                         },
                         Point::new(231, 99),
                         Alignment::Right,
-                        colors.label,
+                        theme.ink,
                     );
                 }
                 _ => {
-                    let ink = if controls.selected.is_some() {
-                        colors.label
+                    let (ink, label) = if controls.selected.is_none() {
+                        band.rect(Point::new(4, 225), Size::new(232, 14), theme.selected.fill);
+                        (theme.selected.ink, "SENDS")
                     } else {
-                        colors.accent
+                        (theme.ink, "HOME SENDS")
                     };
-                    if controls.selected.is_none() {
-                        band.rect(Point::new(4, 225), Size::new(232, 14), colors.selected);
-                    }
-                    band.label(
-                        if controls.selected.is_some() {
-                            "HOME SENDS"
-                        } else {
-                            "SENDS"
-                        },
-                        Point::new(9, 228),
-                        Alignment::Left,
-                        ink,
-                    );
+                    band.label(label, Point::new(9, 228), Alignment::Left, ink);
                     for ((x, name), value) in [(87, "2 REV"), (165, "3 DLY")]
                         .into_iter()
                         .zip(controls.sends)
@@ -186,9 +169,10 @@ fn insert(
     slot: &str,
     fx: Insert,
     selected: bool,
-    colors: &RackColors,
+    theme: &InstrumentStyle,
 ) {
-    let ink = band.rack_row(y, selected, colors);
+    let colors = RackColors::channel_row(theme, selected);
+    band.rack_row(y, selected, &colors);
     band.label(slot, Point::new(11, y + 7), Alignment::Left, colors.label);
     if fx == Insert::None {
         band.title("NONE", Point::new(26, y + 5), colors.label);
@@ -207,10 +191,10 @@ fn insert(
         if fx.enabled() { "ON" } else { "BYPASS" },
         Point::new(26, y + 23),
         Alignment::Left,
-        if fx.enabled() { ink } else { colors.label },
+        colors.label,
     );
     let mut dial = |x, name, position, value: &str| {
-        band.rack_dial(Point::new(x, y), name, position, value, ink, colors);
+        band.rack_dial(Point::new(x, y), name, position, value, &colors);
     };
     match fx {
         Insert::None => (),

@@ -51,6 +51,13 @@ mod scope;
 mod screen;
 #[cfg(any(target_os = "none", test))]
 mod sequencer;
+#[cfg(all(test, not(target_os = "none")))]
+#[allow(
+    dead_code,
+    reason = "Host tests exercise the palettes without the display driver"
+)]
+#[path = "screen/style.rs"]
+mod style;
 #[cfg(any(target_os = "none", test))]
 mod wavetable;
 

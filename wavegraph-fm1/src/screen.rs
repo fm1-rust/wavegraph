@@ -59,7 +59,7 @@ const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
 // The timing monitor uses the original green CRT.
 const STYLE: WaveformStyle = style::MONO.scope;
 const MENU_TICKS: u32 = 100;
-// Foreground and background for the global instrument picker and channel badge.
+// Foreground and background for the global channel badge.
 const GLO_OVERLAY: [Rgb565; 2] = [Rgb565::WHITE, Rgb565::BLACK];
 const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
@@ -332,13 +332,18 @@ impl Screen {
         self.text
             .text(7, 0, if selected.is_some() { b"ALG" } else { b"   " }, ink);
         let focus = selected.unwrap_or(controls.last);
+        // Auxiliary knobs have no numbered field. Their selection follows the full readout.
+        let mut field = (13, 0..TextGrid::COLUMNS);
         for (i, &knob) in Knob::direct().iter().enumerate() {
             let (x, width) = if i % 2 == 0 { (0, 7) } else { (9, 9) };
             let y = 1 + i / 2;
-            let color = if knob == focus { ink } else { muted };
+            if knob == focus {
+                field = (y, x..x + 2 + width);
+            }
             self.text.text(x, y, [b"1234"[i]], ink);
-            self.text.text(x + 2, y, &knob.name()[..width], color);
+            self.text.text(x + 2, y, &knob.name()[..width], muted);
         }
+        self.text.highlight(field.0, field.1, theme.selected);
         let (name, value, units) = controls.readout(focus);
         self.text
             .text(0, 13, name, if selected.is_some() { ink } else { muted });
@@ -426,7 +431,7 @@ impl Screen {
         let (position, bank) = playback;
         let (seq, part) = (labels.seq, labels.focus);
         let style = theme.panel();
-        let (ink, muted, active) = (theme.ink, theme.muted, theme.accent);
+        let (ink, muted, active) = (theme.ink, theme.muted, theme.selected.fill);
         let page = Page::Sequencer(view, seq.channel, part);
         if self.page.replace(page) != Some(page) {
             self.change_view(style);
@@ -515,7 +520,7 @@ impl Screen {
         t: Timing,
     ) -> Result<(), Error> {
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
-            self.selector.select(None, GLO_OVERLAY);
+            self.selector.select(None, None);
             self.change_view(STYLE);
             lcd.as_async(clock)?
                 .fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())
@@ -683,8 +688,7 @@ impl Screen {
         } else {
             None
         };
-        let colors = theme.map_or(GLO_OVERLAY, |t| [t.ink, t.surface]);
-        if self.selector.select(menu, colors) {
+        if self.selector.select(menu, theme) {
             self.page = None;
         }
         let Some(theme) = theme else {
