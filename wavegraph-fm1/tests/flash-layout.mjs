@@ -55,7 +55,7 @@ function checkAsset(name, bytes) {
 
 // Find the PCM1 clip by its frame count, then check the installed bit stream
 // against the source PCM, including the final, possibly short group.
-function checkPackedClip(pcm, name) {
+function checkPackedClip(pcm, name, predictive) {
     const frames = pcm.length / 2;
     const header = Buffer.alloc(8);
     header.write("PCM1");
@@ -65,6 +65,7 @@ function checkPackedClip(pcm, name) {
     assert.equal(upper.indexOf(header, start + 1), -1, name);
     assert.ok(!upper.includes(pcm), `${name} also present as raw PCM`);
     let offset = start + header.length;
+    let sample = 0, delta = 0;
     for (let first = 0; first < frames; first += 32) {
         const width = upper.readUInt8(offset++);
         assert.ok(width >= 1 && width <= 16, name);
@@ -76,7 +77,14 @@ function checkPackedClip(pcm, name) {
                 value |= ((upper.readUInt8(offset + (bit >> 3)) >> (bit & 7)) & 1) << b;
             }
             const sign = 1 << (width - 1);
-            assert.equal((value ^ sign) - sign, pcm.readInt16LE(2 * (first + i)), name);
+            let decoded = (value ^ sign) - sign;
+            if (predictive) {
+                if ((first + i) % 128 === 0) sample = delta = 0;
+                delta = (delta + decoded) << 16 >> 16;
+                sample = (sample + delta) << 16 >> 16;
+                decoded = sample;
+            }
+            assert.equal(decoded, pcm.readInt16LE(2 * (first + i)), name);
         }
         offset += Math.ceil(count * width / 8);
     }
@@ -99,13 +107,15 @@ for (const [path, extension] of [
     assert.ok(names.length, path);
     for (const name of names) {
         const bytes = readFileSync(new URL(name, dir));
-        const packing = path.includes("wavegraph-909") ? mode : samplerMode;
+        const rave = path === "../samples/rave/";
+        const compact = rave && mode === "raw" && ["house-m7.s16le", "zap.s16le", "stab.s16le"].includes(name);
+        const packing = rave ? samplerMode : mode;
         const breakName = mode === "packed" && samplerMode === "packed" ? "amen.ima" : "amen-compact.ima";
         if (name.startsWith("amen") && extension === ".ima" && name !== breakName) {
             assert.ok(!upper.includes(bytes) && !code.includes(bytes), `${name} duplicated in this image`);
-        } else if (extension === ".s16le" && packing === "packed") {
+        } else if (extension === ".s16le" && (packing === "packed" || compact)) {
             assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
-            checkPackedClip(bytes, name);
+            checkPackedClip(bytes, name, rave);
         } else {
             checkAsset(name, bytes);
         }

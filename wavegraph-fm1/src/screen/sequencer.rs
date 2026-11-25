@@ -12,7 +12,7 @@ use crate::{
     bass::CC_SLIDE,
     instrument::Part,
     sequencer::{
-        BankPosition, Position, SeqPage, Sequencer,
+        BankPosition, Position, SeqPage,
         edit::{Address, EDITS, Step, Suppressed},
         pattern::{BAR, Clip, SLOTS, Slot},
     },
@@ -316,7 +316,7 @@ struct BankButton {
 }
 
 pub(super) struct Grid {
-    previous: Option<(Slot, u8, bool, u32)>,
+    previous: Option<(Slot, u8, bool, u32, bool)>,
     cursor: Option<u8>,
     buttons: [Option<BankButton>; SLOTS],
     head: Option<u8>,
@@ -479,23 +479,28 @@ impl Grid {
         clock: &mut Clock,
         text: &mut TextGrid,
         strip: &mut [[u8; 2]],
-        (seq, part, theme): (Sequencer, Part, &InstrumentStyle),
+        (labels, theme): (&super::Labels, &InstrumentStyle),
         position: Option<Position>,
         bank: BankPosition,
     ) -> Result<(), Error> {
+        let (seq, part) = (labels.seq, labels.focus);
         let next = seq.slot(seq.channel, part);
         let position = position.filter(|_| seq.transport.playing());
         let editing = seq.page == Some(SeqPage::Step);
         let cursor = editing.then_some(seq.cursor);
         let follow = position.filter(|_| !editing);
         let slot = follow.map_or(next, |_| bank.slot);
-        let clip = slot.clip(part, seq.channel);
+        let house_m7 = follow.map_or_else(
+            || part.uses_house_patterns(labels.voice.waveform),
+            |_| bank.house_m7,
+        );
+        let clip = slot.factory_clip(part, seq.channel, house_m7);
         let bar = follow.map_or(seq.bar % clip.bars, |_| bank.bar % clip.bars);
         let head = position
             .filter(|_| bank.slot == slot && bank.bar == bar)
             .map(|p| p.step % 16);
         let enabled = seq.enabled[seq.channel.index()];
-        let key = (slot, bar, enabled, seq.edit_revision);
+        let key = (slot, bar, enabled, seq.edit_revision, house_m7);
         let changed = self.previous != Some(key);
         let mut lcd = lcd.as_async(clock)?;
         if seq.page == Some(SeqPage::Pattern) {

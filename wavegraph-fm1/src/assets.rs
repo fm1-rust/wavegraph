@@ -6,8 +6,10 @@ use wavegraph_wavetable::{BANKS, Bank};
 
 pub(crate) use fm1_assets::flash_asset;
 
-pub(super) const SAMPLE_NAMES: [[u8; 9]; 5] = [
+pub(super) const HOUSE_M7: u8 = 1;
+pub(super) const SAMPLE_NAMES: [[u8; 9]; 6] = [
     *b"AMEN BRK ",
+    *b"MIN7 STAB",
     *b"RAVE RISE",
     *b"AIRHORN  ",
     *b"LASER ZAP",
@@ -15,9 +17,9 @@ pub(super) const SAMPLE_NAMES: [[u8; 9]; 5] = [
 ];
 
 macro_rules! rave_clip {
-    ($file:literal, $rate:literal, $root:literal) => {{
-        #[cfg(feature = "packed-samples")]
-        let clip = wavegraph_sampler::Clip::from_pcm1(
+    ($file:literal, $rate:literal, $root:literal, $compact:meta) => {{
+        #[cfg(any(feature = "packed-samples", $compact))]
+        let clip = wavegraph_sampler::Clip::from_delta_pcm1(
             flash_asset!(
                 u8,
                 include_bytes!(concat!(env!("OUT_DIR"), "/", $file, ".pcm1"))
@@ -25,7 +27,7 @@ macro_rules! rave_clip {
             $rate,
             $root,
         );
-        #[cfg(not(feature = "packed-samples"))]
+        #[cfg(not(any(feature = "packed-samples", $compact)))]
         let clip = wavegraph_sampler::Clip::from_pcm16le(
             flash_asset!(
                 u8,
@@ -59,6 +61,12 @@ pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len
             .expect("validated four-bar Amen break")
             .with_native_tempo(122)
     },
+    rave_clip!(
+        "house-m7",
+        16_000,
+        62,
+        all(target_os = "none", not(feature = "packed-cymbals"))
+    ),
     wavegraph_sampler::Clip::from_ima_adpcm(
         flash_asset!(u8, include_bytes!("../samples/rave/rise.ima")),
         19_404,
@@ -66,9 +74,19 @@ pub(super) static RAVE_BANK: [wavegraph_sampler::Clip<'static>; SAMPLE_NAMES.len
         60,
     )
     .expect("validated rave rise"),
-    rave_clip!("horn", 22_059, 60),
-    rave_clip!("zap", 22_059, 60),
-    rave_clip!("stab", 14_706, 43),
+    rave_clip!("horn", 22_059, 60, any()),
+    rave_clip!(
+        "zap",
+        22_059,
+        60,
+        all(target_os = "none", not(feature = "packed-cymbals"))
+    ),
+    rave_clip!(
+        "stab",
+        14_706,
+        43,
+        all(target_os = "none", not(feature = "packed-cymbals"))
+    ),
 ];
 
 #[cfg(target_os = "none")]

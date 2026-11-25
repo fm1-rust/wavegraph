@@ -134,11 +134,22 @@ fn main() {
     patterns::compile_banks(&out);
     #[cfg(feature = "packed-cymbals")]
     pack_cymbals(&out);
-    #[cfg(feature = "packed-samples")]
-    for name in ["horn", "zap", "stab"] {
-        let file = format!("samples/rave/{name}.s16le");
-        println!("cargo:rerun-if-changed={file}");
-        pack_pcm(&out, name, &fs::read(file).expect("factory sampler clip"));
+    // With both large banks raw on-device, keep the zap and both stabs packed to fit flash.
+    let compact = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none")
+        && !cfg!(feature = "packed-cymbals");
+    for name in ["horn", "zap", "stab", "house-m7"] {
+        if cfg!(feature = "packed-samples")
+            || (compact && matches!(name, "zap" | "stab" | "house-m7"))
+        {
+            let file = format!("samples/rave/{name}.s16le");
+            println!("cargo:rerun-if-changed={file}");
+            pack_pcm(
+                &out,
+                name,
+                &fs::read(file).expect("factory sampler clip"),
+                true,
+            );
+        }
     }
     // The cue shares flash with the banks. Independent 128-frame blocks allow
     // each DMA half to decode directly into the mix without a PCM buffer.
@@ -210,15 +221,25 @@ fn pack_cymbals(out: &std::path::Path) {
         ("open-hat", kit.open_hat),
         ("ride", kit.ride),
     ] {
-        pack_pcm(out, name, bytes);
+        pack_pcm(out, name, bytes, false);
     }
 }
 
-#[cfg(any(feature = "packed-cymbals", feature = "packed-samples"))]
-fn pack_pcm(out: &std::path::Path, name: &str, bytes: &[u8]) {
+fn pack_pcm(out: &std::path::Path, name: &str, bytes: &[u8], predictive: bool) {
     let (frames, rest) = bytes.as_chunks::<2>();
     assert!(rest.is_empty(), "whole PCM16 frames");
-    let samples: Vec<_> = frames.iter().copied().map(i16::from_le_bytes).collect();
+    let mut samples: Vec<_> = frames.iter().copied().map(i16::from_le_bytes).collect();
+    if predictive {
+        for block in samples.chunks_mut(128) {
+            let (mut previous, mut slope) = (0_i16, 0_i16);
+            for sample in block {
+                let delta = sample.wrapping_sub(previous);
+                previous = *sample;
+                *sample = delta.wrapping_sub(slope);
+                slope = delta;
+            }
+        }
+    }
     let packed = fm1_assets::pcm::encode(&samples).expect("factory sample count");
     fs::write(out.join(format!("{name}.pcm1")), packed).expect("write packed clip");
 }

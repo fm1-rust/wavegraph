@@ -4,7 +4,7 @@ use core::fmt::Write as _;
 use midly::{Format, MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use std::{fs, path::Path};
 
-const BANKS: [&str; 9] = [
+const BANKS: [&str; 10] = [
     "mono",
     "organ",
     "tb303-low",
@@ -14,6 +14,7 @@ const BANKS: [&str; 9] = [
     "wavetable",
     "tb303-high",
     "sampler",
+    "house-m7",
 ];
 const TICKS_PER_BEAT: u64 = 32;
 const BAR: u64 = TICKS_PER_BEAT * 4;

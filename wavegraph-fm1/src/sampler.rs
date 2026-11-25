@@ -28,6 +28,14 @@ impl Program {
             },
             ..Self::DRY
         },
+        // The chord's layers and delay are printed. Let the release ring after key-up.
+        Self {
+            playback: Playback {
+                release_ms: 95,
+                ..Playback::INITIAL
+            },
+            ..Self::DRY
+        },
         Self {
             timbre: Timbre {
                 cutoff_hz: 4454,

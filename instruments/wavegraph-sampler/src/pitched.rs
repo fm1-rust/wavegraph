@@ -1,4 +1,4 @@
-//! Monophonic keyboard playback of a bank of immutable PCM clips.
+//! Four-voice keyboard playback of a bank of immutable PCM clips.
 
 #[cfg(feature = "ima-adpcm")]
 mod ima;
@@ -11,6 +11,9 @@ use tone::VoiceTone;
 use pcm::{Cursor, Pcm};
 use wavegraph_core::{Port, Process, ProcessContext, midi::Note};
 use wavegraph_sample::FromSample;
+
+/// Independent sample voices per chromatic player.
+pub const POLYPHONY: usize = 4;
 
 const FRAC_BITS: u32 = 15;
 const ONE: u32 = 1 << FRAC_BITS;
@@ -67,6 +70,19 @@ impl<'a> Clip<'a> {
     #[cfg(feature = "packed-pcm")]
     #[must_use]
     pub const fn from_pcm1(bytes: &'a [u8], source_hz: u32, root: u8) -> Option<Self> {
+        Self::packed(bytes, source_hz, root, false)
+    }
+
+    /// Lossless second differences stored in PCM1. The sample and its first difference
+    /// both start at zero every 128 frames. All predictor arithmetic wraps at 16 bits.
+    #[cfg(feature = "packed-pcm")]
+    #[must_use]
+    pub const fn from_delta_pcm1(bytes: &'a [u8], source_hz: u32, root: u8) -> Option<Self> {
+        Self::packed(bytes, source_hz, root, true)
+    }
+
+    #[cfg(feature = "packed-pcm")]
+    const fn packed(bytes: &'a [u8], source_hz: u32, root: u8, predictive: bool) -> Option<Self> {
         let Some(clip) = fm1_assets::pcm::PackedPcm16::parse(bytes) else {
             return None;
         };
@@ -75,6 +91,7 @@ impl<'a> Clip<'a> {
             Pcm::Packed {
                 groups,
                 frames: clip.frames(),
+                predictive,
             },
             source_hz,
             root,
@@ -165,7 +182,7 @@ pub enum PitchedMessage {
     Select(u8),
     /// Configure the next strike. Invalid trim ranges are ignored.
     Playback(Playback),
-    /// Set the selected clip's tone. Edits also affect its currently sounding note.
+    /// Set the selected clip's tone. Edits also affect its sounding voices.
     Timbre(Timbre),
     /// Transport BPM for tempo-tagged clips. Zero selects the recording's own tempo.
     Tempo(u16),
@@ -173,20 +190,29 @@ pub enum PitchedMessage {
     NoteOn(Note),
     /// Release the matching gated or looped note.
     NoteOff(u8),
-    /// Silence the voice immediately, including a one-shot tail.
+    /// Silence all voices immediately, including one-shot tails.
     Stop,
 }
 
-/// Variable-speed, linearly interpolated PCM playback. Each instance owns its cursor.
+/// Four chromatic voices share the bank and stream independently into one mono outlet.
 #[derive(Clone, Debug)]
 pub struct PitchedSampler<'a> {
     bank: &'a [Clip<'a>],
-    clip: &'a Clip<'a>,
-    sounding: &'a Clip<'a>,
+    selected: &'a Clip<'a>,
     program: Timbre,
-    tone: VoiceTone,
-    bpm: u16,
     playback: Playback,
+    bpm: u16,
+    output_hz: u32,
+    period: f32,
+    voices: [Voice<'a>; POLYPHONY],
+    // Oldest strike first. Rotate indices so live decoders and filters stay in place.
+    order: [u8; POLYPHONY],
+}
+
+#[derive(Clone, Debug)]
+struct Voice<'a> {
+    clip: &'a Clip<'a>,
+    tone: VoiceTone,
     active: Playback,
     start: Cursor<'a>,
     cursor: Cursor<'a>,
@@ -194,13 +220,12 @@ pub struct PitchedSampler<'a> {
     remaining: u32,
     current: Option<i16>,
     next: Option<i16>,
-    output_hz: u32,
     step_whole: u32,
     step_fraction: u32,
-    period: f32,
     fraction: u32,
     gain: i32,
     note: u8,
+    held: bool,
     envelope: u32,
     release_step: u32,
 }
@@ -234,12 +259,127 @@ impl<'a> PitchedSampler<'a> {
         let period = 1.0 / rate;
         Some(Self {
             bank,
-            clip,
-            sounding: clip,
+            selected: clip,
             program: Timbre::DRY,
-            tone: VoiceTone::new(period),
-            bpm: 0,
             playback: Playback::INITIAL,
+            bpm: 0,
+            output_hz,
+            period,
+            voices: core::array::from_fn(|_| Voice::new(clip, period)),
+            order: [0, 1, 2, 3],
+        })
+    }
+
+    fn apply(&mut self, message: PitchedMessage) {
+        match message {
+            PitchedMessage::Select(index) => {
+                if let Some(clip) = self.bank.get(usize::from(index)) {
+                    self.selected = clip;
+                }
+            }
+            PitchedMessage::Playback(p) if p.start < p.end && p.end <= 100 => self.playback = p,
+            PitchedMessage::Playback(_) => (),
+            PitchedMessage::Tempo(bpm) => {
+                self.bpm = bpm;
+                for voice in &mut self.voices {
+                    if voice.current.is_some() && voice.clip.native_bpm != 0 {
+                        voice.update_step(self.output_hz, self.period, bpm);
+                    }
+                }
+            }
+            PitchedMessage::Timbre(program) => {
+                self.program = program;
+                for voice in &mut self.voices {
+                    if voice.current.is_some() && core::ptr::eq(self.selected, voice.clip) {
+                        voice.tone.configure(program, self.period);
+                    }
+                }
+            }
+            PitchedMessage::Stop => {
+                for voice in &mut self.voices {
+                    voice.current = None;
+                }
+            }
+            PitchedMessage::NoteOff(note)
+            | PitchedMessage::NoteOn(Note {
+                number: note,
+                velocity: 0,
+            }) => {
+                for voice in &mut self.voices {
+                    if voice.current.is_some() && voice.note == note && voice.held {
+                        voice.release(self.output_hz);
+                    }
+                }
+            }
+            PitchedMessage::NoteOn(note) if note.number < 128 => {
+                let rank = self
+                    .order
+                    .iter()
+                    .position(|&i| {
+                        let v = &self.voices[usize::from(i)];
+                        v.current.is_some() && v.note == note.number
+                    })
+                    .or_else(|| {
+                        self.order
+                            .iter()
+                            .position(|&i| self.voices[usize::from(i)].current.is_none())
+                    })
+                    .or_else(|| {
+                        self.order
+                            .iter()
+                            .position(|&i| !self.voices[usize::from(i)].held)
+                    })
+                    .unwrap_or(0);
+                let slot = usize::from(self.order[rank]);
+                self.order[rank..].rotate_left(1);
+                let voice = &mut self.voices[slot];
+                voice.strike(
+                    self.selected,
+                    note,
+                    self.playback,
+                    self.program,
+                    self.period,
+                );
+                voice.update_step(self.output_hz, self.period, self.bpm);
+            }
+            PitchedMessage::NoteOn(_) => (),
+        }
+    }
+
+    fn render<S: FromSample<i16>>(&mut self, output: &mut [S]) {
+        // The decoder and filter run only for voices that actually sound in this span.
+        let mut active = self.voices.iter_mut().filter(|v| v.current.is_some());
+        let Some(first) = active.next() else {
+            output.fill_with(|| S::from_sample_(0));
+            return;
+        };
+        if active.next().is_none() {
+            for sample in output {
+                *sample = S::from_sample_(first.next_frame());
+            }
+            return;
+        }
+        for sample in output {
+            let sum: i32 = self
+                .voices
+                .iter_mut()
+                .map(|v| i32::from(v.next_frame()))
+                .sum();
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "Saturate the wide mix once, after summing four PCM16 voices."
+            )]
+            let mixed = sum.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+            *sample = S::from_sample_(mixed);
+        }
+    }
+}
+
+impl<'a> Voice<'a> {
+    fn new(clip: &'a Clip<'a>, period: f32) -> Self {
+        Self {
+            clip,
+            tone: VoiceTone::new(period),
             active: Playback::INITIAL,
             start: clip.pcm.cursor(),
             cursor: clip.pcm.cursor(),
@@ -247,16 +387,15 @@ impl<'a> PitchedSampler<'a> {
             remaining: 0,
             current: None,
             next: None,
-            output_hz,
             step_whole: 0,
             step_fraction: 0,
-            period,
             fraction: 0,
             gain: 0,
             note: 0,
+            held: false,
             envelope: FULL_GAIN,
             release_step: 0,
-        })
+        }
     }
 
     #[allow(
@@ -266,10 +405,10 @@ impl<'a> PitchedSampler<'a> {
         clippy::arithmetic_side_effects,
         reason = "Playback speed is nonnegative, fixed-point fractions are less than one and MIDI intervals fit eleven octaves."
     )]
-    fn update_step(&mut self) {
-        let clip = self.sounding;
+    fn update_step(&mut self, output_hz: u32, period: f32, bpm: u16) {
+        let clip = self.clip;
         if clip.native_bpm == 0 {
-            let step = clip.step(self.note, self.output_hz);
+            let step = clip.step(self.note, output_hz);
             self.step_whole = step >> FRAC_BITS;
             self.step_fraction = step << (32 - FRAC_BITS);
         } else {
@@ -278,12 +417,8 @@ impl<'a> PitchedSampler<'a> {
             let octave = interval.div_euclid(12);
             let pitch =
                 ((SEMITONES[index] << octave.max(0)) as f32) / ((ONE << (-octave).max(0)) as f32);
-            let bpm = if self.bpm == 0 {
-                clip.native_bpm
-            } else {
-                self.bpm
-            };
-            let speed = (clip.source_hz as f32 * self.period)
+            let bpm = if bpm == 0 { clip.native_bpm } else { bpm };
+            let speed = (clip.source_hz as f32 * period)
                 * (f32::from(bpm) / f32::from(clip.native_bpm))
                 * pitch;
             self.step_whole = speed as u32;
@@ -291,84 +426,59 @@ impl<'a> PitchedSampler<'a> {
         }
     }
 
+    fn release(&mut self, output_hz: u32) {
+        self.held = false;
+        if self.active.mode == PlaybackMode::OneShot {
+            return;
+        }
+        self.tone.release();
+        if self.tone.uses_playback_release() {
+            let frames = match self.active.release_ms {
+                0 => 64,
+                ms => u64::from(output_hz)
+                    .saturating_mul(u64::from(ms))
+                    .div_ceil(1000),
+            };
+            self.release_step = FULL_GAIN.div_ceil(frames.try_into().unwrap_or(u32::MAX));
+        } else if self.tone.finished() {
+            self.current = None;
+        }
+    }
+
     #[allow(
         clippy::arithmetic_side_effects,
         clippy::cast_possible_truncation,
-        reason = "Trim percentages are ordered and at most 100. Widening the u32 clocks and frame counts before scaling keeps every result in range."
+        reason = "Valid trim percentages bound both offsets by the u32 source length."
     )]
-    fn apply(&mut self, message: PitchedMessage) {
-        match message {
-            PitchedMessage::Select(index) => {
-                if let Some(clip) = self.bank.get(usize::from(index)) {
-                    self.clip = clip;
-                }
-            }
-            PitchedMessage::Tempo(bpm) => {
-                self.bpm = bpm;
-                if self.current.is_some() && self.sounding.native_bpm != 0 {
-                    self.update_step();
-                }
-            }
-            PitchedMessage::Timbre(p) => {
-                self.program = p;
-                if self.current.is_some() && core::ptr::eq(self.clip, self.sounding) {
-                    self.tone.configure(p);
-                }
-            }
-            PitchedMessage::Playback(p) => {
-                if p.start < p.end && p.end <= 100 {
-                    self.playback = p;
-                }
-            }
-            PitchedMessage::Stop => self.current = None,
-            PitchedMessage::NoteOff(note)
-            | PitchedMessage::NoteOn(Note {
-                number: note,
-                velocity: 0,
-            }) => {
-                if self.active.mode != PlaybackMode::OneShot
-                    && note == self.note
-                    && self.release_step == 0
-                {
-                    self.tone.release();
-                    if !self.tone.uses_playback_release() {
-                        if self.tone.finished() {
-                            self.current = None;
-                        }
-                        return;
-                    }
-                    let frames = match self.active.release_ms {
-                        0 => 64,
-                        ms => (u64::from(self.output_hz) * u64::from(ms)).div_ceil(1000),
-                    };
-                    self.release_step = FULL_GAIN.div_ceil(frames.try_into().unwrap_or(u32::MAX));
-                }
-            }
-            PitchedMessage::NoteOn(note) if note.number < 128 => {
-                self.note = note.number;
-                self.sounding = self.clip;
-                self.update_step();
-                self.tone.strike(self.program, note, self.clip.root);
-                self.gain = (i32::from(note.velocity.min(127)) << FRAC_BITS) / 127;
-                self.release_step = 0;
-                self.envelope = FULL_GAIN;
-                self.fraction = 0;
-                self.active = self.playback;
-                let frames = u64::from(self.clip.pcm.frames());
-                let begin = (frames * u64::from(self.active.start) / 100) as u32;
-                let end = (frames * u64::from(self.active.end)).div_ceil(100) as u32;
-                self.region_frames = end - begin;
-                self.start = self.clip.pcm.cursor();
-                if begin != 0 {
-                    self.start.nth(begin - 1);
-                }
-                self.cursor = self.start.clone();
-                self.remaining = self.region_frames;
-                self.current = self.read(0);
-                self.next = self.read(0);
-            }
-            PitchedMessage::NoteOn(_) => (),
+    fn strike(
+        &mut self,
+        clip: &'a Clip<'a>,
+        note: Note,
+        playback: Playback,
+        program: Timbre,
+        period: f32,
+    ) {
+        self.clip = clip;
+        self.note = note.number;
+        self.held = true;
+        self.tone.strike(program, note, clip.root, period);
+        self.gain = (i32::from(note.velocity.min(127)) << FRAC_BITS) / 127;
+        self.release_step = 0;
+        self.envelope = FULL_GAIN;
+        self.fraction = 0;
+        self.active = playback;
+        let frames = u64::from(clip.pcm.frames());
+        let begin = (frames * u64::from(playback.start) / 100) as u32;
+        let end = (frames * u64::from(playback.end)).div_ceil(100) as u32;
+        self.region_frames = end - begin;
+        self.start = clip.pcm.cursor();
+        if begin != 0 {
+            self.start.nth(begin - 1);
         }
+        self.cursor = self.start.clone();
+        self.remaining = self.region_frames;
+        self.current = self.read(0);
+        self.next = self.read(0);
     }
 
     #[allow(
@@ -395,38 +505,35 @@ impl<'a> PitchedSampler<'a> {
         clippy::cast_possible_wrap,
         reason = "The Q15 fraction times any PCM16 difference fits i32. Interpolation and both envelope gains stay within PCM16."
     )]
-    fn render<S: FromSample<i16>>(&mut self, output: &mut [S]) {
-        let mut output = output.iter_mut();
-        while let Some(first) = self.current {
-            let Some(dst) = output.next() else { return };
-            let a = i32::from(first);
-            let b = i32::from(self.next.unwrap_or(0));
-            let value = a + (((b - a) * (self.fraction >> (32 - FRAC_BITS)) as i32) >> FRAC_BITS);
-            let mut value = (value * self.gain) >> FRAC_BITS;
-            let (phase, carry) = self.fraction.overflowing_add(self.step_fraction);
-            let advance = self.step_whole.saturating_add(u32::from(carry));
-            self.fraction = phase;
-            if advance != 0 {
-                self.current = if advance == 1 {
-                    self.next
-                } else {
-                    self.read(advance - 2)
-                };
-                self.next = self.read(0);
-            }
-            if self.release_step != 0 {
-                value = (value * (self.envelope >> 9) as i32) >> FRAC_BITS;
-                self.envelope = self.envelope.saturating_sub(self.release_step);
-                if self.envelope == 0 {
-                    self.current = None;
-                }
-            }
-            *dst = S::from_sample_(self.tone.process(value as i16));
-            if self.tone.finished() {
+    fn next_frame(&mut self) -> i16 {
+        let Some(first) = self.current else { return 0 };
+        let a = i32::from(first);
+        let b = i32::from(self.next.unwrap_or(0));
+        let value = a + (((b - a) * (self.fraction >> (32 - FRAC_BITS)) as i32) >> FRAC_BITS);
+        let mut value = (value * self.gain) >> FRAC_BITS;
+        let (phase, carry) = self.fraction.overflowing_add(self.step_fraction);
+        let advance = self.step_whole.saturating_add(u32::from(carry));
+        self.fraction = phase;
+        if advance != 0 {
+            self.current = if advance == 1 {
+                self.next
+            } else {
+                self.read(advance - 2)
+            };
+            self.next = self.read(0);
+        }
+        if self.release_step != 0 {
+            value = (value * (self.envelope >> 9) as i32) >> FRAC_BITS;
+            self.envelope = self.envelope.saturating_sub(self.release_step);
+            if self.envelope == 0 {
                 self.current = None;
             }
         }
-        output.into_slice().fill_with(|| S::from_sample_(0));
+        let out = self.tone.process(value as i16);
+        if self.tone.finished() {
+            self.current = None;
+        }
+        out
     }
 }
 

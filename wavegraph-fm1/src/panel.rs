@@ -112,7 +112,7 @@ impl View {
     fn editor(part: Part) -> Self {
         if part == Part::Sampler {
             Self::SampleEdit
-        } else if part.is_polyphonic() {
+        } else if part.has_voice_modes() {
             Self::VoiceMode
         } else {
             Self::Scope

@@ -478,7 +478,7 @@ impl Screen {
                     clock,
                     self.text,
                     self.strip,
-                    (seq, part, theme),
+                    (labels, theme),
                     position,
                     bank,
                 )

@@ -1,6 +1,6 @@
 WaveGraph FM-1 factory rave samples
 
-All five audio assets are available under CC0 1.0 Universal.
+All six audio assets are available under CC0 1.0 Universal.
 https://creativecommons.org/publicdomain/zero/1.0/
 
 horn.s16le   "DJ Airhorn" by neopolitansixth (Helm synthesizer)
@@ -31,3 +31,10 @@ the transport (122 BPM by default). The packed firmware uses 192,000
 frames at 24,400 Hz, the comparison build uses 98,400 at 12,505 Hz.
 Both use a single peak gain across all four bars and short boundary
 fades. The break and rise use 64-byte mono IMA ADPCM blocks.
+
+
+house-m7.s16le  "House m7" by WaveGraph contributors, dedicated to CC0.
+Original synthesized D4 minor seventh (D, F, A, C) with FM tines,
+detuned reeds, a lower D and two short echoes. No record audio was used.
+house_m7.py renders the 8,000 mono PCM16 frames at 16 kHz as a WAV.
+The .s16le asset is its data chunk.
