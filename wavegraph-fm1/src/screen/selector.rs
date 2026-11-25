@@ -51,7 +51,7 @@ pub(super) enum Menu {
         focus: Channel,
     },
     Instruments(Part),
-    Effects(Part, InsertKind),
+    Effects(InsertKind),
 }
 
 impl Menu {
@@ -59,7 +59,7 @@ impl Menu {
         let count = match self {
             Self::Channels { .. } => CHANNELS,
             Self::Instruments(_) => Part::ALL.len(),
-            Self::Effects(..) => InsertKind::ALL.len(),
+            Self::Effects(_) => InsertKind::ALL.len(),
         };
         let height = count * ROW_HEIGHT;
         let top = (HEIGHT - height) / 2;
@@ -84,19 +84,13 @@ impl Selector {
         }
     }
 
-    pub(super) fn select(&mut self, menu: Option<Menu>) -> bool {
-        if self.menu == menu {
+    pub(super) fn select(&mut self, menu: Option<Menu>, colors: [Rgb565; 2]) -> bool {
+        if self.menu == menu && (menu.is_none() || [self.ink, self.face] == colors) {
             return false;
         }
         self.menu = menu;
         if let Some(menu) = menu {
-            let part = match menu {
-                Menu::Instruments(part) | Menu::Effects(part, _) => part,
-                Menu::Channels { parts, focus } => parts[focus.index()],
-            };
-            let theme = super::InstrumentStyle::for_part(part);
-            self.ink = theme.ink;
-            self.face = theme.surface;
+            [self.ink, self.face] = colors;
             self.mask
                 .clear(BinaryColor::Off)
                 .expect("infallible framebuffer");
@@ -112,7 +106,7 @@ impl Selector {
                         let part = Part::ALL[row];
                         (part.name(), part == active)
                     }
-                    Menu::Effects(_, active) => {
+                    Menu::Effects(active) => {
                         let kind = InsertKind::ALL[row];
                         (kind.name(), kind == active)
                     }
@@ -192,7 +186,7 @@ impl Selector {
     pub(super) fn scope_overhang(&self) -> Option<Window> {
         let menu = self.menu?;
         // The insert rack composites its own rows above and below the plot.
-        if matches!(menu, Menu::Effects(..)) {
+        if matches!(menu, Menu::Effects(_)) {
             return None;
         }
         let rows = menu.mask_rows();

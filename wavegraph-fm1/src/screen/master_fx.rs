@@ -161,7 +161,7 @@ impl Row {
         reason = "All coordinates fit within one rack row"
     )]
     fn draw(self, band: &mut Band<'_>, y: i32, reduction: u8) {
-        let ink = band.rack_row(y, self.selected, &super::mixer::RackColors::MASTER);
+        let ink = band.rack_row(y, self.selected, &super::mixer::RackColors::GLOBAL);
         band.title(
             ["REVERB", "DELAY", "3-BAND EQ", "COMP/LIM"][self.device as usize],
             Point::new(10, y + 5),
@@ -176,7 +176,7 @@ impl Row {
                     d.position(),
                     &d.readout(),
                     ink,
-                    &super::mixer::RackColors::MASTER,
+                    &super::mixer::RackColors::GLOBAL,
                 );
             }
         }

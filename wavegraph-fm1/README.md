@@ -581,9 +581,10 @@ Press GLO to see four horizontal strips with live post-fader peak meters.
 The segments rise from green through amber at −12 dBFS to red at full scale.
 Each strip has a volume fader under its meter. The center tick marks unity.
 Knobs 1–4 move the four faders directly in the overview. PRESETS moves the
-keyboard between channels. Turn
-SELECT clockwise to open the active strip, then turn it either way to move
-between strips. The highlight shows which channel Knobs 1–3 will edit.
+keyboard between channels. A cyan channel number marks the active strip.
+Turn SELECT clockwise to edit that strip, then turn it either way to move
+between strips. A cyan bar marks the strip that Knobs 1–3 will edit.
+All four strips use the same dark palette for every instrument assignment.
 
 Turn PRESETS while a strip is highlighted to browse instruments alphabetically
 by their displayed names. Each detent applies the new assignment immediately.
