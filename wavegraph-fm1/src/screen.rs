@@ -43,6 +43,7 @@ use grid::TextGrid;
 mod master_fx;
 mod microwave;
 mod mixer;
+mod sampler;
 mod selector;
 mod sequencer;
 mod splash;
@@ -137,6 +138,7 @@ pub(super) struct Screen {
     jp: jp8080::Panel,
     wave: microwave::Panel,
     fm: fm::Panel,
+    sampler: sampler::Panel,
     mixer: mixer::Surface,
     rack: master_fx::Rack,
     channel_fx: channel_fx::Rack,
@@ -169,6 +171,7 @@ impl Screen {
             jp: jp8080::Panel::default(),
             wave: microwave::Panel::default(),
             fm: fm::Panel::default(),
+            sampler: sampler::Panel::default(),
             mixer: mixer::Surface::default(),
             rack: master_fx::Rack::default(),
             channel_fx: channel_fx::Rack::default(),
@@ -234,7 +237,7 @@ impl Screen {
         let previous = self.page.replace(page);
         if previous != Some(page) {
             let entering = !matches!(previous, Some(Page::Envelope(part, ..)) if part == focus);
-            let rack = matches!(focus, Part::Supersaw | Part::Wavetable);
+            let rack = matches!(focus, Part::Supersaw | Part::Wavetable | Part::Sampler);
             let (style, title, ink) = if focus == Part::Organ {
                 (
                     WaveformStyle {
@@ -244,6 +247,8 @@ impl Screen {
                     b"ORGAN VCA ENV".as_slice(),
                     ORGAN_LIME,
                 )
+            } else if focus == Part::Sampler {
+                (sampler::STYLE, b"".as_slice(), sampler::LCD)
             } else if focus == Part::Fm {
                 (fm::PANEL_STYLE, b"".as_slice(), fm::GREEN)
             } else if focus == Part::Supersaw {
@@ -257,6 +262,8 @@ impl Screen {
                 (jp8080::FACE, jp8080::PRINT, jp8080::EDGE, 32)
             } else if focus == Part::Wavetable {
                 (microwave::FACE, microwave::PRINT, microwave::PRINT, 32)
+            } else if focus == Part::Sampler {
+                (sampler::FACE, sampler::PRINT, sampler::LCD, 32)
             } else if focus == Part::Fm {
                 (fm::FACE, fm::PRINT, fm::GREEN, 32)
             } else {
@@ -292,6 +299,15 @@ impl Screen {
                 || !matches!(previous, Some(Page::Envelope(_, old, _, hint, depth)) if old == target && hint == show_mode_hint && depth == cents)
             {
                 match focus {
+                    Part::Sampler => {
+                        let title = if target == EnvelopeTarget::Amp {
+                            b"SAMPLER AMP ENV"
+                        } else {
+                            b"SAMPLER VCF ENV"
+                        };
+                        self.text.text(0, 0, title, ink);
+                        self.text.text(0, 1, b"SEL  AMP / FILTER", sampler::PRINT);
+                    }
                     Part::Fm => {
                         self.text.text(
                             0,
@@ -476,6 +492,7 @@ impl Screen {
             Part::Supersaw => b"SEQ JP-8080",
             Part::Wavetable => b"SEQ WAVE",
             Part::Fm => b"SEQ FM",
+            Part::Sampler => b"SEQ SAMPLER",
         };
         self.selector.badge.header_text(self.text, 0, title, ink);
         self.selector.badge.header_text(
@@ -782,7 +799,8 @@ impl Screen {
                 .await;
         }
         if labels.view.is_mixer() {
-            return self.paint_mixer(lcd, clock, labels, motion.peaks).await;
+            let mut page = pin!(self.paint_mixer(lcd, clock, labels, motion.peaks));
+            return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
         }
         let head = motion
             .position
@@ -831,9 +849,23 @@ impl Screen {
                         .paint_bass_envelope(lcd, clock, labels.bass, labels.bass_knob)
                         .await;
                 }
-                Part::Mono | Part::Organ | Part::Supersaw | Part::Wavetable | Part::Fm => {
+                Part::Mono
+                | Part::Organ
+                | Part::Supersaw
+                | Part::Wavetable
+                | Part::Fm
+                | Part::Sampler => {
                     let (target, controls) = match labels.focus {
                         Part::Organ => (EnvelopeTarget::Amp, labels.organ.envelope),
+                        Part::Sampler => {
+                            let p = labels.sampler.timbre;
+                            let shape = if labels.envelope_target == EnvelopeTarget::Amp {
+                                p.amp
+                            } else {
+                                p.filter
+                            };
+                            (labels.envelope_target, EnvelopeControls::new(shape.adsr()))
+                        }
                         Part::Fm => (
                             labels.envelope_target,
                             labels.fm.envelope(labels.envelope_target),
@@ -869,6 +901,7 @@ impl Screen {
         let bass = labels.focus == Part::Bass;
         let organ = labels.focus == Part::Organ;
         let drums = labels.focus.is_kit();
+        let sampler = labels.focus == Part::Sampler;
         let saw = labels.focus == Part::Supersaw;
         let wave = labels.focus == Part::Wavetable;
         let fm = labels.focus == Part::Fm;
@@ -890,6 +923,8 @@ impl Screen {
                 microwave::FACE,
                 microwave::STYLE.trace,
             )
+        } else if sampler {
+            (sampler::STYLE, sampler::PRINT, sampler::FACE, sampler::LCD)
         } else if labels.focus == Part::Tr808 && drums {
             (
                 drums::STYLE_808,
@@ -917,7 +952,11 @@ impl Screen {
             self.change_view(style);
         }
         // Leave room for the halo above and below the connected trace.
-        let trace = if drums {
+        let trace = if sampler {
+            frame
+                .trace
+                .map(|y| (58 + u16::from(y) * 100 / HEIGHT as u16) as u8)
+        } else if drums {
             frame.trace.map(|y| (60 + u16::from(y) * 5 / 8) as u8)
         } else if saw || wave || fm {
             frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
@@ -930,7 +969,9 @@ impl Screen {
         } else {
             frame.trace.map(|y| y + TOP as u8)
         };
-        let (header, footer) = if drums {
+        let (header, footer) = if sampler {
+            (56, 80)
+        } else if drums {
             (56, 56)
         } else if bass {
             (tb303::SCOPE_TOP, 0)
@@ -944,7 +985,9 @@ impl Screen {
             (16, 16)
         };
         if changed_page {
-            if bass {
+            if sampler {
+                self.dot_background = self.selector.shade(sampler::FACE);
+            } else if bass {
                 self.dot_background = self.selector.shade(tb303::METAL);
             } else if fm {
                 self.dot_background = self.selector.shade(fm::FACE);
@@ -968,7 +1011,9 @@ impl Screen {
             }
         }
         let sweep = Sweep { trace, head };
-        let center = if bass {
+        let center = if sampler {
+            108
+        } else if bass {
             header + (SIZE - header) / 2
         } else {
             SIZE / 2
@@ -1008,6 +1053,17 @@ impl Screen {
                         .paint(&mut lcd, self.strip, self.selector, &labels, changed_page)
                 );
             return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
+        }
+        if sampler {
+            let mut draw = pin!(self.sampler.paint(
+                lcd,
+                clock,
+                self.strip,
+                self.selector,
+                &labels,
+                changed_page
+            ));
+            return poll_fn(|cx| poll_page(draw.as_mut(), cx)).await;
         }
         if wave {
             let mut lcd = lcd.as_async(clock)?;
@@ -1122,7 +1178,9 @@ impl Screen {
             (false, _) => b"DAC",
             (true, Part::Mono) => b"VCA",
             (true, Part::Organ) => b"ORG",
-            (true, Part::Bass | Part::Supersaw | Part::Wavetable | Part::Fm) => b"SRC",
+            (true, Part::Bass | Part::Supersaw | Part::Wavetable | Part::Fm | Part::Sampler) => {
+                b"SRC"
+            }
             (true, Part::Tr808 | Part::Tr909) => b"KIT",
         };
         self.text.text(16, 0, source, muted);
@@ -1185,6 +1243,14 @@ fn phosphor(track: Part, age: usize) -> (Rgb565, Option<Rgb565>) {
     }
     if track == Part::Fm {
         return (fm::STYLE.trace, None);
+    }
+    if track == Part::Sampler {
+        return match age {
+            0..=3 => (palette::WHITE, Some(sampler::STYLE.trace)),
+            4..=12 => (Rgb565::new(21, 63, 26), None),
+            13..TRAIL => (Rgb565::new(8, 36, 16), None),
+            _ => (sampler::STYLE.trace, None),
+        };
     }
     if track == Part::Wavetable {
         return match age {
@@ -1250,7 +1316,7 @@ impl Screen {
             let stripes = match track {
                 Part::Bass | Part::Organ | Part::Supersaw => Stripes::Fine,
                 Part::Tr808 | Part::Tr909 => Stripes::Wide,
-                Part::Mono | Part::Wavetable | Part::Fm => Stripes::Normal,
+                Part::Mono | Part::Wavetable | Part::Fm | Part::Sampler => Stripes::Normal,
             };
             sweep.damage(&old, palette, stripes)
         } else {

@@ -5,8 +5,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [flasher, image, mode = "packed"] = process.argv.slice(2);
+const [flasher, image, mode = "packed", samplerMode = mode] = process.argv.slice(2);
 assert.ok(["raw", "packed"].includes(mode), "expected raw or packed cymbals");
+assert.ok(["raw", "packed"].includes(samplerMode), "expected raw or packed sampler");
 const lib = pathToFileURL(resolve(flasher, "web/lib") + "/");
 const { appTable, appRead, appFilesStatus, AppStatus, BOOT_AREA, FLASH_SIZE, SECTOR } =
     await import(new URL("formats.js", lib));
@@ -85,6 +86,9 @@ function checkPackedClip(pcm, name) {
 for (const [path, extension] of [
     ["../../instruments/wavegraph-909/samples/", ".s16le"],
     ["../../instruments/wavegraph-wavetable/banks/", ".wt12"],
+    ["../samples/rave/", ".s16le"],
+    ["../samples/rave/", ".ima"],
+    ["../samples/rave/", ".txt"],
     ["../assets/", ".2bpp"],
     ["../assets/panel-type/", ".raw"],
     ["../assets/panel-type/", ".txt"],
@@ -95,7 +99,11 @@ for (const [path, extension] of [
     assert.ok(names.length, path);
     for (const name of names) {
         const bytes = readFileSync(new URL(name, dir));
-        if (extension === ".s16le" && mode === "packed") {
+        const packing = path.includes("wavegraph-909") ? mode : samplerMode;
+        const breakName = mode === "packed" && samplerMode === "packed" ? "amen.ima" : "amen-compact.ima";
+        if (name.startsWith("amen") && extension === ".ima" && name !== breakName) {
+            assert.ok(!upper.includes(bytes) && !code.includes(bytes), `${name} duplicated in this image`);
+        } else if (extension === ".s16le" && packing === "packed") {
             assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
             checkPackedClip(bytes, name);
         } else {

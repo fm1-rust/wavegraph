@@ -1,0 +1,33 @@
+WaveGraph FM-1 factory rave samples
+
+All five audio assets are available under CC0 1.0 Universal.
+https://creativecommons.org/publicdomain/zero/1.0/
+
+horn.s16le   "DJ Airhorn" by neopolitansixth (Helm synthesizer)
+https://freesound.org/people/neopolitansixth/sounds/547020/
+
+zap.s16le    "LASRGun_Retro Laser Zap Synth_Funky Audio_Sonic Spices" by Funky_Audio
+https://freesound.org/people/Funky_Audio/sounds/729389/
+
+stab.s16le   "Synth Stab 1" by Stereo Surgeon
+https://freesound.org/people/Stereo%20Surgeon/sounds/265675/
+
+These three excerpts use the high-quality Ogg previews, mixed to mono,
+high-pass filtered at 20 Hz with short fades and peak leveling. The horn
+and first zap use 22,059 Hz. The G2 stab uses 14,706 Hz.
+
+rise.ima     "Rave Rise" by WaveGraph contributors, dedicated to CC0.
+An original oscillator sweep with two echoes, rendered by rise.py.
+Inspired by "Pulsar City Alarm" by Adams & Fleisner and its use in
+"King of the Beats" by Mantronix. Audio length 1.32 seconds.
+
+amen.ima and amen-compact.ima
+             "Amen Break: No Copyright Remake (120BPM)" by JapanYoshiTheGamer
+https://freesound.org/people/JapanYoshiTheGamer/sounds/576561/
+The author programmed the remake from scratch in FL Studio. Rhythm after
+Gregory C. Coleman on The Winstons' "Amen, Brother". The firmware plays
+the opening four bars from the Ogg preview. At C4 their speed follows
+the transport (122 BPM by default). The packed firmware uses 192,000
+frames at 24,400 Hz, the comparison build uses 98,400 at 12,505 Hz.
+Both use a single peak gain across all four bars and short boundary
+fades. The break and rise use 64-byte mono IMA ADPCM blocks.

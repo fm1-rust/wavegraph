@@ -10,15 +10,21 @@ categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "sampler", "pcm", "no-std"]
 
 [features]
+ima-adpcm = []
 packed-pcm = ["dep:fm1-assets"]
 
 [dependencies]
+micromath = "2.2"
+wavegraph-adsr.workspace = true
 fm1-assets = { workspace = true, optional = true }
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 
 [dev-dependencies]
 wavegraph-dsp = { version = "0.1", path = "../../wavegraph-dsp" }
+
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+fm1-assets = { workspace = true, features = ["encode"] }
 
 [lints]
 workspace = true

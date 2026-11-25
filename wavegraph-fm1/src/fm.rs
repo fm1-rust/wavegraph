@@ -48,16 +48,13 @@ impl Controls {
         EnvelopeControls::new(shape.adsr())
     }
 
-    pub(super) fn turn_envelope(&mut self, which: EnvelopeTarget, [a, d, s, r]: [i8; 4]) {
+    pub(super) fn turn_envelope(&mut self, which: EnvelopeTarget, knobs: [i8; 4]) {
         let shape = match which {
             EnvelopeTarget::Amp => &mut self.patch.carrier,
             EnvelopeTarget::Modulation => &mut self.patch.modulator,
             EnvelopeTarget::Pitch => &mut self.patch.pitch,
         };
-        shape.attack = shape.attack.turn(a);
-        shape.decay = shape.decay.turn(d);
-        shape.sustain_percent = shape.sustain_percent.saturating_add_signed(s).min(100);
-        shape.release = shape.release.turn(r);
+        shape.turn(knobs);
     }
 
     pub(super) fn turn_depth(&mut self, detents: i8) {

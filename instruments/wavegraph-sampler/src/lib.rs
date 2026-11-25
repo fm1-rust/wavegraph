@@ -2,6 +2,10 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod pitched;
+
+pub use pitched::{Clip, PitchedMessage, PitchedSampler, Playback, PlaybackMode, Timbre};
+
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::FromSample;
 

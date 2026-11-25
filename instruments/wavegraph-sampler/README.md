@@ -32,6 +32,46 @@ assert_eq!(output, [0.0, -0.5, 0.5, 0.0]);
 `Trigger` restarts the clip at frame zero. `Stop` and the end of the clip
 both produce silence. Messages at the same frame take effect in slice order.
 
+## Chromatic playback
+
+The optional `ima-adpcm` feature adds `Clip::from_ima_adpcm` for the data
+chunk of a mono IMA WAV file encoded with 64-byte blocks. Supply the
+original frame count to exclude padding. Trims and pitch jumps skip whole
+blocks directly. Each voice decodes at most one block to seek to a frame.
+
+`PitchedSampler` plays a bank of PCM16 clips from MIDI note and velocity
+messages. Each `Clip::from_pcm16le(bytes, source_hz, root_note)` declares the
+recording rate and the MIDI key for native-speed playback. Construct the
+player with the bank and output rate. It uses a fractional cursor and linear
+interpolation. An octave up doubles speed and halves duration. Source buffers
+stay borrowed and may live in flash.
+
+With the optional `packed-pcm` feature, `Clip::from_pcm1` validates a
+losslessly packed clip in the FM-1 PCM1 format. The pitch interpolator reads
+its two neighboring frames directly and skips whole 32-frame groups when
+necessary. Raw and packed clips can share a bank.
+
+`PitchedMessage::Select` and `PitchedMessage::Playback` set up the next
+strike. `Playback` selects a start and end in percent and one of three modes:
+one-shot, gated or forward loop. Gated and looped notes fade on a matching
+note-off. With the default flat amplitude contour a zero playback release uses
+a 64-frame de-click, and positive values set the fade in milliseconds.
+`Stop` cuts any tail immediately.
+
+`PitchedMessage::Timbre` sets a four-pole digital resonant low-pass filter
+and independent amplitude and filter envelopes. Both use the compact
+`wavegraph_adsr::Shape`. Cutoff can track the keyboard and strike velocity.
+Signed envelope depth selects rising or inverted sweeps. A timbre edit
+retimes a sounding contour without resetting sample position. A shaped
+amplitude contour uses its own ADSR release. `Timbre::DRY` passes the
+decoded PCM through at full velocity with the filter bypassed.
+
+Tag a rhythmic clip with `Clip::with_native_tempo` and send
+`PitchedMessage::Tempo` to follow a transport. Tempo changes preserve the
+current position. The root key tracks the beat and other keys transpose by
+changing playback speed. Untagged clips retain their tuning. For fractional
+DAC clocks use `PitchedSampler::at_sample_rate`.
+
 ## Play a sample
 
 From the workspace root, play the [909 example kit's closed hi-hat][hat] through the

@@ -134,6 +134,12 @@ fn main() {
     patterns::compile_banks(&out);
     #[cfg(feature = "packed-cymbals")]
     pack_cymbals(&out);
+    #[cfg(feature = "packed-samples")]
+    for name in ["horn", "zap", "stab"] {
+        let file = format!("samples/rave/{name}.s16le");
+        println!("cargo:rerun-if-changed={file}");
+        pack_pcm(&out, name, &fs::read(file).expect("factory sampler clip"));
+    }
     // The cue shares flash with the banks. Independent 128-frame blocks allow
     // each DMA half to decode directly into the mix without a PCM buffer.
     let mut encoded = Vec::new();
@@ -204,10 +210,15 @@ fn pack_cymbals(out: &std::path::Path) {
         ("open-hat", kit.open_hat),
         ("ride", kit.ride),
     ] {
-        let (frames, rest) = bytes.as_chunks::<2>();
-        assert!(rest.is_empty(), "whole PCM16 frames");
-        let samples: Vec<_> = frames.iter().copied().map(i16::from_le_bytes).collect();
-        let packed = fm1_assets::pcm::encode(&samples).expect("factory sample count");
-        fs::write(out.join(format!("{name}.pcm1")), packed).expect("write packed cymbal");
+        pack_pcm(out, name, bytes);
     }
+}
+
+#[cfg(any(feature = "packed-cymbals", feature = "packed-samples"))]
+fn pack_pcm(out: &std::path::Path, name: &str, bytes: &[u8]) {
+    let (frames, rest) = bytes.as_chunks::<2>();
+    assert!(rest.is_empty(), "whole PCM16 frames");
+    let samples: Vec<_> = frames.iter().copied().map(i16::from_le_bytes).collect();
+    let packed = fm1_assets::pcm::encode(&samples).expect("factory sample count");
+    fs::write(out.join(format!("{name}.pcm1")), packed).expect("write packed clip");
 }

@@ -21,8 +21,8 @@ use fm1_graphics::embedded_graphics::{
 };
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 
-const WIDTH: usize = 136;
-// The eight instruments and their 15–16 pixel labels fit without growing the selector.
+// Nine 18-pixel rows fit the LCD. The numbered SUPER SAW label needs 123 pixels.
+const WIDTH: usize = 128;
 const ROW_HEIGHT: usize = 18;
 const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;

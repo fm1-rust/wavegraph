@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod shape;
+pub use shape::{Shape, Time};
+
 /// Envelope times in microseconds, spaced approximately three steps per octave.
 pub const TIMES_US: [u32; 39] = [
     0, 1_500, 2_000, 3_000, 4_000, 5_000, 6_000, 8_000, 10_000, 12_000, 16_000, 20_000, 25_000,

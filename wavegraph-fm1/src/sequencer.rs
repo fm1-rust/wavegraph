@@ -5,7 +5,7 @@ use crate::{
     instrument::{Message, Part, Track},
     panel::{Assignment, CHANNELS, Channel, Navigation},
 };
-use pattern::{Automation, BAR, Clip, Slot};
+use pattern::{Automation, BAR, ChannelSlots, Clip, Slot};
 use wavegraph_909::{Tr909, Voice};
 use wavegraph_dsp::{Event, Port, Process, ProcessContext, bytecode::Error, midi::MidiMessage};
 use wavegraph_sample::I24;
@@ -60,7 +60,7 @@ pub(super) struct Sequencer {
     pub(super) enabled: [bool; CHANNELS],
     /// The pressed bank key is in the dark half of its blink.
     pub(super) pressed_key_dark: bool,
-    selected: [[Slot; Part::ALL.len()]; CHANNELS],
+    selected: [ChannelSlots; Part::ALL.len()],
 }
 
 impl Sequencer {
@@ -74,15 +74,15 @@ impl Sequencer {
         full: false,
         enabled: [true; CHANNELS],
         pressed_key_dark: false,
-        selected: [[Slot::FIRST; Part::ALL.len()]; CHANNELS],
+        selected: [ChannelSlots::FIRST; Part::ALL.len()],
     };
 
     pub(super) fn slot(&self, channel: Channel, part: Part) -> Slot {
-        self.selected[channel.index()][part as usize]
+        self.selected[part as usize].get(channel)
     }
 
     pub(super) fn choose(&mut self, part: Part, slot: Slot) {
-        self.selected[self.channel.index()][part as usize] = slot;
+        self.selected[part as usize].set(self.channel, slot);
         self.bar = 0;
     }
 
@@ -401,11 +401,13 @@ impl Lane {
         }
     }
 
-    fn release(&mut self, route: &mut Route<'_>, cut_kit: bool) -> Result<(), Error> {
+    fn release(&mut self, route: &mut Route<'_>, cut_tails: bool) -> Result<(), Error> {
         let part = route.track.assignment.part;
         self.release_notes(route)?;
-        if cut_kit && part.is_kit() {
+        if cut_tails && part.is_kit() {
             route.graph(Message::Drum(DrumMessage::Stop))?;
+        } else if cut_tails && part == Part::Sampler {
+            route.graph(Message::Sampler(wavegraph_sampler::PitchedMessage::Stop))?;
         }
         if self.slide {
             route.wire(MidiMessage::Control(CC_SLIDE, 0));
@@ -927,6 +929,57 @@ mod tests {
         transport
     }
 
+    #[test]
+    fn sampler_pattern_one_retriggers_the_break_on_each_four_bar_downbeat() {
+        use wavegraph_sampler::PitchedMessage;
+
+        let channel = Channel::Three;
+        let mut tracks = Track::rack(Navigation::INITIAL.assignments);
+        let track = &mut tracks[channel.index()];
+        assert_eq!(track.assignment.part, Part::Tr808);
+        *track = Track::factory(channel, Assignment::new(Part::Sampler));
+        track.turn_algorithm(crate::panel::View::Scope, None, -1);
+        assert_eq!(track.voice.label(Part::Sampler), b"AMEN BRK ");
+        let mut player = PatternPlayer::new((24_000_000, 544));
+        let mut events = Vec::new();
+        for start in (0..700_000).step_by(128) {
+            player
+                .render(
+                    128,
+                    playing(),
+                    &tracks,
+                    [false, false, true, false],
+                    |ch, event| {
+                        if ch == channel {
+                            match event.message {
+                                Message::Sampler(PitchedMessage::NoteOn(note)) => {
+                                    events.push((start + event.frame, note.number, true))
+                                }
+                                Message::Sampler(PitchedMessage::NoteOff(note)) => {
+                                    events.push((start + event.frame, note, false))
+                                }
+                                _ => (),
+                            }
+                        }
+                        Ok(())
+                    },
+                    |_, _| (),
+                )
+                .expect("host event sink");
+        }
+        // ceil(n * 16 beats * 60 s/min * (24 MHz / 544) / 122 BPM).
+        assert_eq!(
+            events,
+            [
+                (0, 60, true),
+                (347_156, 60, false),
+                (347_156, 60, true),
+                (694_311, 60, false),
+                (694_311, 60, true)
+            ]
+        );
+    }
+
     fn render(
         player: &mut PatternPlayer,
         frames: usize,
@@ -1022,13 +1075,29 @@ mod tests {
         let step = edits.step(at);
         let mut events = RoutedEvents::new();
         for _ in 0..8 {
-            track.panel_hits.push(Voice::Kick, 82);
+            track
+                .drum_hits_mut()
+                .expect("kit")
+                .panel
+                .push(Voice::Kick, 82);
         }
         for _ in 0..32 {
-            track.midi_hits.push(Voice::Snare, 88);
+            track
+                .drum_hits_mut()
+                .expect("kit")
+                .midi
+                .push(Voice::Snare, 88);
         }
-        track.panel_hits.append_since(0, &mut events)?;
-        track.midi_hits.append_since(0, &mut events)?;
+        track
+            .drum_hits_mut()
+            .expect("kit")
+            .panel
+            .append_since(0, &mut events)?;
+        track
+            .drum_hits_mut()
+            .expect("kit")
+            .midi
+            .append_since(0, &mut events)?;
         let mut lane = Lane::EMPTY;
         let mut route = Route {
             frame: 0,

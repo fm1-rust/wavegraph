@@ -182,7 +182,8 @@ impl Renderer {
 impl Settings {
     pub(super) fn source_tap(&self) -> bool {
         self.nav.view == View::Fx
-            || (self.nav.view == View::Scope && self.tracks[self.nav.focus.index()].voice_tap)
+            || (matches!(self.nav.view, View::Scope | View::SampleEdit)
+                && self.tracks[self.nav.focus.index()].voice_tap)
     }
 }
 
