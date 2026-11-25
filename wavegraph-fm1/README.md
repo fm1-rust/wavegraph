@@ -1050,9 +1050,11 @@ both stabs to fit alongside the raw 909. Host builds can compare all four raw cl
 
 To cut a release, update the version in `wavegraph-fm1/Cargo.toml` and
 `Cargo.lock`, then push a `wavegraph-fm1/vX.Y.Z` tag for that commit. The
-[release workflow] checks the tag against the Cargo version, tests and builds
-the firmware, then attaches versioned `.fwsc` and `.bin` files to a GitHub
-Release. After publication, the workflow copies the raw image from the
+[release workflow] checks the tag against the Cargo version, runs the host
+tests and publishes two firmware builds on GitHub Releases. Flash
+`wavegraph-fm1-X.Y.Z.fwsc` with M-Flasher to use the native FM-1 mixer
+(`fm1-audio/dsp`). The raw `wavegraph-fm1-X.Y.Z.bin` uses the portable mixer
+for emulators. The workflow copies that raw image from the
 highest stable `wavegraph-fm1` release to `gh-pages` and requests a rebuild
 of the [WaveGraph browser emulator]. If the push or build request fails, rerun
 the `pages` job from the release workflow.
