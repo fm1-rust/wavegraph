@@ -68,6 +68,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
 | FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
+| Knobs 1–4 with FLANGER selected | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
 | FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
@@ -546,7 +547,8 @@ accents. Only the 303 is processed. The factory setting is 75% depth at
 The channel FX scope taps the selected instrument after its inserts and before
 its fader and shared sends. It keeps the same vertical gain while you adjust
 depth, bypass the compressor or switch to the send controls. The TB-303 has a
-compressor in slot 1. Empty slots show **NONE** and SELECT skips them.
+compressor in slot 1. To flange the compressed bass, select slot 2 and turn
+PRESETS to **FLANGER**. Each slot keeps its own delay line.
 
 ![Channel FX racks showing the TB-303 compressor and the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
 

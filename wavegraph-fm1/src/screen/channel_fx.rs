@@ -181,6 +181,7 @@ fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
         Insert::Compressor(_) => "COMP",
         Insert::Saturator(_) => "SAT",
         Insert::Phaser(_) => "PHASER",
+        Insert::Flanger(_) => "FLANGER",
         Insert::Eq(_) => "EQ",
         Insert::None => "NONE",
     };
@@ -246,7 +247,7 @@ fn insert(band: &mut Band<'_>, y: i32, slot: &str, fx: Insert, selected: bool) {
                 dial(x, name, u8::try_from(position).expect("Q7 dial"), &text);
             }
         }
-        Insert::Phaser(fx) => {
+        Insert::Phaser(fx) | Insert::Flanger(fx) => {
             let rate = fx.centihz();
             let rate = heapless::format!(6; "{}.{:02}", rate / 100, rate % 100).expect("rate");
             dial(104, "1 HZ", fx.rate, &rate);

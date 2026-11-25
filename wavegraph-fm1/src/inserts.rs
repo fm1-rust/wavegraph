@@ -7,7 +7,9 @@ use crate::{
 };
 use heapless::Vec;
 use wavegraph_dsp::{Event, Port, Process, ProcessContext};
-use wavegraph_fx::{Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq};
+use wavegraph_fx::{
+    Flanger, Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq,
+};
 use wavegraph_sample::I24;
 
 #[derive(Clone, Copy)]
@@ -16,16 +18,18 @@ enum Processor {
     Compressor(SidechainDucker),
     Saturator(Saturator),
     Phaser(Phaser),
+    Flanger(Flanger),
     Eq(ThreeBandEq),
 }
 
 impl Processor {
-    fn kind(self) -> InsertKind {
+    fn kind(&self) -> InsertKind {
         match self {
             Self::None => InsertKind::None,
             Self::Compressor(_) => InsertKind::Compressor,
             Self::Saturator(_) => InsertKind::Saturator,
             Self::Phaser(_) => InsertKind::Phaser,
+            Self::Flanger(_) => InsertKind::Flanger,
             Self::Eq(_) => InsertKind::Eq,
         }
     }
@@ -37,6 +41,7 @@ impl Processor {
             InsertKind::Compressor => Self::Compressor(factory),
             InsertKind::Saturator => Self::Saturator(Saturator::new()),
             InsertKind::Phaser => Self::Phaser(Phaser::new(rate_hz).expect("audio sample rate")),
+            InsertKind::Flanger => Self::Flanger(Flanger::new(rate_hz).expect("audio sample rate")),
         }
     }
 }
@@ -223,6 +228,14 @@ impl Process<Message, I24> for ChannelInserts {
                             *sample = fx.tick(*sample);
                         }
                     }
+                    (Processor::Flanger(fx), Insert::Flanger(settings)) => {
+                        if changed[i][slot] {
+                            fx.set_controls(settings);
+                        }
+                        for sample in &mut *strip {
+                            *sample = fx.tick(*sample);
+                        }
+                    }
                     (Processor::Eq(fx), Insert::Eq(settings)) => {
                         if changed[i][slot] {
                             fx.set_controls(settings);
@@ -241,6 +254,52 @@ impl Process<Message, I24> for ChannelInserts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wavegraph_fx::FlangerControls;
+
+    #[test]
+    fn flangers_in_both_slots_and_on_other_strips_have_independent_delay_lines() {
+        let mut rack = ChannelInserts::new(44_118);
+        // A fully wet, stationary tap delays by 32 frames at the board rate.
+        let flange = Insert::Flanger(FlangerControls {
+            depth: 0,
+            feedback: 0,
+            mix: 128,
+            ..FlangerControls::INITIAL
+        });
+        let settings = [
+            (Channel::One, [flange, flange]),
+            (Channel::Two, [Insert::None, flange]),
+            (Channel::Three, [flange, Insert::None]),
+        ]
+        .map(|(channel, slots)| Event {
+            frame: 0,
+            port: 0,
+            message: Message::ChannelInserts(channel, slots),
+        });
+        let mut input = [I24::default(); 128];
+        let silence = input;
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+        for warmup in [true, false] {
+            if !warmup {
+                input[3] = I24::new_unchecked(1 << 20);
+            }
+            rack.process(&mut ProcessContext {
+                frames: input.len(),
+                inputs: &[
+                    &input, &silence, &silence, &silence, &input, &silence, &input, &silence,
+                ],
+                outputs: &mut outputs.each_mut().map(|block| &mut block[..]),
+                events: if warmup { &settings } else { &[] },
+                emit: &mut Err,
+            });
+        }
+        assert_eq!(outputs[1], silence);
+        assert_eq!(outputs[3], input);
+        input.rotate_right(32);
+        assert_eq!(outputs[2], input);
+        input.rotate_right(32);
+        assert_eq!(outputs[0], input);
+    }
 
     #[test]
     fn eq_edits_and_bypass_only_affect_the_selected_strip() {

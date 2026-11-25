@@ -751,9 +751,17 @@ impl Screen {
                 self.change_view(style);
                 self.dot_background = self.selector.shade(mixer::BACKGROUND);
             }
-            self.channel_fx
-                .paint(lcd, clock, self.strip, &labels, entering, self.selector)
-                .await?;
+            {
+                let mut draw = pin!(self.channel_fx.paint(
+                    lcd,
+                    clock,
+                    self.strip,
+                    &labels,
+                    entering,
+                    self.selector
+                ));
+                poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+            }
             let rows = channel_fx::SCOPE;
             let height = rows.end - rows.start;
             // Two pixels of margin keep the phosphor halo inside the plot at full scale.

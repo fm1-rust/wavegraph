@@ -13,6 +13,11 @@ two-input send-only node.
   `Message::TimeMs` sets echo spacing and `Message::Feedback` sets the fraction
   fed back (0–95%). Zero feedback gives a single echo. Changes to the time
   crossfade the live taps over 64 frames.
+- `Flanger::new(rate_hz)` mixes the dry signal with a fractionally delayed
+  copy. A 0.10–3.94 Hz triangle LFO sweeps a 64-sample PCM16 line. At full
+  depth the delay runs from one sample to 2 ms, up to 63 samples. Send
+  `Message::Flanger(FlangerControls)` to edit rate, depth, feedback (up to
+  75%) and mix. `Message::Enabled(false)` fades the insert to dry.
 - `SidechainDucker<N>` takes the program on signal inlet 0. Route a kick
   or another signal to a further inlet, then use `Message::SidechainKey` to
   choose the detector. `SidechainDepth` controls the gain reduction and
