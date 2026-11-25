@@ -16,8 +16,9 @@ pub use delay::Delay;
 pub use ducker::SidechainDucker;
 pub use eq::{EqControls, ThreeBandEq};
 pub use insert::{
-    Flanger, ModulationControls, ModulationControls as FlangerControls,
-    ModulationControls as PhaserControls, Phaser, Saturator, SaturatorControls,
+    FILTER_PATTERNS, FilterMode, FilterPattern, Flanger, ModulationControls,
+    ModulationControls as FlangerControls, ModulationControls as PhaserControls, PatternFilter,
+    PatternFilterControls, Phaser, Saturator, SaturatorControls,
 };
 pub use master::{Dynamics, MasterBus, MasterControls};
 pub use mixer::{ChannelMixer, MixerMessage};
@@ -62,6 +63,10 @@ pub enum Message {
     Phaser(PhaserControls),
     /// Flanger controls.
     Flanger(FlangerControls),
+    /// Resonant pattern filter and envelope settings.
+    PatternFilter(PatternFilterControls),
+    /// Trigger the pattern filter envelope at this sample offset, with strength 0..=127.
+    FilterTrigger(u8),
     /// Enable the effect. Disabling mutes a return or bypasses an insert.
     Enabled(bool),
 }

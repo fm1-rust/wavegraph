@@ -1,7 +1,11 @@
 //! Small, allocation-free Q23 insert effects.
 
 mod flanger;
+mod pattern_filter;
 pub use flanger::Flanger;
+pub use pattern_filter::{
+    FILTER_PATTERNS, FilterMode, FilterPattern, PatternFilter, PatternFilterControls,
+};
 
 use super::{Message, clamp_pcm, pcm};
 use wavegraph_core::{Port, Process, ProcessContext};
@@ -243,7 +247,7 @@ impl Phaser {
 
 // Also expose these as normal WaveGraph nodes with sample-offset control.
 macro_rules! node {
-    ($ty:ty, $control:ident $(, $set_enabled:ident)?) => {
+    ($ty:ty, $($message:ident => $handler:ident),+) => {
         impl Process<Message, I24> for $ty {
             fn inlets(&self) -> &[Port] {
                 &[Port::Signal]
@@ -261,8 +265,7 @@ macro_rules! node {
                         *out = self.tick(*input);
                     }
                     match event.message {
-                        Message::$control(controls) => self.set_controls(controls),
-                        $(Message::Enabled(on) => self.$set_enabled(on),)?
+                        $(Message::$message(value) => self.$handler(value),)+
                         _ => (),
                     }
                     start = event.frame;
@@ -277,10 +280,11 @@ macro_rules! node {
         }
     };
 }
-node!(Saturator, Saturator);
-node!(Phaser, Phaser);
-node!(Flanger, Flanger, set_enabled);
-node!(super::ThreeBandEq, Eq);
+node!(Saturator, Saturator => set_controls);
+node!(Phaser, Phaser => set_controls);
+node!(Flanger, Flanger => set_controls, Enabled => set_enabled);
+node!(super::ThreeBandEq, Eq => set_controls);
+node!(PatternFilter, PatternFilter => set_controls, FilterTrigger => trigger, Enabled => set_enabled);
 
 #[cfg(test)]
 mod tests {
