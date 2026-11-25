@@ -33,6 +33,7 @@ use wavegraph_dsp::{
 };
 use wavegraph_fm::{Fm, Message as FmMessage};
 use wavegraph_fx::{ChannelMixer, MasterBus, MasterControls, Message as FxMessage, MixerMessage};
+use wavegraph_hoover::{Hoover, Message as HooverMessage, Patch as HooverPatch};
 use wavegraph_monosynth::{Message as MonoMessage, Monosynth, Tuning, Waveform};
 use wavegraph_organ::{Message as OrganMessage, Organ, POLYPHONY, Voicing};
 use wavegraph_sample::I24;
@@ -42,6 +43,7 @@ use wavegraph_wavetable::{Message as WaveMessage, Scan, Wavetable};
 
 const _: () = assert!(wavegraph_wavetable::POLYPHONY == POLYPHONY);
 const _: () = assert!(wavegraph_fm::POLYPHONY == POLYPHONY);
+const _: () = assert!(wavegraph_hoover::POLYPHONY == POLYPHONY);
 const _: () = assert!(wavegraph_sampler::POLYPHONY == POLYPHONY);
 
 const MONO_WAVEFORMS: [(Waveform, &[u8]); 4] = [
@@ -74,12 +76,14 @@ pub(super) enum Part {
     Wavetable,
     Fm,
     Sampler,
+    Hoover,
 }
 
 impl Part {
     /// Keep the GLO instrument list in alphabetical order by its on-screen name.
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::Fm,
+        Self::Hoover,
         Self::Organ,
         Self::Mono,
         Self::Sampler,
@@ -101,7 +105,7 @@ impl Part {
     pub(super) const fn has_voice_modes(self) -> bool {
         matches!(
             self,
-            Self::Organ | Self::Supersaw | Self::Wavetable | Self::Fm
+            Self::Organ | Self::Supersaw | Self::Wavetable | Self::Fm | Self::Hoover
         )
     }
 
@@ -126,6 +130,7 @@ impl Part {
             Self::Organ => OrganMessage::NoteOn { note, velocity }.into(),
             Self::Wavetable => WaveMessage::NoteOn { note, velocity }.into(),
             Self::Fm => FmMessage::NoteOn { note, velocity }.into(),
+            Self::Hoover => HooverMessage::NoteOn { note, velocity }.into(),
             Self::Supersaw => SawMessage::NoteOn { note, velocity }.into(),
             Self::Bass => BassMessage::NoteOn {
                 note,
@@ -144,6 +149,7 @@ impl Part {
             Self::Organ => OrganMessage::NoteOff(note).into(),
             Self::Wavetable => WaveMessage::NoteOff(note).into(),
             Self::Fm => FmMessage::NoteOff(note).into(),
+            Self::Hoover => HooverMessage::NoteOff(note).into(),
             Self::Supersaw => SawMessage::NoteOff(note).into(),
             Self::Bass => BassMessage::NoteOff(note).into(),
             Self::Tr808 | Self::Tr909 => unreachable!("drum kits take triggers"),
@@ -197,6 +203,7 @@ impl Part {
             Self::Supersaw => "SUPER SAW",
             Self::Wavetable => "WAVETABLE",
             Self::Fm => "FM SYNTH",
+            Self::Hoover => "HOOVER",
             Self::Sampler => "SAMPLER",
         }
     }
@@ -246,7 +253,7 @@ impl Voice {
                 u8::try_from(index).expect("wrapped sample index")
             }
             Part::Organ | Part::Bass | Part::Wavetable => position % 2,
-            Part::Tr808 | Part::Tr909 | Part::Supersaw | Part::Fm => 0,
+            Part::Tr808 | Part::Tr909 | Part::Supersaw | Part::Fm | Part::Hoover => 0,
         };
     }
 
@@ -273,6 +280,7 @@ impl Voice {
             Part::Supersaw => b"SUPERSAW",
             Part::Wavetable => b"WAVETABLE",
             Part::Fm => b"FM SYNTH",
+            Part::Hoover => b"HOOVER",
             Part::Sampler => &crate::assets::SAMPLE_NAMES[usize::from(self.waveform)],
         }
     }
@@ -318,6 +326,7 @@ pub(super) struct SawControls {
 // Only the assigned instrument uses this storage. Every channel snapshot carries a copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Bank {
+    Hoover(HooverPatch, HooverPage),
     None,
     Kit(DrumHits),
     Wave([WaveProgram; 2]),
@@ -327,6 +336,20 @@ enum Bank {
     ),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HooverPage {
+    Times,
+    Levels,
+    Dco,
+    Tone,
+}
+impl HooverPage {
+    fn turn(self, delta: i16) -> Self {
+        let pages = [Self::Times, Self::Levels, Self::Dco, Self::Tone];
+        pages[usize::try_from((self as i16).saturating_add(delta).rem_euclid(4))
+            .expect("wrapped panel page")]
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct DrumHits {
     pub(super) panel: HitLog<8>,
@@ -375,6 +398,7 @@ impl Track {
                 _ => EnvelopeControls::INITIAL,
             },
             bank: match assignment.part {
+                Part::Hoover => Bank::Hoover(HooverPatch::HOOVER, HooverPage::Times),
                 Part::Tr808 | Part::Tr909 => Bank::Kit(DrumHits {
                     panel: HitLog::EMPTY,
                     midi: HitLog::EMPTY,
@@ -401,6 +425,7 @@ impl Track {
                     | Part::Supersaw
                     | Part::Wavetable
                     | Part::Fm
+                    | Part::Hoover
                     | Part::Sampler
             ),
             drums808: wavegraph_808::Controls::INITIAL,
@@ -454,6 +479,22 @@ impl Track {
         }
     }
 
+    #[cfg(target_os = "none")]
+    pub(super) const fn hoover_page(&self) -> HooverPage {
+        if let Bank::Hoover(_, page) = self.bank {
+            page
+        } else {
+            HooverPage::Times
+        }
+    }
+    pub(super) const fn hoover_patch(&self) -> HooverPatch {
+        if let Bank::Hoover(patch, _) = self.bank {
+            patch
+        } else {
+            HooverPatch::HOOVER
+        }
+    }
+
     pub(super) fn turn_select(&mut self, detents: i8) {
         if self.amen_slices() {
             return;
@@ -464,6 +505,7 @@ impl Track {
             | Part::Supersaw
             | Part::Wavetable
             | Part::Fm
+            | Part::Hoover
             | Part::Sampler => {
                 self.voice.transpose = self.voice.transpose.saturating_add(detents).clamp(-12, 12);
             }
@@ -474,6 +516,19 @@ impl Track {
     pub(super) fn turn_algorithm(&mut self, view: View, bass_knob: Option<Knob>, detents: i8) {
         if let Some(knob) = bass_knob {
             self.bass.turn(knob, detents);
+        } else if self.assignment.part == Part::Hoover {
+            if view == View::Scope && detents != 0 {
+                let program = i16::from(self.voice.waveform)
+                    .saturating_add(i16::from(detents))
+                    .rem_euclid(
+                        i16::try_from(HooverPatch::PRESETS.len()).expect("small preset bank"),
+                    );
+                self.voice.waveform = u8::try_from(program).expect("wrapped program index");
+                self.bank = Bank::Hoover(
+                    HooverPatch::PRESETS[usize::from(self.voice.waveform)].1,
+                    HooverPage::Times,
+                );
+            }
         } else if self.assignment.part == Part::Fm {
             if view == View::Scope {
                 self.fm.select(detents);
@@ -496,6 +551,16 @@ impl Track {
                 self.saw.mix = self.saw.mix.saturating_add_signed(mix).min(127);
             }
             Part::Organ => self.organ.turn_knobs(detents),
+            Part::Hoover => {
+                if let Bank::Hoover(p, _) = &mut self.bank {
+                    for (v, delta) in [&mut p.cutoff, &mut p.sweep, &mut p.pwm, &mut p.chorus]
+                        .into_iter()
+                        .zip(detents)
+                    {
+                        *v = v.saturating_add_signed(delta).min(127);
+                    }
+                }
+            }
             Part::Fm => self.fm.turn(detents),
             Part::Wavetable => self.wave_program_mut().turn(detents),
             Part::Bass => self.bass.turn_knobs(detents),
@@ -590,6 +655,39 @@ impl Track {
                 let slot = self.voice.waveform;
                 bank[usize::from(slot)].edit(knobs, (slot == 0).then_some(pads));
             }
+            (View::Envelope, Part::Hoover) => {
+                if let Bank::Hoover(p, page) = &mut self.bank {
+                    *page = page.turn(i16::from(select).saturating_add(i16::from(sel)));
+                    let turn =
+                        |v: &mut u8, d: i8, max: u8| *v = v.saturating_add_signed(d).min(max);
+                    match page {
+                        HooverPage::Times => {
+                            for (v, d) in p.times.iter_mut().zip(knobs) {
+                                turn(v, d, 127)
+                            }
+                        }
+                        HooverPage::Levels => {
+                            for (v, d) in p.levels.iter_mut().zip(knobs) {
+                                turn(v, d, 127)
+                            }
+                            turn(&mut p.resonance, knobs[3], 127);
+                        }
+                        HooverPage::Tone => {
+                            turn(&mut p.hpf, knobs[0], 3);
+                            turn(&mut p.filter_env, knobs[1], 127);
+                            turn(&mut p.pwm_rate, knobs[2], 127);
+                            turn(&mut p.noise, knobs[3], 3);
+                        }
+                        HooverPage::Dco => {
+                            turn(&mut p.pulse_wave, knobs[0], 3);
+                            turn(&mut p.saw_wave, knobs[1], 5);
+                            turn(&mut p.sub_wave, knobs[2], 5);
+                            turn(&mut p.sub_level, knobs[3], 3);
+                        }
+                    }
+                }
+                return;
+            }
             (View::Envelope, Part::Sampler) => {
                 self.envelope_target = self
                     .envelope_target
@@ -659,6 +757,16 @@ impl Track {
             Part::Sampler => self.sampler_events(old),
             Part::Supersaw => {
                 let mut events = self.saw_controls(old);
+                self.poly_events(old, &mut events);
+                events
+            }
+            Part::Hoover => {
+                let mut events = EventBatch::new();
+                if old.is_none_or(|p| p.hoover_patch() != self.hoover_patch()) {
+                    events
+                        .push(at(HooverMessage::Patch(self.hoover_patch())))
+                        .map_err(|_| Error::Capacity)?;
+                }
                 self.poly_events(old, &mut events);
                 events
             }
@@ -878,6 +986,7 @@ impl Track {
         if previous.map_or(wavegraph_organ::VoiceMode::Poly, |p| p.polyphony.mode) != mode {
             let msg = match self.assignment.part {
                 Part::Fm => Message::Fm(FmMessage::VoiceMode(mode)),
+                Part::Hoover => Message::Hoover(HooverMessage::VoiceMode(mode)),
                 Part::Organ => Message::Organ(OrganMessage::VoiceMode(mode)),
                 Part::Wavetable => Message::Wavetable(WaveMessage::VoiceMode(mode)),
                 Part::Supersaw => Message::Supersaw(SawMessage::VoiceMode(mode)),
@@ -948,6 +1057,7 @@ pub(super) enum Message {
     Mono(MonoMessage),
     Supersaw(SawMessage),
     Fm(FmMessage),
+    Hoover(HooverMessage),
     Wavetable(WaveMessage),
     Sampler(SampleMessage),
     Recording(Option<crate::clipboard::Take>),
@@ -975,6 +1085,11 @@ impl From<MonoMessage> for Message {
 impl From<WaveMessage> for Message {
     fn from(value: WaveMessage) -> Self {
         Self::Wavetable(value)
+    }
+}
+impl From<HooverMessage> for Message {
+    fn from(value: HooverMessage) -> Self {
+        Self::Hoover(value)
     }
 }
 impl From<FmMessage> for Message {
@@ -1035,6 +1150,7 @@ enum Player<'a> {
     Mono(Monosynth<'a>),
     Supersaw(Supersaw<'a>),
     Fm(Fm<'a>),
+    Hoover(Hoover<'a>),
     Wavetable(Wavetable<'a>),
     Sampler(PitchedSampler<'a>),
     Organ(Organ),
@@ -1088,6 +1204,7 @@ impl Process<Message, I24> for Node<'_> {
                         .expect("factory bank catalog"),
                 ),
                 Part::Fm => Player::Fm(Fm::new(self.tuning)),
+                Part::Hoover => Player::Hoover(Hoover::new(self.tuning)),
                 Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
                 Part::Sampler => Player::Sampler(
                     PitchedSampler::at_sample_rate(&crate::assets::RAVE_BANK, self.sample_rate)
@@ -1118,6 +1235,10 @@ impl Process<Message, I24> for Node<'_> {
             Player::Empty => cx.outputs[0].fill(I24::default()),
             Player::Mono(node) => dispatch(node, cx, |m| match m {
                 Message::Mono(m) => Some(m),
+                _ => None,
+            }),
+            Player::Hoover(node) => dispatch(node, cx, |m| match m {
+                Message::Hoover(m) => Some(m),
                 _ => None,
             }),
             Player::Fm(node) => dispatch(node, cx, |m| match m {
@@ -1836,6 +1957,7 @@ fn event_order(event: &Event<Message>) -> u8 {
         Message::Mono(MonoMessage::NoteOff(_))
         | Message::Wavetable(WaveMessage::NoteOff(_))
         | Message::Fm(FmMessage::NoteOff(_))
+        | Message::Hoover(HooverMessage::NoteOff(_))
         | Message::Supersaw(SawMessage::NoteOff(_))
         | Message::Organ(OrganMessage::NoteOff(_))
         | Message::Sampler(SampleMessage::NoteOff(_) | SampleMessage::Stop)
@@ -1844,6 +1966,7 @@ fn event_order(event: &Event<Message>) -> u8 {
         Message::Mono(MonoMessage::NoteOn { .. })
         | Message::Wavetable(WaveMessage::NoteOn { .. })
         | Message::Fm(FmMessage::NoteOn { .. })
+        | Message::Hoover(HooverMessage::NoteOn { .. })
         | Message::Supersaw(SawMessage::NoteOn { .. })
         | Message::Organ(OrganMessage::NoteOn { .. })
         | Message::Sampler(SampleMessage::NoteOn(_))
@@ -1889,7 +2012,13 @@ mod tests {
     fn edit_page_cycles_each_polysynth_and_recalls_its_chord() {
         use crate::panel::PageButton;
         use wavegraph_organ::{Chord, VoiceMode};
-        for part in [Part::Organ, Part::Wavetable, Part::Supersaw, Part::Fm] {
+        for part in [
+            Part::Organ,
+            Part::Wavetable,
+            Part::Supersaw,
+            Part::Fm,
+            Part::Hoover,
+        ] {
             let mut nav = Navigation::INITIAL;
             nav.assignments[0] = Assignment::new(part);
             let mut track = Track::new(nav.assignments[0]);
@@ -1900,6 +2029,7 @@ mod tests {
             let mode = VoiceMode::Chord(Chord::MAJOR.turn(2));
             let msg = match part {
                 Part::Fm => at(FmMessage::VoiceMode(mode)),
+                Part::Hoover => at(HooverMessage::VoiceMode(mode)),
                 Part::Organ => at(OrganMessage::VoiceMode(mode)),
                 Part::Supersaw => at(SawMessage::VoiceMode(mode)),
                 _ => at(WaveMessage::VoiceMode(mode)),
@@ -4169,5 +4299,36 @@ mod tests {
         keys.snapshot();
         assert_eq!(keys.tracks[0].voice.gate.note, Some(note(60, 80)));
         assert!(decode_midi([9, 0x94, 60, 100]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod hoover_tests {
+    use super::*;
+    #[test]
+    fn editor_exposes_three_independent_levels_and_oscillator_programming() {
+        let mut track = Track::new(Assignment::new(Part::Hoover));
+        track.edit_panel(View::Envelope, 1, [20, -80, -30, 45], false);
+        assert_eq!(track.hoover_patch().levels, [88, 47, 97]);
+        assert_eq!(track.hoover_patch().resonance, 45);
+        track.edit_panel(View::Envelope, 1, [-3, -2, -2, -1], false);
+        let patch = track.hoover_patch();
+        assert_eq!(
+            [
+                patch.pulse_wave,
+                patch.saw_wave,
+                patch.sub_wave,
+                patch.sub_level
+            ],
+            [0, 1, 3, 2]
+        );
+        track.edit_panel(View::Envelope, 1, [2, -10, -127, 2], false);
+        let patch = track.hoover_patch();
+        assert_eq!(
+            [patch.hpf, patch.filter_env, patch.pwm_rate, patch.noise],
+            [2, 65, 0, 3]
+        );
+        track.turn_algorithm(View::Scope, None, 1);
+        assert_eq!(track.hoover_patch().times, [99, 78, 75, 92]);
     }
 }

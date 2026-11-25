@@ -68,6 +68,8 @@ impl Settings {
             mode: track.polyphony.mode,
             organ: track.organ,
             fm: track.fm,
+            hoover: track.hoover_patch(),
+            hoover_page: track.hoover_page(),
             drums808: track.drums808,
             decay909: track.decay909,
             sampler: track.sample_program(),
@@ -102,6 +104,10 @@ impl Settings {
                 self.tracks[self.nav.focus.index()].inserts[usize::from(slot)].enabled()
             }),
             View::MasterFx(Some(row)) => self.fx.enabled(row),
+            View::Envelope if self.nav.part() == Part::Hoover => {
+                self.tracks[self.nav.focus.index()].hoover_page()
+                    != crate::instrument::HooverPage::Times
+            }
             View::Envelope
                 if matches!(
                     self.nav.part(),
@@ -135,6 +141,8 @@ pub(super) struct Labels {
     pub(super) bass_knob: Option<Knob>,
     pub(super) mode: wavegraph_organ::VoiceMode,
     pub(super) organ: OrganControls,
+    pub(super) hoover_page: crate::instrument::HooverPage,
+    pub(super) hoover: wavegraph_hoover::Patch,
     pub(super) fm: crate::fm::Controls,
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) decay909: [u8; 3],
@@ -1388,12 +1396,13 @@ mod app {
                     if bass_scope {
                         self.capture.push_bass(samples, block.bass_cycle)
                     } else {
-                        let scale =
-                            if voice_scope && matches!(labels.focus, Part::Wavetable | Part::Fm) {
-                                Scale::Auto
-                            } else {
-                                Scale::Fixed
-                            };
+                        let scale = if voice_scope
+                            && matches!(labels.focus, Part::Wavetable | Part::Hoover | Part::Fm)
+                        {
+                            Scale::Auto
+                        } else {
+                            Scale::Fixed
+                        };
                         self.capture.push(samples, scale)
                     }
                 });

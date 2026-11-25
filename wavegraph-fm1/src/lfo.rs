@@ -71,6 +71,12 @@ const WAVETABLE: &[Target] = &[
     knob("TIME / ATTACK", 2, 16),
     knob("SCAN MODE", 3, 2),
 ];
+const HOOVER: &[Target] = &[
+    knob("CUTOFF", 0, 64),
+    knob("PITCH SWEEP", 1, 64),
+    knob("PWM DEPTH", 2, 64),
+    knob("CHORUS RATE", 3, 64),
+];
 const FM: &[Target] = &[
     knob("MOD INDEX", 1, 64),
     knob("FEEDBACK", 3, 64),
@@ -94,6 +100,7 @@ impl Part {
             Self::Tr909 => TR909,
             Self::Supersaw => SUPERSAW,
             Self::Wavetable => WAVETABLE,
+            Self::Hoover => HOOVER,
             Self::Fm => FM,
             Self::Sampler => SAMPLER,
         }

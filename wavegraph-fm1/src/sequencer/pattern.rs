@@ -60,8 +60,8 @@ impl Slot {
         let bank = match (part, channel) {
             (Part::Sampler, _) if house_m7 => 9,
             (Part::Bass, Channel::Two) => 7,
-            // The electric piano starts with the organ chord clips. Recording
-            // and slot selection remain keyed by the assigned part.
+            // Share factory clips while keeping recorded edits keyed by instrument.
+            (Part::Hoover, _) => Part::Supersaw as usize,
             (Part::Fm, _) => Part::Organ as usize,
             _ => part as usize,
         };

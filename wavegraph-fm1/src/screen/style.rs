@@ -155,6 +155,23 @@ pub(super) const MICROWAVE: InstrumentStyle = InstrumentStyle {
         rgb(30, 23, 18),
     ),
 };
+// MKS rack: charcoal case, blue stripe and luminous green LCD.
+pub(super) const HOOVER: InstrumentStyle = InstrumentStyle {
+    stripes: Stripes::Normal,
+    face: rgb(3, 6, 4),
+    surface: rgb(5, 13, 12),
+    ink: rgb(29, 58, 29),
+    muted: rgb(11, 36, 29),
+    accent: rgb(8, 34, 30),
+    selected: RowColors::new(rgb(14, 60, 23), DARK_INK),
+    peak: rgb(24, 62, 26),
+    scope: scope(
+        rgb(3, 6, 4),
+        rgb(5, 13, 12),
+        rgb(8, 34, 30),
+        rgb(14, 60, 23),
+    ),
+};
 // DX-style brown/turquoise membrane panel and inverse green LCD.
 pub(super) const FM: InstrumentStyle = InstrumentStyle {
     stripes: Stripes::Normal,
@@ -208,6 +225,7 @@ impl InstrumentStyle {
             Part::Tr909 => &TR909,
             Part::Supersaw => &JP8080,
             Part::Wavetable => &MICROWAVE,
+            Part::Hoover => &HOOVER,
             Part::Fm => &FM,
             Part::Sampler => &SAMPLER,
         }

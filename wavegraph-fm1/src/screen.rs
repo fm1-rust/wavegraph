@@ -35,6 +35,7 @@ mod drums;
 mod envelope_plot;
 mod fm;
 mod grid;
+mod hoover;
 mod jp8080;
 mod lettering;
 mod lfo;
@@ -93,7 +94,7 @@ enum Page {
         crate::clipboard::Status,
         bool,
     ),
-    Scope(Channel, Part, wavegraph_organ::VoiceMode),
+    Scope(Channel, Part, wavegraph_organ::VoiceMode, u8),
     Arp(Channel, Part),
     VoiceMode(Channel, Part, wavegraph_organ::VoiceMode),
     Lfo(Channel, Part, crate::lfo::Controls),
@@ -102,6 +103,11 @@ enum Page {
     Mixer,
     Sequencer(SeqPage, Channel, Part),
     Envelope(Channel, Part, EnvelopeTarget, EnvelopeControls, bool, i16),
+    HooverEnvelope(
+        Channel,
+        wavegraph_hoover::Patch,
+        crate::instrument::HooverPage,
+    ),
     BassEnvelope(Channel, Controls, Option<Knob>),
     DrumEnvelope(Channel, Part, drums::Envelope),
 }
@@ -497,6 +503,7 @@ impl Screen {
             Part::Tr808 => b"SEQ TR-808",
             Part::Supersaw => b"SEQ JP-8080",
             Part::Wavetable => b"SEQ WAVE",
+            Part::Hoover => b"SEQ HOOVER",
             Part::Fm => b"SEQ FM",
             Part::Sampler => b"SEQ SAMPLER",
         };
@@ -831,6 +838,10 @@ impl Screen {
         }
         if labels.view == View::Envelope {
             match labels.focus {
+                Part::Hoover => {
+                    let mut page = pin!(self.paint_hoover_env(lcd, clock, &labels));
+                    return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
+                }
                 Part::Bass => {
                     return self.paint_bass_envelope(lcd, clock, &labels, theme).await;
                 }
@@ -908,11 +919,17 @@ impl Screen {
         let sampler = labels.focus == Part::Sampler;
         let saw = labels.focus == Part::Supersaw;
         let wave = labels.focus == Part::Wavetable;
+        let hoover = labels.focus == Part::Hoover;
         let fm = labels.focus == Part::Fm;
         let style = self.selector.style(theme.scope);
         let [ink, muted, bright] =
             [theme.accent, theme.muted, theme.ink].map(self.selector.shader());
-        let page = Page::Scope(labels.channel, labels.focus, labels.mode);
+        let page = Page::Scope(
+            labels.channel,
+            labels.focus,
+            labels.mode,
+            if hoover { labels.voice.waveform } else { 0 },
+        );
         let changed_page = self.page.replace(page) != Some(page);
         if changed_page {
             self.change_view(style);
@@ -924,7 +941,7 @@ impl Screen {
                 .map(|y| (58 + u16::from(y) * 100 / HEIGHT as u16) as u8)
         } else if drums {
             frame.trace.map(|y| (60 + u16::from(y) * 5 / 8) as u8)
-        } else if saw || wave || fm {
+        } else if saw || wave || fm || hoover {
             frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
             frame
@@ -941,7 +958,7 @@ impl Screen {
             (56, 56)
         } else if bass {
             (tb303::SCOPE_TOP, 0)
-        } else if fm {
+        } else if fm || hoover {
             (40, 40)
         } else if saw || wave {
             (32, 40)
@@ -991,6 +1008,18 @@ impl Screen {
                     changed_page,
                 )
                 .await;
+        }
+        if hoover {
+            if changed_page {
+                let mut display = lcd.as_async(clock)?;
+                hoover::header(&mut display, self.strip, self.selector, &labels).await?;
+            }
+            self.text.text(0, 13, b"CUT  BEND PWM  CHOR", muted);
+            let p = labels.hoover;
+            for (x, v) in [p.cutoff, p.sweep, p.pwm, p.chorus].into_iter().enumerate() {
+                self.text.number(x * 5, 14, 3, u32::from(v), bright);
+            }
+            return self.text.paint_async(lcd, clock).await;
         }
         if fm {
             let mut lcd = lcd.as_async(clock)?;
@@ -1123,9 +1152,15 @@ impl Screen {
             (false, _) => b"DAC",
             (true, Part::Mono) => b"VCA",
             (true, Part::Organ) => b"ORG",
-            (true, Part::Bass | Part::Supersaw | Part::Wavetable | Part::Fm | Part::Sampler) => {
-                b"SRC"
-            }
+            (
+                true,
+                Part::Bass
+                | Part::Supersaw
+                | Part::Wavetable
+                | Part::Fm
+                | Part::Hoover
+                | Part::Sampler,
+            ) => b"SRC",
             (true, Part::Tr808 | Part::Tr909) => b"KIT",
         };
         self.text.text(16, 0, source, muted);

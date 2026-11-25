@@ -36,6 +36,7 @@ wavegraph-909 = { path = "../instruments/wavegraph-909" }
 wavegraph-adsr.workspace = true
 wavegraph-arp.workspace = true
 wavegraph-lfo.workspace = true
+wavegraph-hoover = { path = "../instruments/wavegraph-hoover" }
 wavegraph-fm = { path = "../instruments/wavegraph-fm" }
 wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }

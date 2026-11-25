@@ -14,6 +14,7 @@ four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
 All four patterns start enabled. GLO lets any channel host any instrument,
 including the [monosynth](../instruments/wavegraph-monosynth/),
 [M1-inspired organ](../instruments/wavegraph-organ/),
+[Hoover](../instruments/wavegraph-hoover/),
 [two-operator FM synth](../instruments/wavegraph-fm/),
 [Super Saw](../instruments/wavegraph-supersaw/),
 [wavetable synth](../instruments/wavegraph-wavetable/) and
@@ -42,7 +43,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
 | REC | Start live recording on the current channel. REC ends recording and keeps the loop playing. PLAY stops both. |
-| EDIT on an FM, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
+| EDIT on an FM, Hoover, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
 | SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
 | PRESETS in SEQ | Browse channels 1–4 while staying in the sequence view. |
@@ -52,8 +53,8 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | PRESETS encoder | Cycle channels 1–4. The new channel number flashes in the upper-left corner for 1.5 seconds on the instrument and its pages, including FX, ENV, LFO, ARP and SEQ. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, load the next FM program, or choose a sampler clip. While a 303 knob is selected, ALGORITHM adjusts its value. |
-| SELECT encoder on the scope | Transpose the monosynth, FM, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through all eight 303 knobs. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, load the next FM or Hoover program, or choose a sampler clip. While a 303 knob is selected, ALGORITHM adjusts its value. |
+| SELECT encoder on the scope | Transpose the monosynth, FM, Hoover, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through all eight 303 knobs. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | Knobs 1–4 on the FM synth | Modulator-to-carrier frequency ratio, modulation index, modulator envelope decay (0–10 s), and modulator feedback. Harder strikes sound brighter. |
@@ -79,6 +80,10 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | ALGORITHM in FX | Switch the full/half post-rack output gain. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for FM and 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
+
+For **HOOVER**, press GLO, choose a channel with SELECT and assign HOOVER with PRESETS. Press GLO again to play. Use the four knobs for cutoff, pitch sweep, PWM depth and chorus rate. Press ENV to see the shared pitch/filter/amp contour. Turn SELECT or press SEL to cycle through times T1–T4, levels L1–L3 plus resonance, DCO pulse/saw/sub waveforms plus sub level, and filter/PWM/noise settings. On the scope, ALGORITHM recalls Fast Hoover, What The and Twin Peak. To replay a Hoover chord or phrase at another pitch, [sample it into the clipboard](#sample-a-chord-into-the-clipboard).
+
+![Fast Hoover playing a chord on the FM-1 rack panel](assets/hoover.png)
 
 To play FM, press GLO, turn SELECT to a channel, turn PRESETS to **FM SYNTH**,
 then press GLO to play. ALGORITHM recalls **Tine EP**, **Glass Bell** or
@@ -124,10 +129,10 @@ Hold a bass note on channel one, turn PRESETS to channel two, and play the
 upper voice. Each key keeps the channel it was pressed on. The 303 and
 monosynth use last-note priority. On the 303, velocity 96+ triggers accent,
 overlapping notes slide, and a fresh strike after release restarts the
-envelopes. On the FM, organ, Super Saw and wavetable synths, the latest four physical keys take priority.
+envelopes. On the FM, Hoover, organ, Super Saw and wavetable synths, the latest four physical keys take priority.
 Releasing a newer key restores an older held key.
 
-All four scopes show the mode or the selected chord symbol. These instruments start in **Poly**, with one voice per key. **Chord** plays the
+Their scopes show the mode or the selected chord symbol. These instruments start in **Poly**, with one voice per key. **Chord** plays the
 selected voicing from a single root. **Unison** spreads all four voices
 around one pitch (approximately ±2 and ±7 cents). In either stacked mode the
 newest held root wins. Releasing it recalls the previous held root and its
@@ -150,6 +155,7 @@ Each channel runs its own control-rate LFO. Depth scales a bipolar sweep around 
 | Super Saw | Filter cutoff, resonance, detune, side-saw mix |
 | Wavetable | Scan start, scan end, travel time (attack in envelope mode), scan mode |
 | FM | Modulation index, feedback, frequency ratio, modulator decay |
+| Hoover | Cutoff, pitch sweep, PWM depth, chorus rate |
 | Sampler | Filter cutoff, resonance, filter envelope amount, velocity-to-cutoff depth |
 
 On the TR-808, ENV exposes the kick body and transient controls alongside snare tone and wire level. On the TR-909, knobs 1–3 adjust the modeled kick, snare and clap tails from 0–100% of their stock decay times. The factory pattern starts at 55%. Both drum pages show strike and tail activity. The 909 hats and ride play their recorded tails, and closing the hat still chokes the open hat.
@@ -618,7 +624,7 @@ All four strips use the same dark palette for every instrument assignment.
 
 Turn PRESETS while a strip is highlighted to browse instruments alphabetically
 by their displayed names. Each detent applies the new assignment immediately.
-Any slot can run any of the nine instruments, including four independent
+Any slot can run any of the ten instruments, including four independent
 TB-303s. The slot keeps its MIDI channel, fader, sends and sequence mute.
 The new processor starts from its factory settings.
 
