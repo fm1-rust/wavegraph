@@ -9,7 +9,9 @@ build = "assets/bumper.rs"
 description = "Four assignable WaveGraph channels with synths, 808 and 909 kits, and an oscilloscope for FM-1"
 
 [features]
-default = ["packed-cymbals", "packed-samples"]
+default = ["lofi-samples", "packed-cymbals", "packed-samples"]
+# Use the compact Amen and lower-rate IMA versions of the two stabs and zap.
+lofi-samples = []
 late-block-probe = []
 # Opt in on hardware. The browser emulator currently lacks the paired 32-bit add.
 pi32v2-simd = ["wavegraph-supersaw/pi32v2-simd"]
@@ -39,7 +41,7 @@ wavegraph-fx.workspace = true
 wavegraph-monosynth = { path = "../instruments/wavegraph-monosynth" }
 wavegraph-organ = { path = "../instruments/wavegraph-organ" }
 wavegraph-sample.workspace = true
-wavegraph-sampler = { path = "../instruments/wavegraph-sampler", features = ["ima-adpcm", "packed-pcm"] }
+wavegraph-sampler = { path = "../instruments/wavegraph-sampler", features = ["ima-adpcm", "packed-pcm", "recording"] }
 wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 

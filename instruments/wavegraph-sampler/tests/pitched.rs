@@ -539,3 +539,59 @@ fn predictive_pcm_matches_raw_through_block_seeks_loops_and_chords() {
         }
     }
 }
+
+#[test]
+fn slice_keys_choose_regions_at_root_speed_and_choke_the_previous_one_shot() {
+    use wavegraph_sampler::{FULL_SLICES, Slice};
+    let pcm = [100, 200, 300, 400, 500, 600, 700, 800_i16].map(i16::to_le_bytes);
+    let mut pads = [Slice {
+        note: 65,
+        start: 2,
+        end: 6,
+    }; 8];
+    pads[1] = Slice {
+        note: 67,
+        start: 5,
+        end: 8,
+    };
+    pads[2] = Slice {
+        note: 69,
+        start: 5,
+        end: 12,
+    };
+    let bank = [Clip::from_pcm16le(pcm.as_flattened(), 1024, 60)
+        .expect("PCM")
+        .with_native_tempo(120)
+        .with_slices(&pads)];
+    let mut voice = PitchedSampler::new(&bank, 1024).expect("clock");
+    let mode = Playback {
+        mode: PlaybackMode::Slice,
+        start: 25,
+        end: 50,
+        ..Playback::INITIAL
+    };
+    let mut trims = FULL_SLICES;
+    trims[0] = [25, 75];
+    assert_eq!(
+        render::<8>(
+            &mut voice,
+            &[
+                (0, Msg::Playback(mode)),
+                (0, Msg::SliceTrims(trims)),
+                (0, on(60, 127)),
+                (1, Msg::NoteOff(60)),
+                (2, on(65, 127)),
+                (3, on(54, 127)),
+                (4, on(67, 127)),
+                (5, on(69, 127)),
+                (6, Msg::NoteOff(67)),
+            ]
+        ),
+        [100, 200, 400, 500, 600, 700, 800, 0]
+    );
+    assert_eq!(
+        render::<6>(&mut voice, &[(0, on(60, 127)), (2, Msg::Tempo(240))]),
+        [100, 200, 300, 500, 700, 0]
+    );
+    assert_eq!(render::<3>(&mut voice, &[(0, on(67, 127))]), [600, 800, 0]);
+}

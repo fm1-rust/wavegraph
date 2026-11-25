@@ -35,12 +35,15 @@ struct Header {
     key: [u8; 4],
     velocity: u8,
     transpose: i8,
+    root: Option<u8>,
+    slices: bool,
+    pad: Option<u8>,
 }
 
 #[derive(Default)]
 pub(super) struct Panel {
     header: Option<Header>,
-    controls: Option<(Program, bool)>,
+    controls: Option<(Program, bool, Option<u8>)>,
 }
 
 impl Panel {
@@ -51,7 +54,7 @@ impl Panel {
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: &Labels,
-        entering: bool,
+        (entering, take): (bool, Option<crate::clipboard::Take>),
     ) -> Result<(), Error> {
         let header = Header {
             channel: labels.channel,
@@ -60,8 +63,20 @@ impl Panel {
             key: labels.voice.note_name(),
             velocity: labels.voice.gate.note.map_or(0, |n| n.velocity),
             transpose: labels.voice.transpose,
+            slices: labels.sampler.playback.mode == PlaybackMode::Slice,
+            pad: labels.slice.map(|(i, _)| i),
+            root: if labels.voice.waveform == assets::CLIPBOARD_SLOT {
+                take.map(|t| t.root)
+            } else {
+                Some(assets::RAVE_BANK[usize::from(labels.voice.waveform)].root_note())
+            },
         };
-        let controls = (labels.sampler, labels.view == View::SampleEdit);
+        let mut program = labels.sampler;
+        if header.slices {
+            [program.playback.start, program.playback.end] =
+                labels.slice.map_or([0, 100], |(_, trim)| trim);
+        }
+        let controls = (program, labels.view == View::SampleEdit, header.pad);
         let top = entering || self.header != Some(header);
         let bottom = entering || self.controls != Some(controls);
         if !top && !bottom {
@@ -70,7 +85,7 @@ impl Panel {
         let mut display = lcd.as_async(clock)?;
         if top {
             let index = usize::from(header.slot);
-            let root = Voice::pitch_name(assets::RAVE_BANK[index].root_note());
+            let root = header.root.map_or(*b"--  ", Voice::pitch_name);
             let mut first = String::<32>::new();
             let mut second = String::<40>::new();
             write!(
@@ -78,16 +93,34 @@ impl Panel {
                 "{:02} {}    ROOT {}",
                 header.slot + 1,
                 ascii(&assets::SAMPLE_NAMES[index]),
-                ascii(&root)
+                if header.root.is_some() {
+                    ascii(&root)
+                } else {
+                    "EMPTY"
+                }
             )
             .expect("LCD line");
-            write!(
-                second,
-                "KEY {:3}  VEL {:3}  TRANS {:+}",
-                ascii(&header.key).trim(),
-                header.velocity,
-                header.transpose
-            )
+            if header.slices {
+                if let Some(i) = header.pad {
+                    let key = Voice::pitch_name(assets::PAD_NOTES[usize::from(i)]);
+                    write!(
+                        second,
+                        "C4 FULL    {} CHOP {}    REC",
+                        ascii(&key).trim(),
+                        i + 1
+                    )
+                } else {
+                    write!(second, "C4 FULL    LIT KEYS CHOP")
+                }
+            } else {
+                write!(
+                    second,
+                    "KEY {:3}  VEL {:3}  TRANS {:+}",
+                    ascii(&header.key).trim(),
+                    header.velocity,
+                    header.transpose
+                )
+            }
             .expect("LCD line");
             for y in (0..56).step_by(BAND) {
                 let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, FACE);
@@ -116,7 +149,7 @@ impl Panel {
             self.header = Some(header);
         }
         if bottom {
-            let (program, edit) = controls;
+            let (program, edit, pad) = controls;
             let mut values: [String<8>; 4] = core::array::from_fn(|_| String::new());
             let sliders = sliders(program, edit, &mut values);
             for y in (160..SIZE).step_by(BAND) {
@@ -132,6 +165,9 @@ impl Panel {
                     Alignment::Left,
                     PRINT,
                 );
+                if edit && header.slices {
+                    overview(&mut band, pad, program.playback);
+                }
                 for (i, (label, position)) in sliders.iter().enumerate() {
                     let x = 30 + i as i32 * 60;
                     band.label(label, Point::new(x, 178), Alignment::Center, PRINT);
@@ -167,13 +203,21 @@ fn sliders(program: Program, edit: bool, values: &mut [String<8>; 4]) -> [(&'sta
             PlaybackMode::OneShot => "SHOT",
             PlaybackMode::Gate => "GATE",
             PlaybackMode::Loop => "LOOP",
+            PlaybackMode::Slice => "SLICE",
         };
         first.push_str(mode).expect("mode");
         write!(second, "{}%", p.start).expect("start");
         write!(third, "{}%", p.end).expect("end");
         write!(fourth, "{}%", t.key_tracking).expect("key track");
         [
-            ("1 MODE", p.mode as u8 * 50),
+            (
+                "1 MODE",
+                if p.mode == PlaybackMode::Slice {
+                    100
+                } else {
+                    p.mode as u8 * 33
+                },
+            ),
             ("2 START", p.start),
             ("3 END", p.end),
             ("4 KEY TRK", t.key_tracking),
@@ -206,6 +250,131 @@ fn sliders(program: Program, edit: bool, values: &mut [String<8>; 4]) -> [(&'sta
     }
 }
 
+// 96 RMS columns measured from the four-bar factory recording, computed off-device.
+const AMEN_LEVEL: [u8; 96] = [
+    11, 7, 5, 10, 7, 5, 8, 2, 2, 2, 3, 2, 2, 3, 2, 11, 9, 8, 8, 4, 2, 2, 3, 2, 11, 7, 5, 10, 7, 5,
+    8, 3, 1, 2, 3, 2, 2, 3, 2, 11, 9, 8, 8, 4, 2, 2, 3, 2, 11, 7, 5, 10, 7, 5, 8, 2, 2, 2, 3, 2, 2,
+    3, 2, 11, 7, 5, 4, 2, 1, 8, 2, 1, 2, 3, 2, 11, 7, 5, 8, 3, 1, 2, 3, 2, 2, 3, 2, 10, 7, 5, 4, 2,
+    2, 7, 3, 1,
+];
+
+fn overview(band: &mut Band<'_>, pad: Option<u8>, playback: wavegraph_sampler::Playback) {
+    let frames = assets::AMEN_PADS[7].end;
+    let (mut lo, mut hi) = (0, frames);
+    if let Some(i) = pad {
+        let cut = assets::AMEN_PADS[usize::from(i)];
+        let len = cut.end - cut.start;
+        lo = cut.start + len * u32::from(playback.start) / 100;
+        hi = cut.start + (len * u32::from(playback.end)).div_ceil(100);
+    }
+    let first = lo * 96 / frames;
+    let end = (hi * 96).div_ceil(frames);
+    for (index, &height) in AMEN_LEVEL.iter().enumerate() {
+        let x = u32::try_from(index).expect("96 columns");
+        let ink = if (first..end).contains(&x) {
+            PRINT
+        } else {
+            LCD
+        };
+        band.rect(
+            Point::new(
+                134 + i32::try_from(x).expect("LCD x"),
+                176 - i32::from(height),
+            ),
+            Size::new(1, u32::from(height)),
+            ink,
+        );
+    }
+}
+
 fn ascii(bytes: &[u8]) -> &str {
     core::str::from_utf8(bytes).expect("ASCII panel text")
+}
+
+pub(super) async fn clipboard(
+    lcd: &mut Display,
+    clock: &mut Clock,
+    pixels: &mut [[u8; 2]],
+    labels: &Labels,
+    status: crate::clipboard::Status,
+) -> Result<(), Error> {
+    use crate::clipboard::State;
+    let colors = super::mixer::RackColors::GLOBAL;
+    let root = Voice::pitch_name(labels.clip_options.root);
+    let length = match labels.clip_options.beats() {
+        1 => "1 BEAT",
+        4 => "1 BAR",
+        8 => "2 BARS",
+        _ => "4 BARS",
+    };
+    let state = match status.state {
+        State::Idle if status.take.is_some() => "READY",
+        State::Idle => "EMPTY",
+        State::Armed if labels.seq.transport.playing() => "WAITING FOR DOWNBEAT",
+        State::Armed => "PLAY A NOTE",
+        State::Recording => "RECORDING",
+        State::Interrupted => "TAKE INTERRUPTED",
+        State::SelfInput => "CHOOSE ANOTHER SOURCE",
+    };
+    let source = heapless::format!(32; "{} / {}", labels.channel.label(), labels.focus.name())
+        .expect("short source");
+    let mut info = String::<40>::new();
+    if let Some(take) = status.take {
+        write!(
+            info,
+            "{} HZ   {} MS",
+            take.hz,
+            u32::from(take.frames) * 1000 / u32::from(take.hz)
+        )
+        .expect("take");
+    }
+    let source_hint = if matches!(status.state, State::Armed | State::Recording) {
+        status.source.label()
+    } else {
+        ""
+    };
+    let action = match status.state {
+        State::Armed => "REC  CANCEL",
+        State::Recording => "REC  FINISH",
+        _ => "REC  ARM CAPTURE",
+    };
+    let mut display = lcd.as_async(clock)?;
+    for y in (0..SIZE).step_by(BAND) {
+        let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, super::mixer::BACKGROUND);
+        band.title("PCM CLIPBOARD", Point::new(8, 8), colors.ink);
+        band.label(&source, Point::new(8, 35), Alignment::Left, colors.ink);
+        band.rect(Point::new(7, 55), Size::new(226, 57), colors.surface);
+        band.label(state, Point::new(14, 65), Alignment::Left, colors.accent);
+        band.label(
+            source_hint,
+            Point::new(228, 65),
+            Alignment::Right,
+            colors.accent,
+        );
+        band.label(&info, Point::new(14, 89), Alignment::Left, colors.accent);
+        for (row, label, value) in [(132, "1  LENGTH", length), (151, "2  ROOT", ascii(&root))] {
+            band.label(label, Point::new(8, row), Alignment::Left, colors.ink);
+            band.label(value, Point::new(228, row), Alignment::Right, colors.ink);
+        }
+        band.label(action, Point::new(8, 187), Alignment::Left, colors.ink);
+        if labels.focus == crate::instrument::Part::Sampler {
+            band.label(
+                "SEL  USE CLIPBOARD",
+                Point::new(8, 209),
+                Alignment::Left,
+                colors.ink,
+            );
+        } else {
+            band.label(
+                "PRESETS  CHOOSE CHANNEL",
+                Point::new(8, 209),
+                Alignment::Left,
+                colors.ink,
+            );
+        }
+        display
+            .write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+            .await?;
+    }
+    display.flush().await
 }

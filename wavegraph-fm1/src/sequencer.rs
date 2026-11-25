@@ -577,6 +577,7 @@ pub(super) struct PatternPlayer {
     lanes: [Lane; CHANNELS],
     pub(super) requested: [Slot; CHANNELS],
     position: Option<Position>,
+    pub(super) downbeat: Option<usize>,
 }
 
 impl PatternPlayer {
@@ -594,6 +595,7 @@ impl PatternPlayer {
             lanes: [Lane::EMPTY; CHANNELS],
             requested: [Slot::FIRST; CHANNELS],
             position: None,
+            downbeat: None,
         }
     }
 
@@ -620,6 +622,7 @@ impl PatternPlayer {
         mut emit: impl FnMut(Channel, Event<Message>) -> Result<(), Error>,
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<(), Error> {
+        self.downbeat = None;
         if frames == 0 {
             return Ok(());
         }
@@ -671,6 +674,9 @@ impl PatternPlayer {
         let mut frame = 0;
         while frame < frames {
             if let Some(tick) = self.clock.take_tick() {
+                if tick.is_multiple_of(16 * 8) && self.downbeat.is_none() {
+                    self.downbeat = Some(frame);
+                }
                 for channel in Channel::ALL {
                     let i = channel.index();
                     let lane = &mut self.lanes[i];

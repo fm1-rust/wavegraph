@@ -57,6 +57,7 @@ impl Settings {
         let track = self.tracks[channel.index()];
         Labels {
             channel,
+            clip_options: self.nav.clip_options,
             assignments: self.nav.assignments.map(|assignment| assignment.part),
             voice: track.voice,
             lfo: track.lfo,
@@ -70,6 +71,12 @@ impl Settings {
             drums808: track.drums808,
             decay909: track.decay909,
             sampler: track.sample_program(),
+            slice: if track.amen_slices() {
+                let pads = track.sample_pads();
+                pads.selected.map(|i| (i, pads.trims[usize::from(i)]))
+            } else {
+                None
+            },
             saw: track.saw,
             wave: track.wave_program(),
             envelope_target: track.envelope_target,
@@ -117,6 +124,7 @@ impl Settings {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Labels {
+    pub(super) clip_options: crate::clipboard::Options,
     pub(super) channel: Channel,
     pub(super) assignments: [Part; CHANNELS],
     pub(super) voice: Voice,
@@ -131,6 +139,7 @@ pub(super) struct Labels {
     pub(super) drums808: wavegraph_808::Controls,
     pub(super) decay909: [u8; 3],
     pub(super) sampler: crate::sampler::Program,
+    pub(super) slice: Option<(u8, [u8; 2])>,
     pub(super) saw: SawControls,
     pub(super) wave: WaveProgram,
     pub(super) envelope_target: EnvelopeTarget,
@@ -149,6 +158,7 @@ pub(super) struct Labels {
 
 #[derive(Clone, Copy, Default)]
 pub struct Motion {
+    pub(super) clipboard: crate::clipboard::Status,
     pub(super) position: Option<Position>,
     pub(super) transport: Option<Transport>,
     pub(super) bass_automation: Option<(Channel, Automation)>,
@@ -171,6 +181,10 @@ impl Motion {
     fn display_changed(&self, old: &Self, nav: Navigation) -> bool {
         let i = nav.focus.index();
         match nav.view {
+            View::Clipboard => self.clipboard != old.clipboard,
+            View::Scope | View::SampleEdit if nav.part() == Part::Sampler => {
+                self.clipboard.take != old.clipboard.take
+            }
             View::Mixer | View::Channel => self.peaks != old.peaks,
             View::MasterFx(_) => self.reduction != old.reduction,
             View::Arp => self.arp_notes[i] != old.arp_notes[i],
@@ -304,7 +318,7 @@ mod app {
     struct Shared {
         settings: Performance,
         bumper: Bumper,
-        leds: Leds,
+        leds: (Leds, [bool; CHANNELS]),
         frame: Frame,
         overloads: Overloads,
         timing: Timing,
@@ -319,6 +333,9 @@ mod app {
     // in a separate frame and hand the audio task its permanent SRAM storage.
     #[inline(never)]
     fn initialize_graph() -> &'static mut Instrument<'static> {
+        for sample in &crate::clipboard::PCM {
+            sample.store(0, core::sync::atomic::Ordering::Relaxed);
+        }
         static ORGAN: Organ = crate::organ::instrument(FRAME_RATE.0, FRAME_RATE.1);
         static DRUMS: StaticCell<DrumKits> = StaticCell::new();
         static PLAYERS: [StaticCell<Node<'static>>; CHANNELS] =
@@ -460,7 +477,7 @@ mod app {
                     chords: CHORDS.take(),
                 },
                 bumper: Bumper::default(),
-                leds,
+                leds: (leds, [false; CHANNELS]),
                 frame: Frame {
                     trace: FLAT,
                     labels: Settings::INITIAL.labels(false),
@@ -581,7 +598,8 @@ mod app {
                 return;
             };
             // Start with the UI button lamps each sweep, then add the physical key lamps.
-            self.leds = self.shared().leds.lock(|leds| *leds);
+            let (base, slice_keys) = self.shared().leds.lock(|leds| *leds);
+            self.leds = base;
             if scan.pressed(Button::Save) || scan.released(Button::Save) {
                 self.shared()
                     .timing
@@ -641,7 +659,21 @@ mod app {
             {
                 self.nav.preset_since = None;
             }
-            let rec = scan.pressed(Button::Rec);
+            if self.nav.view == View::Clipboard {
+                self.nav.clip_options.turn(
+                    scan.encoder_delta(Encoder::Knob1),
+                    scan.encoder_delta(Encoder::Knob2),
+                );
+                if scan.pressed(Button::Rec) {
+                    let source = self.nav.focus;
+                    self.nav.clip_request.press(
+                        source,
+                        self.nav.assignments[source.index()],
+                        self.nav.clip_options,
+                    );
+                }
+            }
+            let rec = scan.pressed(Button::Rec) && self.nav.view != View::Clipboard;
             if rec && self.nav.view != View::Sequencer {
                 self.nav.press(PageButton::Seq);
             }
@@ -686,8 +718,16 @@ mod app {
             } else {
                 PlayLedState::Red
             });
-            self.leds
-                .set(Button::Rec, self.seq.page == Some(SeqPage::Record));
+            let recording_lamp = self.nav.view == View::Clipboard
+                && self.shared().motion.lock(|m| match m.clipboard.state {
+                    crate::clipboard::State::Armed => ticks() & 16 == 0,
+                    crate::clipboard::State::Recording => true,
+                    _ => false,
+                });
+            self.leds.set(
+                Button::Rec,
+                recording_lamp || self.seq.page == Some(SeqPage::Record),
+            );
             self.leds.set(
                 Button::Edit,
                 self.seq.page == Some(SeqPage::Step)
@@ -777,42 +817,29 @@ mod app {
             } else {
                 self.pattern_pressed_at = None;
                 self.seq.pressed_key_dark = false;
+                let slices = assignment.part == Part::Sampler && slice_keys[channel.index()];
+                if slices {
+                    for note in crate::assets::PAD_NOTES.into_iter().chain([60]) {
+                        self.leds.set(
+                            PianoKey::new(note - 53).expect("physical sampler pad"),
+                            true,
+                        );
+                    }
+                }
                 for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
-                    self.leds.set(key, true);
+                    let number = 53 + key.index();
+                    if slices && number != 60 && !crate::assets::PAD_NOTES.contains(&number) {
+                        continue;
+                    }
+                    self.leds.set(key, !slices);
                     if scan.pressed(key) {
                         let velocity = match touch.velocity(key) {
                             Some(velocity) => velocity,
-                            None if assignment.part.is_kit() => 127,
+                            None if assignment.part.is_kit() || slices => 127,
                             None => continue,
                         };
-                        let physical = Note {
-                            number: 53 + key.index(),
-                            velocity,
-                        };
-                        let erase =
-                            self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel);
-                        let note = if erase {
-                            self.piano.mapped_note(assignment.part, physical)
-                        } else {
-                            self.piano.press(channel, assignment, physical)
-                        };
-                        if matches!(self.seq.page, Some(SeqPage::Record | SeqPage::Step))
-                            && let Some(note) = note
-                        {
-                            let playing = if self.seq.page == Some(SeqPage::Record) {
-                                self.shared().motion.lock(|m| {
-                                    m.position
-                                        .filter(|_| m.transport == Some(self.seq.transport))
-                                        .map(|p| (p, m.banks[channel.index()]))
-                                })
-                            } else {
-                                None
-                            };
-                            if let Some(at) = self.seq.edit_address(assignment.part, playing) {
-                                self.seq.full = !EDITS.write(at, note, erase);
-                                self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
-                            }
-                        }
+                        let physical = Note { number, velocity };
+                        self.strike_key(channel, assignment, physical, slices, &scan);
                     }
                 }
             }
@@ -824,6 +851,42 @@ mod app {
                     pads: self.piano.pads,
                     held: self.piano.held.clone(),
                 });
+            }
+        }
+    }
+
+    impl Panel {
+        // Only a fresh key edge needs note routing and a possible sixteenth edit.
+        // Keep that work outside the SRAM scanner's hot path.
+        #[inline(never)]
+        fn strike_key(
+            &mut self,
+            channel: Channel,
+            assignment: crate::panel::Assignment,
+            physical: Note,
+            slices: bool,
+            scan: &Scan,
+        ) {
+            let erase = self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel);
+            let note = self
+                .piano
+                .keyboard_note(channel, assignment, physical, slices, erase);
+            if matches!(self.seq.page, Some(SeqPage::Record | SeqPage::Step))
+                && let Some(note) = note
+            {
+                let playing = if self.seq.page == Some(SeqPage::Record) {
+                    self.shared().motion.lock(|m| {
+                        m.position
+                            .filter(|_| m.transport == Some(self.seq.transport))
+                            .map(|p| (p, m.banks[channel.index()]))
+                    })
+                } else {
+                    None
+                };
+                if let Some(at) = self.seq.edit_address(assignment.part, playing) {
+                    self.seq.full = !EDITS.write(at, note, erase);
+                    self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
+                }
             }
         }
     }
@@ -916,6 +979,12 @@ mod app {
             let algorithm = scan.encoder_delta(Encoder::Algorithm);
             let sel = scan.pressed(Button::Sel);
             match view {
+                View::Clipboard => {
+                    if sel && nav.part() == Part::Sampler {
+                        self.settings.tracks[channel.index()].voice.waveform =
+                            crate::assets::CLIPBOARD_SLOT;
+                    }
+                }
                 View::VoiceMode => self.settings.tracks[channel.index()]
                     .polyphony
                     .edit(select, algorithm, sel, knobs[0]),
@@ -997,11 +1066,13 @@ mod app {
                 }
             });
             let sel_lamp = settings.sel_lamp();
-            if old_lamp != sel_lamp {
-                self.shared()
-                    .leds
-                    .lock(|leds| leds.set(Button::Sel, sel_lamp));
-            }
+            let slices = settings.tracks.each_ref().map(Track::amen_slices);
+            self.shared().leds.lock(|(leds, keys)| {
+                *keys = slices;
+                if old_lamp != sel_lamp {
+                    leds.set(Button::Sel, sel_lamp);
+                }
+            });
         }
     }
 

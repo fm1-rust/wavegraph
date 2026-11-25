@@ -105,7 +105,10 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
         let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build directory"));
         fonts::write_atlases(&out);
-        println!("cargo:rustc-link-arg=--defsym=__wavegraph_job_reserve=4864");
+        println!("cargo:rerun-if-changed=clipboard.ld");
+        let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("clipboard.ld");
+        println!("cargo:rustc-link-arg=-T{}", script.display());
+        println!("cargo:rustc-link-arg=--defsym=__wavegraph_job_reserve=4928");
         println!(
             "cargo:rustc-link-arg=-Map={}",
             out.join("wavegraph-fm1.map").display()
@@ -138,6 +141,9 @@ fn main() {
     let compact = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none")
         && !cfg!(feature = "packed-cymbals");
     for name in ["horn", "zap", "stab", "house-m7"] {
+        if cfg!(feature = "lofi-samples") && name != "horn" {
+            continue;
+        }
         if cfg!(feature = "packed-samples")
             || (compact && matches!(name, "zap" | "stab" | "house-m7"))
         {

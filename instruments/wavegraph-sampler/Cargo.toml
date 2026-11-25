@@ -10,6 +10,7 @@ categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "sampler", "pcm", "no-std"]
 
 [features]
+recording = []
 ima-adpcm = []
 packed-pcm = ["dep:fm1-assets"]
 

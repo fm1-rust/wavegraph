@@ -86,6 +86,13 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Timing,
+    Clipboard(
+        Channel,
+        Part,
+        crate::clipboard::Options,
+        crate::clipboard::Status,
+        bool,
+    ),
     Scope(Channel, Part, wavegraph_organ::VoiceMode),
     Arp(Channel, Part),
     VoiceMode(Channel, Part, wavegraph_organ::VoiceMode),
@@ -177,6 +184,31 @@ impl Screen {
         labels: Labels,
         motion: &Motion,
     ) -> Result<(), Error> {
+        if labels.view == View::Clipboard {
+            let page = Page::Clipboard(
+                labels.channel,
+                labels.focus,
+                labels.clip_options,
+                motion.clipboard,
+                labels.seq.transport.playing(),
+            );
+            if self.page != Some(page) {
+                self.change_view(WaveformStyle {
+                    background: mixer::BACKGROUND,
+                    ..STYLE
+                });
+                let mut draw = pin!(sampler::clipboard(
+                    lcd,
+                    clock,
+                    self.strip,
+                    &labels,
+                    motion.clipboard
+                ));
+                poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+                self.page = Some(page);
+            }
+            return Ok(());
+        }
         if let View::MasterFx(selected) = labels.view {
             if self.page.replace(Page::MasterFx) != Some(Page::MasterFx) {
                 self.change_view(WaveformStyle {
@@ -610,7 +642,7 @@ impl Screen {
     ) -> Result<(), Error> {
         let labels = &frame.labels;
         let theme = match labels.view {
-            View::Mixer | View::Channel | View::MasterFx(_) => None,
+            View::Mixer | View::Channel | View::Clipboard | View::MasterFx(_) => None,
             View::Scope
             | View::SampleEdit
             | View::VoiceMode
@@ -976,7 +1008,7 @@ impl Screen {
                 self.strip,
                 self.selector,
                 &labels,
-                changed_page
+                (changed_page, motion.clipboard.take)
             ));
             return poll_fn(|cx| poll_page(draw.as_mut(), cx)).await;
         }

@@ -85,7 +85,7 @@ pub(super) fn route(
     mut wire: impl FnMut(Event<MidiMessage>),
 ) -> Result<(), Error> {
     let part = track.assignment.part;
-    let transpose = |key: u8| key.saturating_add_signed(track.voice.transpose).min(127);
+    let transpose = |key: u8| key.saturating_add_signed(track.key_transpose()).min(127);
     let (midi, graph) = match event.message {
         MidiMessage::On(mut n) => {
             n.number = transpose(n.number);

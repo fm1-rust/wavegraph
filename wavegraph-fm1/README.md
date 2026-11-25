@@ -346,7 +346,7 @@ to the same live view.
 Press **GLO**, turn **SELECT** to highlight a strip, turn **PRESETS** to
 **SAMPLER**, then press **GLO** to play. A new strip starts on **AMEN BRK**.
 Turn **ALGORITHM** one click for **MIN7 STAB**, then **RAVE RISE**, **AIRHORN**,
-**LASER ZAP** and **RAVE STAB**. Each strip plays four independent,
+**LASER ZAP**, **RAVE STAB** and the shared **CLIPBOARD**. Each strip plays four independent,
 velocity-sensitive sampler voices from the panel, MIDI or sequencer. The
 LCD shows the original-speed **ROOT** key. The break and effects use C4
 (MIDI 60), MIN7 STAB uses D4 (62), and RAVE STAB uses G2 (43). An octave up
@@ -380,7 +380,7 @@ filter sweep, and soft horn and laser strikes play darker.
 | --- | --- | --- | --- | --- |
 | Instrument | Filter cutoff (Hz or OPEN) | Resonance | Filter envelope depth (−48 to +48 semitones) | Velocity to filter (0–48 semitones) |
 | ENV | Attack | Decay | Sustain | Release |
-| EDIT | SHOT / GATE / LOOP | Start (%) | End (%) | Filter key tracking (0–100%) |
+| EDIT | SHOT / GATE / LOOP / SLICE (Amen) | Start (%) | End (%) | Filter key tracking (0–100%) |
 
 On **ENV**, turn **SELECT** or press **SEL** to switch between AMP and VCF.
 Edits shape all sounding voices of the selected sample. Set a positive or negative **ENV AMT**
@@ -398,12 +398,42 @@ when the transport changes. Amen starts as a full-length one-shot with unity
 amplitude, a bypassed filter and the original relative levels of the drum
 hits. The filter and envelopes remain available if you want to reshape it.
 
-All six CC0 sounds stream from upper flash. The horn, zap and both stabs
-use lossless PCM1 in the default image. The original rising siren and
-JapanYoshiTheGamer's independently programmed Amen remake use 4-bit IMA ADPCM.
-The default image devotes 101,568 bytes to the
-24,400 Hz break. Builds with either PCM bank unpacked use the same four bars
-at 12,505 Hz. No strip buffers a whole recording. [Sample credits](samples/rave/NOTICE.txt)
+All six CC0 sounds stream from upper flash. The default bank plays the four-bar
+Amen remake at 12,505 Hz, with eight chops cut for that recording. The house
+minor seventh uses 8 kHz, the rave stab 7,353 Hz and the laser zap 14,706 Hz.
+Those three hits use 10-, 8- and 12-bit quantization respectively before IMA
+ADPCM encoding. The airhorn uses lossless PCM1 at 22,059 Hz and the rising
+siren uses its original 14,700 Hz IMA recording. [Sample credits](samples/rave/NOTICE.txt)
+
+### Chop the Amen into SEQ REC
+
+On **AMEN BRK**, press **EDIT** and turn knob **1** clockwise to **SLICE**.
+**C4** plays the complete four bars at transport tempo. The other lit white keys,
+**F3 G3 A3 B3** and **D4 E4 F4 G4**, play eight cuts in source order. G3 gives
+you the first backbeat and G4 the final fill. A new pad cuts off the previous
+one, including the full break. Lifting a finger lets the hit finish.
+
+Strike a chop to select it. Knobs **2** and **3** trim its start and end within
+that chop. The highlighted part of the waveform follows the edit. Press **REC**
+and play the lit keys to record the same pad numbers and velocities into the
+current pattern. Octave and strip transpose have no effect on pad assignments.
+The SEQ pattern picker keeps its normal eight bank keys.
+
+### Sample a chord into the clipboard
+
+Focus the source strip in **GLO**, press **EDIT** to open **PCM CLIPBOARD**,
+then press **REC** to arm. With transport stopped, play a chord to start the
+take. During playback it starts on the next bar. Knob **1** selects one beat
+or one, two or four bars. Knob **2** sets the note that will replay the chord
+at its recorded pitch. Press **REC** again to cancel while armed or finish a
+take early. Capture taps the instrument before its strip effects and fader.
+
+On any **SAMPLER** strip, select **CLIPBOARD** with **ALGORITHM** (one click
+back from the Amen), or press **SEL** on the clipboard page. Play a new chord
+to stack up to four transposed copies, each with its own amplitude and filter
+envelopes. All strips share one mono PCM16 recording until the next capture
+begins or power is lost. Each strip keeps its own sampler controls. Longer
+captures average more input frames into each stored sample to fit 64 KiB.
 
 ## Pattern banks
 
@@ -896,10 +926,15 @@ CI and release builds use the pi32v2 workflow from the `fm1-rticx/v0.2.0` tag.
 By default the build packs the 909 closed hat, open hat and ride from their
 original `.s16le` files. In each group of 32 samples it stores only the bits
 needed to reproduce every signed PCM value. The three clips take 114,181 bytes
-in flash, down from 148,124, and each voice decodes one sample at a time. The sampler’s four packed PCM16 hits use 83,819 bytes
-for 127,912 bytes of source PCM. They store second differences in PCM1 and
-restart the predictor every 128 frames for bounded seeking. The boot and
-playback paths stream from flash.
+in flash, down from 148,124, and each voice decodes one sample at a time.
+
+The default `lofi-samples` feature saves 81,563 bytes of sampler recordings.
+The compact Amen uses 52,096 bytes. The two stabs and zap share its existing
+64-byte IMA block decoder. To hear the original-rate bank with the same 909
+and airhorn, run
+`./wavegraph-fm1/build.sh --no-default-features --features packed-cymbals,packed-samples`.
+That build plays the Amen at 24,400 Hz and streams the other three hits as
+lossless PCM1. Both Amen renders contain exactly sixteen beats at 122 BPM.
 
 For a raw sampler comparison with the 909 packed, run
 `./wavegraph-fm1/build.sh --no-default-features --features packed-cymbals`.

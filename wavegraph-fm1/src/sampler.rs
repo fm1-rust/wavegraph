@@ -5,7 +5,29 @@ use crate::{
     instrument::{CUTOFF_HZ, MAX_CUTOFF_STEP},
 };
 use wavegraph_adsr::Shape;
-use wavegraph_sampler::{Playback, PlaybackMode, Timbre};
+use wavegraph_sampler::{FULL_SLICES, Playback, PlaybackMode, SliceTrims, Timbre};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Pads {
+    pub(super) trims: SliceTrims,
+    // None is the complete four-bar loop on C4.
+    pub(super) selected: Option<u8>,
+}
+
+impl Pads {
+    pub(super) const INITIAL: Self = Self {
+        trims: FULL_SLICES,
+        selected: Some(0),
+    };
+
+    pub(super) fn select(&mut self, note: u8) {
+        if note == 60 {
+            self.selected = None;
+        } else if let Some(index) = crate::assets::PAD_NOTES.iter().position(|&n| n == note) {
+            self.selected = Some(u8::try_from(index).expect("eight pads"));
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Program {
@@ -74,6 +96,7 @@ impl Program {
             },
             ..Self::DRY
         },
+        Self::DRY, // Clipboard: each strip can shape the same recording independently.
     ];
 
     pub(super) fn cutoff_step(self) -> u8 {
@@ -113,22 +136,33 @@ impl Program {
     }
 
     #[inline(never)]
-    pub(super) fn edit(&mut self, [mode, start, end, tracking]: [i8; 4]) {
+    pub(super) fn edit(&mut self, [mode, start, end, tracking]: [i8; 4], pads: Option<&mut Pads>) {
         let p = &mut self.playback;
         let modes = [
             PlaybackMode::OneShot,
             PlaybackMode::Gate,
             PlaybackMode::Loop,
+            PlaybackMode::Slice,
         ];
-        p.mode = modes[usize::from((p.mode as u8).saturating_add_signed(mode).min(2))];
-        p.start = p
-            .start
-            .saturating_add_signed(start)
-            .min(p.end.saturating_sub(1));
-        p.end = p
-            .end
-            .saturating_add_signed(end)
-            .clamp(p.start.saturating_add(1), 100);
+        let max = if pads.is_some() { 3 } else { 2 };
+        p.mode = modes[usize::from((p.mode as u8).saturating_add_signed(mode).min(max))];
+        let bounds = if p.mode == PlaybackMode::Slice {
+            pads.and_then(|pads| {
+                let i = usize::from(pads.selected?);
+                let [first, last] = &mut pads.trims[i];
+                Some((first, last))
+            })
+        } else {
+            Some((&mut p.start, &mut p.end))
+        };
+        if let Some((first, last)) = bounds {
+            *first = first
+                .saturating_add_signed(start)
+                .min(last.saturating_sub(1));
+            *last = last
+                .saturating_add_signed(end)
+                .clamp(first.saturating_add(1), 100);
+        }
         self.timbre.key_tracking = self
             .timbre
             .key_tracking

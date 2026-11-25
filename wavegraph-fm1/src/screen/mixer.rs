@@ -186,7 +186,7 @@ impl Surface {
                 let mut band =
                     Band::new(pixels, 0, y, SIZE, (SIZE - y).min(BAND as u16), BACKGROUND);
                 let hint = if editing {
-                    "PRESETS ASSIGN       HOME BACK"
+                    "PRESETS ASSIGN   EDIT PCM   HOME BACK"
                 } else {
                     "K1-4 FADERS   SELECT EDIT   FX RACK"
                 };
@@ -496,6 +496,8 @@ impl<'a> Band<'a> {
         .expect("infallible strip");
     }
 
+    // Keep one copy of the text renderer across the many panel label call sites.
+    #[inline(never)]
     pub(super) fn label(&mut self, name: &str, point: Point, alignment: Alignment, color: Rgb565) {
         if self.panel_type {
             return self.panel_text(name, point, alignment, color, super::lettering::LEGEND);

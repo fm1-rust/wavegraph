@@ -5,9 +5,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [flasher, image, mode = "packed", samplerMode = mode] = process.argv.slice(2);
+const [flasher, image, mode = "packed", samplerMode = mode, voicing =
+    mode === "packed" && samplerMode === "packed" ? "lofi" : "original"] = process.argv.slice(2);
 assert.ok(["raw", "packed"].includes(mode), "expected raw or packed cymbals");
 assert.ok(["raw", "packed"].includes(samplerMode), "expected raw or packed sampler");
+assert.ok(["original", "lofi"].includes(voicing), "expected original or lofi sampler voicing");
 const lib = pathToFileURL(resolve(flasher, "web/lib") + "/");
 const { appTable, appRead, appFilesStatus, AppStatus, BOOT_AREA, FLASH_SIZE, SECTOR } =
     await import(new URL("formats.js", lib));
@@ -53,13 +55,22 @@ function checkAsset(name, bytes) {
     assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
 }
 
+function checkAbsent(name, bytes) {
+    assert.ok(!upper.includes(bytes) && !code.includes(bytes), `${name} unexpectedly included`);
+}
+
+function pcm1Header(frames) {
+    const header = Buffer.alloc(8);
+    header.write("PCM1");
+    header.writeUInt32LE(frames, 4);
+    return header;
+}
+
 // Find the PCM1 clip by its frame count, then check the installed bit stream
 // against the source PCM, including the final, possibly short group.
 function checkPackedClip(pcm, name, predictive) {
     const frames = pcm.length / 2;
-    const header = Buffer.alloc(8);
-    header.write("PCM1");
-    header.writeUInt32LE(frames, 4);
+    const header = pcm1Header(frames);
     const start = upper.indexOf(header);
     assert.ok(start >= 0, name);
     assert.equal(upper.indexOf(header, start + 1), -1, name);
@@ -108,12 +119,18 @@ for (const [path, extension] of [
     for (const name of names) {
         const bytes = readFileSync(new URL(name, dir));
         const rave = path === "../samples/rave/";
-        const compact = rave && mode === "raw" && ["house-m7.s16le", "zap.s16le", "stab.s16le"].includes(name);
+        const hitMaster = rave && ["house-m7.s16le", "zap.s16le", "stab.s16le"].includes(name);
         const packing = rave ? samplerMode : mode;
-        const breakName = mode === "packed" && samplerMode === "packed" ? "amen.ima" : "amen-compact.ima";
-        if (name.startsWith("amen") && extension === ".ima" && name !== breakName) {
-            assert.ok(!upper.includes(bytes) && !code.includes(bytes), `${name} duplicated in this image`);
-        } else if (extension === ".s16le" && (packing === "packed" || compact)) {
+        const fullBreak = voicing === "original" && mode === "packed" && samplerMode === "packed";
+        const breakName = fullBreak ? "amen.ima" : "amen-compact.ima";
+        if (hitMaster && voicing === "lofi") {
+            checkAbsent(name, bytes);
+            checkAbsent(name + " PCM1", pcm1Header(bytes.length / 2));
+        } else if (name.endsWith("-lofi.ima") && voicing === "original") {
+            checkAbsent(name, bytes);
+        } else if (name.startsWith("amen") && extension === ".ima" && name !== breakName) {
+            checkAbsent(name, bytes);
+        } else if (extension === ".s16le" && (packing === "packed" || (mode === "raw" && hitMaster))) {
             assert.ok(!code.includes(bytes), `${name} duplicated in app.bin`);
             checkPackedClip(bytes, name, rave);
         } else {
