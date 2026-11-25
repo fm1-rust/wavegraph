@@ -1,6 +1,6 @@
 //! A one-bit ink mask over the live scope.
 
-use super::lettering::GRID;
+use super::{InstrumentStyle, lettering::GRID, style::RowColors};
 use crate::{
     fx::InsertKind,
     instrument::Part,
@@ -15,12 +15,11 @@ use fm1_graphics::embedded_graphics::{
         BinaryColor, RgbColor,
         raw::{BigEndian, RawU1, ToBytes},
     },
-    prelude::{DrawTarget, Point, Primitive, Size},
-    primitives::{PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    prelude::{DrawTarget, Point},
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 
-// Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the border.
+// Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the selection arrow.
 const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 18;
 const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
@@ -31,13 +30,6 @@ pub(super) const BOTTOM: usize = TOP + HEIGHT;
 
 type Mask<const H: usize, const BYTES: usize> =
     Framebuffer<BinaryColor, RawU1, BigEndian, WIDTH, H, BYTES>;
-
-fn highlight(y: i32) -> RoundedRectangle {
-    RoundedRectangle::with_equal_corners(
-        Rectangle::new(Point::new(0, y), Size::new(WIDTH as u32, ROW_HEIGHT as u32)),
-        Size::new(4, 4),
-    )
-}
 
 fn marked(mask: &[u8], x: usize, y: usize) -> bool {
     let i = y * WIDTH + x;
@@ -70,35 +62,36 @@ impl Menu {
 pub(super) struct Selector {
     menu: Option<Menu>,
     mask: Mask<HEIGHT, { buffer_size::<BinaryColor>(WIDTH, HEIGHT) }>,
-    ink: Rgb565,
-    face: Rgb565,
+    rows: [RowColors; 2],
+    selected_top: usize,
 }
 
 impl Selector {
+    const GLOBAL: [RowColors; 2] = [
+        RowColors::new(Rgb565::BLACK, Rgb565::WHITE),
+        RowColors::new(Rgb565::WHITE, Rgb565::BLACK),
+    ];
+
     pub(super) fn new() -> Self {
         Self {
             menu: None,
             mask: Mask::new(),
-            ink: Rgb565::WHITE,
-            face: Rgb565::BLACK,
+            rows: Self::GLOBAL,
+            selected_top: 0,
         }
     }
 
-    pub(super) fn select(&mut self, menu: Option<Menu>, colors: [Rgb565; 2]) -> bool {
-        if self.menu == menu && (menu.is_none() || [self.ink, self.face] == colors) {
+    pub(super) fn select(&mut self, menu: Option<Menu>, theme: Option<&InstrumentStyle>) -> bool {
+        let rows = theme.map_or(Self::GLOBAL, |t| [t.row(false), t.selected]);
+        if self.menu == menu && (menu.is_none() || self.rows == rows) {
             return false;
         }
         self.menu = menu;
         if let Some(menu) = menu {
-            [self.ink, self.face] = colors;
+            self.rows = rows;
             self.mask
                 .clear(BinaryColor::Off)
                 .expect("infallible framebuffer");
-            let selected = PrimitiveStyleBuilder::new()
-                .fill_color(BinaryColor::Off)
-                .stroke_color(BinaryColor::On)
-                .stroke_width(2)
-                .build();
             for (row, y) in menu.mask_rows().step_by(ROW_HEIGHT).enumerate() {
                 let (name, active) = match menu {
                     Menu::Channels { parts, focus } => (parts[row].name(), row == focus.index()),
@@ -111,13 +104,11 @@ impl Selector {
                         (kind.name(), kind == active)
                     }
                 };
-                if active {
-                    highlight(y as i32)
-                        .into_styled(selected)
-                        .draw(&mut self.mask)
-                        .expect("infallible framebuffer");
-                }
                 let text_y = y + (ROW_HEIGHT - GRID.height) / 2;
+                if active {
+                    self.selected_top = y;
+                    self.label(WIDTH - GRID.width, text_y, ">");
+                }
                 let left = if matches!(menu, Menu::Channels { .. }) {
                     self.label(8, text_y, ["1", "2", "3", "4"][row]);
                     24
@@ -216,10 +207,12 @@ impl Selector {
         if !self.menu?.mask_rows().contains(&y) {
             return None;
         }
+        let active = (self.selected_top..self.selected_top + ROW_HEIGHT).contains(&y);
+        let row = self.rows[usize::from(active)];
         Some(if marked(self.mask.data(), x, y) {
-            self.ink
+            row.ink
         } else {
-            self.face
+            row.fill
         })
     }
 }

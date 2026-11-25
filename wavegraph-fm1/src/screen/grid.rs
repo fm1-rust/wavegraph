@@ -1,4 +1,6 @@
 //! Dirty-cell bookkeeping adapted from fm1-graphics 0.2.0-rc.0 (MIT OR Apache-2.0).
+use super::style::RowColors;
+use core::ops::Range;
 use fm1_graphics::embedded_graphics::pixelcolor::raw::ToBytes;
 use fm1_graphics::{Rgb565, palette};
 use fm1_rticx::bsp::display::{Display, Error, SIZE};
@@ -20,12 +22,20 @@ const BLANK: Cell = Cell {
     ink: palette::MUTED,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Highlight {
+    row: usize,
+    mask: u32,
+    colors: RowColors,
+}
+
 /// Fixed dashboard cells with native-size panel lettering.
 #[derive(Debug)]
 pub struct TextGrid {
     cells: [[Cell; COLS]; ROWS],
     dirty: [u32; ROWS],
     background: Rgb565,
+    highlight: Option<Highlight>,
 }
 
 impl TextGrid {
@@ -41,6 +51,7 @@ impl TextGrid {
             cells: [[BLANK; COLS]; ROWS],
             dirty: [0; ROWS],
             background,
+            highlight: None,
         }
     }
 
@@ -59,6 +70,19 @@ impl TextGrid {
                 *cell = next;
                 self.dirty[y] |= 1 << column;
             }
+        }
+    }
+
+    /// Move the selected field, repainting both the old and new span of cells.
+    pub(super) fn highlight(&mut self, row: usize, columns: Range<usize>, colors: RowColors) {
+        debug_assert!(row < ROWS && columns.start <= columns.end && columns.end <= COLS);
+        let mask = (1_u32 << columns.end) - (1_u32 << columns.start);
+        let next = Highlight { row, mask, colors };
+        if self.highlight != Some(next) {
+            if let Some(old) = self.highlight.replace(next) {
+                self.dirty[old.row] |= old.mask;
+            }
+            self.dirty[row] |= mask;
         }
     }
 
@@ -124,13 +148,13 @@ impl TextGrid {
             return Ok(());
         }
         let mut lcd = lcd.as_async(delay)?;
-        for (x, y, cell) in self.dirty_cells() {
-            let mask = super::lettering::GRID.glyph(cell.ch);
+        for (x, y, ch, colors) in self.dirty_cells() {
+            let mask = super::lettering::GRID.glyph(ch);
             let mut pixels: CellPixels =
-                [[self.background.to_be_bytes(); CELL_W as usize]; CELL_H as usize];
+                [[colors.fill.to_be_bytes(); CELL_W as usize]; CELL_H as usize];
             for (row, line) in pixels.iter_mut().enumerate() {
                 for (col, pixel) in line.iter_mut().enumerate() {
-                    super::lettering::blend(pixel, cell.ink, mask.coverage(col, row));
+                    super::lettering::blend(pixel, colors.ink, mask.coverage(col, row));
                 }
             }
             let bytes = pixels.as_flattened().as_flattened();
@@ -146,7 +170,7 @@ impl TextGrid {
         clippy::arithmetic_side_effects,
         reason = "The 20 by 15 grid fits the 240-pixel panel on both axes."
     )]
-    fn dirty_cells(&self) -> impl Iterator<Item = (u16, u16, Cell)> {
+    fn dirty_cells(&self) -> impl Iterator<Item = (u16, u16, u8, RowColors)> {
         self.dirty.iter().enumerate().flat_map(move |(row, &mask)| {
             let mut pending = mask;
             core::iter::from_fn(move || {
@@ -155,11 +179,12 @@ impl TextGrid {
                 }
                 let col = pending.trailing_zeros() as usize;
                 pending &= !(1 << col);
-                Some((
-                    col as u16 * CELL_W,
-                    row as u16 * CELL_H,
-                    self.cells[row][col],
-                ))
+                let cell = self.cells[row][col];
+                let colors = self
+                    .highlight
+                    .filter(|h| h.row == row && h.mask & (1 << col) != 0)
+                    .map_or(RowColors::new(self.background, cell.ink), |h| h.colors);
+                Some((col as u16 * CELL_W, row as u16 * CELL_H, cell.ch, colors))
             })
         })
     }

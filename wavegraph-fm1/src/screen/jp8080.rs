@@ -1,6 +1,6 @@
 //! JP-8080 rack panel above and below the channel's full-width oscilloscope.
 
-use super::{BAND, mixer::Band, selector::Selector};
+use super::{BAND, mixer::Band, selector::Selector, style::JP8080};
 use crate::{
     envelope::EnvelopeTarget, firmware::Labels, instrument::MAX_CUTOFF_STEP, panel::Channel,
 };
@@ -15,12 +15,12 @@ use fm1_rticx::{
     time::Clock,
 };
 
-pub(super) const FACE: Rgb565 = super::style::JP8080.face;
-pub(super) const EDGE: Rgb565 = super::style::JP8080.muted;
-pub(super) const AMBER: Rgb565 = super::style::JP8080.accent;
-pub(super) const PRINT: Rgb565 = super::style::JP8080.ink;
+pub(super) const FACE: Rgb565 = JP8080.face;
+pub(super) const EDGE: Rgb565 = JP8080.muted;
+pub(super) const AMBER: Rgb565 = JP8080.accent;
+pub(super) const PRINT: Rgb565 = JP8080.ink;
 const BLACK: Rgb565 = Rgb565::new(1, 3, 4);
-const RIM: Rgb565 = super::style::JP8080.surface;
+const RIM: Rgb565 = JP8080.surface;
 const LCD: Rgb565 = Rgb565::new(12, 43, 24);
 
 #[derive(Default)]
@@ -194,7 +194,7 @@ pub(super) async fn envelope_header(
             band.rect(
                 Point::new(x, 11),
                 Size::new(width, 17),
-                if active { AMBER } else { RIM },
+                if active { JP8080.selected.fill } else { RIM },
             );
             if !active {
                 band.rect(Point::new(x + 1, 12), Size::new(width - 2, 15), FACE);
@@ -203,7 +203,7 @@ pub(super) async fn envelope_header(
                 name,
                 Point::new(x + (width / 2) as i32, 15),
                 Alignment::Center,
-                if active { BLACK } else { PRINT },
+                if active { JP8080.selected.ink } else { PRINT },
             );
         }
         lcd.write_rect_buffered(110, y, 114, 16, band.pixels.as_flattened())

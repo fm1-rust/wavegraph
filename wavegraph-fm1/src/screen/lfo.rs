@@ -81,7 +81,12 @@ pub(super) async fn paint(
         } else if let Some(&(label, value)) = rows.get(row) {
             let top = 46 + i32::from(y.saturating_sub(40) / 32) * 32;
             band.label(label, Point::new(10, top), Alignment::Left, theme.ink);
-            band.label(value, Point::new(229, top), Alignment::Right, theme.accent);
+            band.label(
+                value,
+                Point::new(229, top),
+                Alignment::Right,
+                theme.selected.fill,
+            );
         }
         lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
             .await?;

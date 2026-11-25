@@ -2,7 +2,7 @@
 
 use super::{
     BAND, WIDTH,
-    mixer::{BACKGROUND, Band, LABEL, OUTLINE, POINTER, SELECTED, STRIP},
+    mixer::{BACKGROUND, Band, LABEL, OUTLINE, POINTER, RackColors, SELECTED, STRIP},
 };
 use crate::fx::{Device, Fx, MAX_DELAY_MS};
 use core::fmt::Write;
@@ -161,7 +161,8 @@ impl Row {
         reason = "All coordinates fit within one rack row"
     )]
     fn draw(self, band: &mut Band<'_>, y: i32, reduction: u8) {
-        let ink = band.rack_row(y, self.selected, &super::mixer::RackColors::GLOBAL);
+        let colors = RackColors::global_row(self.selected);
+        band.rack_row(y, self.selected, &colors);
         band.title(
             ["REVERB", "DELAY", "3-BAND EQ", "COMP/LIM"][self.device as usize],
             Point::new(10, y + 5),
@@ -175,8 +176,7 @@ impl Row {
                     d.label,
                     d.position(),
                     &d.readout(),
-                    ink,
-                    &super::mixer::RackColors::GLOBAL,
+                    &colors,
                 );
             }
         }
