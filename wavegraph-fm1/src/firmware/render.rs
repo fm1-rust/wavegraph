@@ -124,6 +124,8 @@ impl Renderer {
         }
         graph.set_mixer(settings.mixer);
         graph.set_fx(settings.fx);
+        graph.beat_steps = nav.beat_steps;
+        graph.slicer_steps = nav.slicer_steps;
         graph.transport = settings.seq.transport;
         graph.recording_request = nav.clip_request;
         graph.sequences = settings.seq.enabled;
@@ -165,6 +167,7 @@ impl Renderer {
         block.motion = Motion {
             clipboard: graph.recorder.status,
             position: graph.position,
+            slicer_step: graph.slicer_step(),
             transport: Some(settings.seq.transport),
             banks: graph.banks(),
             bass_automation: graph.bass_automation(nav.focus),

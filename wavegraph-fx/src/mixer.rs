@@ -25,6 +25,13 @@ pub enum MixerMessage {
         /// Post-fader send gain in units of 1/128; values above 128 are clamped.
         level: u8,
     },
+    /// Open selected tracks on one send without overwriting their fader settings.
+    SendGate {
+        /// Zero-based send index.
+        send: u8,
+        /// Bit zero gates track zero. A set bit passes the stored send level.
+        tracks: u8,
+    },
     /// Set the level on a specific post-fader send.
     SendTo {
         /// Zero-based send index. Send 0 is outlet 1. Unavailable sends are ignored.
@@ -44,6 +51,7 @@ pub enum MixerMessage {
 #[derive(Clone, Copy, Debug)]
 pub struct ChannelMixer<const TRACKS: usize, const OUTPUTS: usize = 2> {
     gains: [[u8; TRACKS]; OUTPUTS],
+    gates: [u8; OUTPUTS],
     level_limit: u8,
     dry_shift: u8,
 }
@@ -61,6 +69,7 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
         gains[0] = [128; TRACKS];
         Self {
             gains,
+            gates: [u8::MAX; OUTPUTS],
             level_limit: 128,
             dry_shift: 0,
         }
@@ -84,6 +93,12 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
 
     fn control(&mut self, message: MixerMessage) {
         let (outlet, track, level) = match message {
+            MixerMessage::SendGate { send, tracks } => {
+                if let Some(gate) = self.gates.get_mut(usize::from(send).saturating_add(1)) {
+                    *gate = tracks;
+                }
+                return;
+            }
             MixerMessage::Level { track, level } => (0, track, level),
             MixerMessage::Send { track, level } => (1, track, level),
             MixerMessage::SendTo { send, track, level } => {
@@ -146,13 +161,22 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
         if frames.is_empty() {
             return;
         }
+        let mut gains = self.gains.map(|row| row.map(i32::from));
+        for (send, &gate) in gains[1..].iter_mut().zip(&self.gates[1..]) {
+            if gate != u8::MAX {
+                for (track, level) in send.iter_mut().enumerate() {
+                    if gate & (1 << track) == 0 {
+                        *level = 0;
+                    }
+                }
+            }
+        }
         if let (Some(inputs), Some(outputs)) = (
             inputs.first_chunk::<TRACKS>(),
             outputs.first_chunk_mut::<OUTPUTS>(),
         ) {
             let signals = inputs.each_ref().map(|signal| &signal[frames.clone()]);
             let mut buses = outputs.each_mut().map(|out| &mut out[frames.clone()]);
-            let gains = self.gains.map(|row| row.map(i32::from));
             for frame in 0..frames.len() {
                 let post: [i32; TRACKS] = core::array::from_fn(|track| {
                     (signals[track][frame].inner() * gains[0][track]) >> 7
@@ -172,10 +196,10 @@ impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
         for frame in frames {
             let mut sums = [0_i32; OUTPUTS];
             for (track, input) in inputs.iter().enumerate().take(TRACKS) {
-                let post_fader = (input[frame].inner() * i32::from(self.gains[0][track])) >> 7;
+                let post_fader = (input[frame].inner() * gains[0][track]) >> 7;
                 sums[0] += post_fader;
-                for (sum, gains) in sums[1..].iter_mut().zip(&self.gains[1..]) {
-                    *sum += (post_fader * i32::from(gains[track])) >> 7;
+                for (sum, gains) in sums[1..].iter_mut().zip(&gains[1..]) {
+                    *sum += (post_fader * gains[track]) >> 7;
                 }
             }
             sums[0] >>= self.dry_shift;

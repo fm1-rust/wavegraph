@@ -8,7 +8,7 @@ use crate::{
 use heapless::Vec;
 use wavegraph_dsp::{Event, Port, Process, ProcessContext};
 use wavegraph_fx::{
-    Chorus, Flanger, Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq,
+    Chorus, Flanger, Message as FxMessage, Phaser, Saturator, SidechainDucker, Slicer, ThreeBandEq,
 };
 use wavegraph_sample::I24;
 
@@ -61,6 +61,9 @@ pub(super) struct ChannelInserts {
     controls: [[Insert; INSERT_SLOTS]; CHANNELS],
     processors: [[Processor; INSERT_SLOTS]; CHANNELS],
     rate_hz: u32,
+    beat_flanger: Flanger,
+    slicers: [Slicer; CHANNELS],
+    beat_target: Option<Channel>,
     factory: SidechainDucker,
     flat_eq: ThreeBandEq,
 }
@@ -73,6 +76,9 @@ impl ChannelInserts {
             controls: [[Insert::None; INSERT_SLOTS]; CHANNELS],
             processors: [[Processor::None; INSERT_SLOTS]; CHANNELS],
             rate_hz,
+            beat_flanger: Flanger::new(rate_hz).expect("audio sample rate"),
+            beat_target: None,
+            slicers: [Slicer::new(rate_hz).expect("audio sample rate"); CHANNELS],
             factory,
             flat_eq: ThreeBandEq::new(rate_hz).expect("audio sample rate"),
         }
@@ -153,9 +159,19 @@ impl Process<Message, I24> for ChannelInserts {
     )]
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
+        let mut beat = None;
         let mut changed = [[false; INSERT_SLOTS]; CHANNELS];
         for event in cx.events {
             match event.message {
+                Message::BeatSlicer(channel, controls, pattern, timing) => {
+                    let slicer = &mut self.slicers[channel.index()];
+                    slicer.set_controls(controls);
+                    slicer.set_pattern(pattern);
+                    slicer.set_phase(timing);
+                }
+                Message::BeatFlanger(channel, controls, timing) => {
+                    beat = Some((channel, controls, timing))
+                }
                 Message::Insert(channel, part) => {
                     let i = channel.index();
                     self.parts[i] = part;
@@ -263,6 +279,31 @@ impl Process<Message, I24> for ChannelInserts {
                     _ => (),
                 }
             }
+        }
+        if let Some(old) = self.beat_target
+            && beat.is_none_or(|b| b.0 != old)
+        {
+            self.beat_flanger.bypass();
+            for sample in &mut *strips[old.index()] {
+                *sample = self.beat_flanger.tick(*sample);
+            }
+            if self.beat_flanger.is_dry() || beat.is_some() {
+                self.beat_target = None;
+            }
+        }
+        if let Some((channel, controls, timing)) = beat {
+            if self.beat_target != Some(channel) {
+                self.beat_flanger = Flanger::new(self.rate_hz).expect("audio sample rate");
+                self.beat_target = Some(channel);
+            }
+            self.beat_flanger.set_controls(controls);
+            self.beat_flanger.set_phase(timing);
+            for sample in &mut *strips[channel.index()] {
+                *sample = self.beat_flanger.tick(*sample);
+            }
+        }
+        for (slicer, strip) in self.slicers.iter_mut().zip(strips) {
+            slicer.process_in_place(strip);
         }
     }
 }

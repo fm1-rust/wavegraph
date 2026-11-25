@@ -58,6 +58,11 @@ impl Settings {
         Labels {
             channel,
             clip_options: self.nav.clip_request.options,
+            beat_steps: if self.nav.view == View::BeatFx(crate::fx::BeatEffect::Slicer) {
+                self.nav.slicer_steps[channel.index()]
+            } else {
+                self.nav.beat_steps[channel.index()]
+            },
             assignments: self.nav.assignments.map(|assignment| assignment.part),
             voice: track.voice,
             lfo: track.lfo,
@@ -98,6 +103,15 @@ impl Settings {
 
     fn sel_lamp(&self) -> bool {
         match self.nav.view {
+            View::BeatFx(crate::fx::BeatEffect::Echo) => {
+                self.fx.echo_input_open && self.fx.delay.enabled
+            }
+            View::BeatFx(crate::fx::BeatEffect::Flanger) => {
+                self.fx.flanger_target == Some(self.nav.focus)
+            }
+            View::BeatFx(crate::fx::BeatEffect::Slicer) => {
+                self.fx.slicers[self.nav.focus.index()].enabled
+            }
             View::Lfo => self.tracks[self.nav.focus.index()].lfo.enabled,
             View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
             View::Fx => self.nav.insert_slot().is_some_and(|slot| {
@@ -130,6 +144,7 @@ impl Settings {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Labels {
+    pub(super) beat_steps: wavegraph_fx::StepPattern,
     pub(super) clip_options: crate::clipboard::Options,
     pub(super) channel: Channel,
     pub(super) assignments: [Part; CHANNELS],
@@ -168,6 +183,7 @@ pub(super) struct Labels {
 pub struct Motion {
     pub(super) clipboard: crate::clipboard::Status,
     pub(super) position: Option<Position>,
+    pub(super) slicer_step: u8,
     pub(super) transport: Option<Transport>,
     pub(super) bass_automation: Option<(Channel, Automation)>,
     pub(super) banks: [BankPosition; CHANNELS],
@@ -197,6 +213,10 @@ impl Motion {
             View::MasterFx(_) => self.reduction != old.reduction,
             View::Arp => self.arp_notes[i] != old.arp_notes[i],
             View::Fx => self.shape_offset(nav.focus) != old.shape_offset(nav.focus),
+            View::BeatFx(crate::fx::BeatEffect::Slicer) => self.slicer_step != old.slicer_step,
+            View::BeatFx(crate::fx::BeatEffect::Echo) => {
+                self.position.map(|p| p.step) != old.position.map(|p| p.step)
+            }
             View::Sequencer => {
                 self.banks != old.banks
                     || self.position.map(|p| p.step) != old.position.map(|p| p.step)
@@ -312,8 +332,13 @@ mod app {
 
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
     const RATE_HZ: u32 = (FRAME_RATE.0 + FRAME_RATE.1 / 2) / FRAME_RATE.1;
-    // Round to the same frame count as Delay::control(TimeMs).
+    // Keep the original PCM16 allocation budget. Two progressively slower
+    // companded taps extend it beyond four beats at the minimum 30 BPM.
     const DELAY_SAMPLES: usize = (RATE_HZ as usize * crate::fx::MAX_DELAY_MS as usize + 500) / 1000;
+
+    const SHORT_ECHO: usize = RATE_HZ as usize * 3 / 8;
+    const LONG_ECHO: usize = DELAY_SAMPLES - SHORT_ECHO;
+    const _: () = assert!((LONG_ECHO - 1) * 16 >= RATE_HZ as usize * 8);
 
     pub struct ScopeBlock {
         samples: Option<[i32; OUTPUT_FRAMES]>,
@@ -354,8 +379,10 @@ mod app {
         static PROGRAMS: StaticCell<Programs> = StaticCell::new();
         static REVERB_STORAGE: ConstStaticCell<[i32; REVERB_SAMPLES]> =
             ConstStaticCell::new([0; REVERB_SAMPLES]);
-        static DELAY_STORAGE: ConstStaticCell<[i16; DELAY_SAMPLES]> =
-            ConstStaticCell::new([0; DELAY_SAMPLES]);
+        static DELAY_STORAGE: ConstStaticCell<[i16; SHORT_ECHO]> =
+            ConstStaticCell::new([0; SHORT_ECHO]);
+        static MID: ConstStaticCell<[u8; LONG_ECHO]> = ConstStaticCell::new([0; LONG_ECHO]);
+        static LONG: ConstStaticCell<[u8; LONG_ECHO]> = ConstStaticCell::new([0; LONG_ECHO]);
         type Effects = (
             FxMixer,
             FxNode<Reverb<'static>>,
@@ -386,7 +413,11 @@ mod app {
                         .with_dry_headroom(DRY_HEADROOM),
                 ),
                 FxNode(Reverb::new(REVERB_STORAGE.take())),
-                FxNode(Delay::new(DELAY_STORAGE.take(), RATE_HZ).expect("delay line")),
+                FxNode(
+                    Delay::with_rate(DELAY_STORAGE.take(), FRAME_RATE)
+                        .and_then(|d| d.with_long_taps(MID.take(), LONG.take()))
+                        .expect("echo history"),
+                ),
                 Master(MasterBus::new(RATE_HZ).expect("audio sample clock")),
             )
         });
@@ -736,13 +767,18 @@ mod app {
             self.leds.set(
                 Button::Edit,
                 self.seq.page == Some(SeqPage::Step)
-                    || matches!(self.nav.view, View::VoiceMode | View::SampleEdit),
+                    || matches!(
+                        self.nav.view,
+                        View::VoiceMode | View::SampleEdit | View::BeatFx(_)
+                    ),
             );
             self.leds.set(Button::Seq, self.seq.page.is_some());
             self.leds.set(
                 Button::Home,
-                matches!(self.nav.view, View::Channel | View::MasterFx(Some(_)))
-                    || self.nav.insert_slot().is_some()
+                matches!(
+                    self.nav.view,
+                    View::Channel | View::MasterFx(Some(_)) | View::BeatFx(_)
+                ) || self.nav.insert_slot().is_some()
                     || self.nav.bass_knob().is_some()
                     || matches!(
                         self.seq.page,
@@ -755,7 +791,10 @@ mod app {
             );
             self.leds.set(
                 Button::Fx,
-                matches!(self.nav.view, View::Fx | View::MasterFx(_)),
+                matches!(
+                    self.nav.view,
+                    View::Fx | View::MasterFx(_) | View::BeatFx(_)
+                ),
             );
             self.leds.set(Button::Env, self.nav.view == View::Envelope);
             self.leds.set(Button::Lfo, self.nav.view == View::Lfo);
@@ -792,7 +831,9 @@ mod app {
                 self.piano
                     .event(channel, assignment, MidiAction::Off(53 + key.index()));
             }
-            if self.seq.page == Some(SeqPage::Pattern) {
+            if let Some(pattern) = self.nav.beat_pattern_mut() {
+                Self::beat_keys(&mut self.leds, &scan, pattern);
+            } else if self.seq.page == Some(SeqPage::Pattern) {
                 let tick = ticks();
                 if channel_changed {
                     self.pattern_pressed_at = None;
@@ -861,6 +902,17 @@ mod app {
     }
 
     impl Panel {
+        #[inline(never)]
+        fn beat_keys(leds: &mut Leds, scan: &Scan, pattern: &mut wavegraph_fx::StepPattern) {
+            for (step, index) in (0u8..).zip(crate::fx::STEP_KEYS) {
+                let key = PianoKey::new(index).expect("physical white key");
+                if scan.pressed(key) {
+                    pattern.toggle(step);
+                }
+                leds.set(key, pattern.active(step));
+            }
+        }
+
         // Only a fresh key edge needs note routing and a possible sixteenth edit.
         // Keep that work outside the SRAM scanner's hot path.
         #[inline(never)]
@@ -1003,6 +1055,12 @@ mod app {
                 View::Arp => self.settings.tracks[channel.index()]
                     .arp
                     .edit(select, knobs, sel),
+                View::BeatFx(effect) => {
+                    self.settings.fx.edit_beat(channel, effect, knobs, sel);
+                    if effect == crate::fx::BeatEffect::Echo {
+                        self.settings.mixer.turn_knobs(channel, [0, 0, knobs[1], 0]);
+                    }
+                }
                 View::MasterFx(Some(row)) => self.settings.fx.edit(row, knobs, sel),
                 View::Fx => {
                     if let Some(slot) = nav.insert_slot() {

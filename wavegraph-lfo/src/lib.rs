@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod phase;
+pub use phase::{Phase, PhaseControl};
+
 use wavegraph_core::{Event, Port, Process, ProcessContext};
 
 /// Shape of the bipolar control signal.
@@ -23,8 +26,7 @@ pub enum Shape {
 pub struct Lfo {
     /// Waveform sent to the control outlet.
     pub shape: Shape,
-    phase: u32,
-    increment: u32,
+    phase: Phase,
     units_per_hz: f32,
 }
 
@@ -36,8 +38,7 @@ impl Lfo {
         (sample_rate.is_finite() && units_per_hz.is_finite() && units_per_hz > 0.0).then_some(
             Self {
                 shape: Shape::Sine,
-                phase: 0,
-                increment: 0,
+                phase: Phase::default(),
                 units_per_hz,
             },
         )
@@ -51,23 +52,25 @@ impl Lfo {
         reason = "Bounded fractional phase increments round to the nearest Q32 unit."
     )]
     pub fn set_frequency(&mut self, hz: f32) {
-        self.increment = ((hz * self.units_per_hz).clamp(0.0, 2_147_483_648.0) + 0.5) as u32;
+        self.control(PhaseControl {
+            increment: ((hz * self.units_per_hz).clamp(0.0, 2_147_483_648.0) + 0.5) as u32,
+            phase: None,
+        });
+    }
+
+    /// Apply the same frame-timed control as an audio-rate oscillator.
+    pub fn control(&mut self, control: PhaseControl) {
+        self.phase.control(control);
     }
 
     /// Restart the waveform at phase zero.
     pub fn reset(&mut self) {
-        self.phase = 0;
+        self.phase.seek(0);
     }
 
     /// Advance without generating intermediate messages, including across a missed block.
-    #[allow(
-        clippy::cast_possible_truncation,
-        reason = "Only the low 32 bits contribute to modular phase."
-    )]
     pub fn advance(&mut self, frames: usize) {
-        self.phase = self
-            .phase
-            .wrapping_add(self.increment.wrapping_mul(frames as u32));
+        self.phase.advance(frames);
     }
 
     /// Sample the current phase and advance by the supplied audio frame count.
@@ -76,7 +79,7 @@ impl Lfo {
         if frames == 0 {
             return None;
         }
-        let p = f32::from((self.phase >> 16) as u16) / 65536.0;
+        let p = f32::from((self.phase.position() >> 16) as u16) / 65536.0;
         let message = match self.shape {
             Shape::Saw => 2.0 * p - 1.0,
             Shape::Square => {

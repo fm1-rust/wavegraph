@@ -75,7 +75,8 @@ USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
 | FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
 | Knobs 1–4 with CHORUS selected | Set rate, depth, wet-path tone and wet/dry mix. Both taps fold into the mono strip. The initial settings match Fast Hoover. |
-| Knobs 1–4 with FLANGER selected | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
+| EDIT from channel FX or GLO’s FX rack | Open Beat FX. Knob 1 sets BEATS for every synced effect. Turn SELECT for Echo, Flanger or Slicer and PRESETS for the channel. |
+| Knobs 1–4 with FLANGER selected in a channel insert slot | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
 | FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
@@ -693,14 +694,14 @@ from the two inserts applied to the whole mix.
 | Device | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
 | --- | --- | --- | --- | --- |
 | Reverb return | Decay, 0–127 | Return level | — | — |
-| Delay return | Time, 5–900 ms | Feedback, 0–95% | Return level | — |
+| Delay return | Time, 5–900 ms in FREE | Feedback, 0–95% | Return level | Clock, FREE or BEAT |
 | Master EQ | Low, ±12 dB | Mid, ±12 dB | High, ±12 dB | — |
 | Master comp/limiter | Threshold, −36 to 0 dBFS | Ratio, 1:1–8:1 | Makeup, 0–12 dB | Ceiling, −12 to 0 dBFS |
 
-Reverb starts at 90/127 decay and 104/128 return. Delay starts at 369 ms
-(a dotted eighth at 122 BPM), 43% feedback and 76/128 return. The time moves
-in 5 ms steps and stays fixed across tempo changes. Turn a strip’s knob 3 to
-send more of that instrument into the shared delay.
+Reverb starts at 90/127 decay and 104/128 return. Echo starts at 3/4 beat
+(a dotted eighth), 43% feedback and 76/128 return. For an independent delay
+time, turn Knob 4 left to FREE, then turn Knob 1 in 5 ms steps. Turn Knob 4
+right to follow the master again. Knob 3 on a mixer strip sets its Echo send.
 
 EQ starts flat with band splits at 250 Hz and 3.2 kHz. The compressor starts
 at −12 dBFS, 2:1, with +2 dB makeup. Its 15 ms attack lets the front of a kick
@@ -710,6 +711,49 @@ feeds a separate sample-peak limiter with an initial −1 dBFS ceiling and
 A 1:1 ratio leaves the limiter available on its own.
 
 ![Four channel faders during playback and the global rack with the compressor selected](assets/glo-master-fx.png)
+
+### Beat FX
+
+From channel FX or the GLO FX rack, press **EDIT**. **Knob 1 always sets BEATS.**
+The large fraction at the top center is shared by every Beat FX and every
+channel. The master BPM appears directly below it. At 120 BPM, 1 means
+500 ms and 3/4 means 375 ms. Turn SELECT to switch effects, PRESETS to focus
+a channel and HOME to return.
+
+| Effect | What BEATS measures | Knob 2 · Depth | Knob 3 · Feedback | Knob 4 | SEL |
+| --- | --- | --- | --- | --- | --- |
+| Echo | Spacing between repeats | Focused channel’s send | Repeat feedback | Global return | Open or close the Echo input |
+| Flanger | One whole triangle sweep | Wet/dry mix | Comb feedback | Sweep width | Apply to the focused channel, or bypass there |
+| Slicer | One whole 16-step pattern | Attenuation on unlit steps | — | — | Enable or bypass the focused channel |
+
+The selector runs from 1/16 to 4 quarter-note beats, including triplets and
+dotted values. Changing tempo retimes all three effects. Flanger and Slicer lock
+to song position during playback and keep cycling at the master BPM when stopped.
+One Beat Flanger can be routed to any of the four strips after its insert slots.
+
+On Echo, the **16 white keys** toggle the focused channel’s sixteen send steps.
+Start with every step lit. Turn up Depth and turn off all but the first step
+to echo the downbeat. All dry audio keeps playing and the repeats ring over
+the closed steps. Stopping the sequencer suspends the step mask for live playing.
+Opening Echo selects BEAT timing for the shared delay.
+
+For an echo throw, start with **SEND CLOSED**. Press **SEL** just before the
+hit you want to catch, then press it again. The dry mix carries on and the
+captured hit echoes at the displayed beat interval. Closing the send applies
+to all channels and stays in effect across stop and restart. To silence the
+return immediately, bypass Delay in the GLO FX rack. Pressing SEL on Echo
+with the return muted reopens the send and enables the return.
+
+For a rhythmic cut, turn **SELECT** to **Slicer**, choose a channel with
+**PRESETS**, set **BEATS** to **4**, then press **SEL**. The white keys now
+edit one bar of sixteenths. Lit steps pass the channel audio. Unlit steps
+attenuate it by **Depth**, down to silence at 100%. The factory pattern
+passes the first eight steps and cuts the last eight. Try lighting steps
+1, 5, 9 and 13 alone to pass the first sixteenth of each beat. The white
+cursor under the grid follows the gate. Set BEATS to **1** and the same
+pattern fits inside one quarter note. Each channel keeps its own pattern,
+depth and bypass, so all four can run together. Slicing takes place after
+the channel inserts and Beat Flanger, before the fader and sends.
 
 ### Hear Saturator Shape on the 303
 
@@ -895,8 +939,11 @@ One reverb and one mono digital delay run in parallel. The dry bus reserves
 three bits of headroom for four boosted tracks. The master node restores that
 gain and sums both returns and the startup cue in a widened accumulator. EQ,
 compression, makeup and limiting precede output trim and the physical MASTER.
-The delay borrows 900 ms of PCM16 storage (79,412 bytes) and skips empty
-blocks once its line is silent. The shorter line reserves SRAM for channel inserts.
+The delay uses 79,412 bytes. The first 375 ms uses native-rate PCM16, which
+covers the factory 3/4-beat Echo at 122 BPM. Longer taps average every four
+frames, then every sixteen beyond roughly 2.1 seconds, and store logarithmic
+eight-bit PCM. Longer repeats therefore sound darker. The longest setting
+covers four beats at 30 BPM (eight seconds).
 
 The hot 303 preset reserves 16-fold output headroom before converting to Q23.
 Its channel inserts sit between the synth and the channel fader, so both

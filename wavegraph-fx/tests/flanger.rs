@@ -99,8 +99,14 @@ fn graph_bypass_and_enable_apply_at_the_event_frame() {
         I24::new_unchecked(if i % 5 == 0 { PULSE + 1 } else { -PULSE - 3 })
     });
     let mut output = [I24::default(); 256];
+    let clock = wavegraph_fx::BeatClock {
+        bpm: 110,
+        beats: wavegraph_fx::BeatDivision::ONE,
+    };
     let events = [
         (0, Message::Flanger(controls)),
+        (37, Message::BeatTime(clock)),
+        (37, Message::BeatPhase(1 << 31)),
         (73, Message::Enabled(false)),
         (171, Message::Enabled(true)),
     ]
@@ -117,6 +123,9 @@ fn graph_bypass_and_enable_apply_at_the_event_frame() {
         emit: &mut Err,
     });
     for (i, sample) in input.into_iter().enumerate() {
+        if i == 37 {
+            wavegraph_fx::BeatFx::sync(&mut reference, clock, Some(1 << 31));
+        }
         if matches!(i, 0 | 73 | 171) {
             reference.set_controls(FlangerControls {
                 enabled: i != 73,
@@ -127,4 +136,31 @@ fn graph_bypass_and_enable_apply_at_the_event_frame() {
     }
     assert_eq!(&output[136..171], &input[136..171]);
     assert_ne!(&output[171..], &input[171..]);
+}
+
+#[test]
+fn master_clock_anchors_the_same_sweep_after_an_arbitrary_free_run() {
+    use wavegraph_fx::{BeatClock, BeatDivision, BeatFx};
+    let clock = BeatClock {
+        beats: BeatDivision::from_ratio(3, 4).expect("dotted eighth"),
+        bpm: 120,
+    };
+    let mut one = Flanger::new(48_000).expect("audio clock");
+    let mut two = one;
+    for _ in 0..12_345 {
+        two.tick(I24::default());
+    }
+    for f in [&mut one, &mut two] {
+        f.sync(clock, Some(clock.phase(2, 0)));
+    }
+    // Silence warms both wet/dry ramps and leaves only their timing as a difference.
+    for _ in 0..128 {
+        one.tick(I24::default());
+        two.tick(I24::default());
+    }
+    for i in 0..24_000 {
+        let input = I24::new_unchecked(if i % 41 == 0 { PULSE } else { 0 });
+        assert_eq!(one.tick(input), two.tick(input));
+    }
+    assert_eq!(clock.beats.frames(120, (48_000, 1)), Some(18_000));
 }

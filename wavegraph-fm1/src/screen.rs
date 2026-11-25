@@ -30,6 +30,7 @@ use static_cell::{ConstStaticCell, StaticCell};
 
 mod arp;
 mod badge;
+mod beat_fx;
 mod channel_fx;
 mod drums;
 mod envelope_plot;
@@ -87,6 +88,7 @@ fn paper(style: WaveformStyle, x: usize, y: usize) -> Rgb565 {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Page {
     Timing,
+    BeatFx(beat_fx::Panel),
     Clipboard(
         Channel,
         Part,
@@ -190,6 +192,25 @@ impl Screen {
         labels: Labels,
         motion: &Motion,
     ) -> Result<(), Error> {
+        if let View::BeatFx(effect) = labels.view {
+            let state = beat_fx::Panel::new(effect, &labels, motion);
+            let previous = match self.page {
+                Some(Page::BeatFx(old)) => Some(old),
+                _ => None,
+            };
+            if previous != Some(state) {
+                if previous.is_none() {
+                    self.change_view(WaveformStyle {
+                        background: mixer::BACKGROUND,
+                        ..STYLE
+                    });
+                }
+                let mut draw = pin!(state.paint(lcd, clock, self.strip, previous));
+                poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+                self.page = Some(Page::BeatFx(state));
+            }
+            return Ok(());
+        }
         if labels.view == View::Clipboard {
             let page = Page::Clipboard(
                 labels.channel,
@@ -649,7 +670,9 @@ impl Screen {
     ) -> Result<(), Error> {
         let labels = &frame.labels;
         let theme = match labels.view {
-            View::Mixer | View::Channel | View::Clipboard | View::MasterFx(_) => None,
+            View::Mixer | View::Channel | View::Clipboard | View::MasterFx(_) | View::BeatFx(_) => {
+                None
+            }
             View::Scope
             | View::SampleEdit
             | View::VoiceMode
