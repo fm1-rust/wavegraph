@@ -59,7 +59,7 @@ macro_rules! impl_neg {
 }
 
 macro_rules! new_sample_type {
-    ($T:ident: $Rep:ident, eq: $EQ:expr, min: $MIN:expr, max: $MAX:expr, total: $TOTAL:expr, from: $($rest:tt)*) => {
+    ($(#[$attr:meta])* $T:ident: $Rep:ident, eq: $EQ:expr, min: $MIN:expr, max: $MAX:expr, total: $TOTAL:expr, from: $($rest:tt)*) => {
         pub const MIN: $T = $T($MIN);
         pub const MAX: $T = $T($MAX);
         pub const EQUILIBRIUM: $T = $T($EQ);
@@ -67,6 +67,7 @@ macro_rules! new_sample_type {
         const MAX_REP: $Rep = $MAX;
         const TOTAL: $Rep = $TOTAL;
 
+        $(#[$attr])*
         #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
         pub struct $T($Rep);
 
@@ -248,9 +249,25 @@ pub mod i20 {
 
 pub mod i24 {
     use super::{I20, U20};
-    new_sample_type!(I24: i32, eq: 0, min: -8_388_608, max: 8_388_607, total: 16_777_216,
-                     from: i8, i16, {I20:i32}, u8, u16, {U20:i32});
+    new_sample_type!(
+        /// Signed 24-bit PCM with the layout and alignment of a native-endian `i32`.
+        #[repr(transparent)]
+        I24: i32, eq: 0, min: -8_388_608, max: 8_388_607, total: 16_777_216,
+        from: i8, i16, {I20:i32}, u8, u16, {U20:i32}
+    );
     impl_neg!(I24);
+
+    impl I24 {
+        /// Borrow the underlying PCM words without copying or changing their scale.
+        #[must_use]
+        pub fn as_i32_slice(samples: &[Self]) -> &[i32] {
+            // SAFETY: each transparent I24 contains one initialized i32 with
+            // the same alignment and stride. The cast preserves the slice's
+            // non-null pointer and byte extent, including for an empty slice.
+            // The result shares the input's borrow and lifetime.
+            unsafe { core::slice::from_raw_parts(samples.as_ptr().cast(), samples.len()) }
+        }
+    }
 }
 
 pub mod i48 {

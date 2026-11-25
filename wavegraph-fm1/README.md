@@ -778,8 +778,8 @@ end and compare **WORKER US**, **REFILL US**, **OVERRUNS**, **SILENCES** and
 
 ### The CPU1 render worker
 
-CPU1 owns all four instruments, their sequencers, the mixer, sends, effects
-and scratch buses for the lifetime of the renderer. It renders one 128-frame
+CPU1 owns all four instruments, their sequencers, the mixer, sends and effects
+for the lifetime of the renderer. It renders one 128-frame
 block synchronously while CPU0 runs the panel, display and USB tasks under
 RTICX. The board-specific startup and mailbox follow the FM-1 BSP’s [CPU1
 bring-up][cpu1-probe] and [RTICX audio demo][cpu1-demo].
@@ -789,8 +789,12 @@ sample of a known test waveform. WaveGraph renders arbitrary programs, so
 its successful boot handshake cannot rule out the [load-dependent SRAM
 misreads observed on one FM-1][cpu1-sram].
 
-CPU0's ALNK0 interrupt consumes a finished mono Q23 block, applies physical
-MASTER and refills the stereo DMA half. This keeps the existing one-block
+The render slot carries the exclusive reference to the graph's signal buses.
+On a current completion, CPU0 reads the selected full- or half-gain master bus
+directly. `fm1_audio::mix::planar_q23` centers that mono plane in the stereo
+output block. This removes the 512-byte worker PCM array and its per-block copy.
+The output driver applies the physical MASTER ramp, exposes the post-gain scope
+samples and copies the result into the released DMA half. This keeps the one-block
 lookahead (about 2.90 ms). CPU0 publishes settings, changed chords, startup cue
 and USB session to the slot. Only the core holding the slot can access its
 payload. Scope and playhead updates follow a successful DMA write. Graph
@@ -931,6 +935,13 @@ both file sizes, the asset address, the end of the install and the whole sectors
 available for growth. `Cargo.lock` selects `fm1-audio` 0.2.1 and `fm1`, `fm1-assets`,
 `fm1-controls`, `fm1-graphics` and `fm1-rticx` 0.2.0.
 CI and release builds use the pi32v2 workflow from the `fm1-rticx/v0.2.0` tag.
+
+The firmware workflow builds the FM-1's native master mixer in the
+`wavegraph-fm1-native-mixer` artifact. To build it locally, run
+`./wavegraph-fm1/build.sh --features fm1-audio/dsp`.
+`--features pi32v2-simd` enables both this mixer and the Super Saw kernel.
+The default image uses the same bus handoff and the portable mixer so it can
+also play in the browser emulator, whose CPU lacks the paired saturating add.
 
 By default the build packs the 909 closed hat, open hat and ride from their
 original `.s16le` files. In each group of 32 samples it stores only the bits

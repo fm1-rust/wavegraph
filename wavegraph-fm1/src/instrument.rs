@@ -1419,6 +1419,26 @@ pub(super) const STRIP_BUS: usize = 8;
 pub(super) const DRY_HEADROOM: u8 = 3;
 const MASTER_BUS: usize = 18;
 pub(super) const BUS_COUNT: usize = MASTER_BUS + 2;
+
+/// Final graph outlet for the program that rendered this block.
+fn master_bus<const N: usize>(buses: &[[I24; N]; BUS_COUNT], half_gain: bool) -> &[I24; N] {
+    &buses[if half_gain {
+        MASTER_BUS + 1
+    } else {
+        MASTER_BUS
+    }]
+}
+
+/// Center the completed mono master in the CPU0 output mix before physical MASTER.
+pub(super) fn mix_master<const N: usize>(
+    buses: &[[I24; N]; BUS_COUNT],
+    half_gain: bool,
+    out: &mut [[i32; 2]; N],
+) {
+    let mono = I24::as_i32_slice(master_bus(buses, half_gain));
+    fm1_audio::mix::planar_q23(out, mono, mono);
+}
+
 impl Channel {
     #[allow(
         clippy::arithmetic_side_effects,
@@ -1918,11 +1938,7 @@ impl Instrument<'_> {
         self.previous_bpm = self.transport.bpm;
         self.previous_fx = Some(self.fx);
         self.cue = Cue::EMPTY;
-        Ok(&buses[if self.half_gain {
-            MASTER_BUS + 1
-        } else {
-            MASTER_BUS
-        }])
+        Ok(master_bus(buses, self.half_gain))
     }
 }
 
@@ -2917,6 +2933,9 @@ mod tests {
             for half in [false, true] {
                 instrument.set_half_gain(half)?;
                 let mix = instrument.render(parts, &mut buses)?.map(I24::inner);
+                let mut stereo = [[0; 2]; 128];
+                mix_master(&buses, half, &mut stereo);
+                assert_eq!(stereo, mix.map(|sample| [sample; 2]));
                 let mono = &buses[Channel::One.source_bus()];
                 let bass = &buses[BASS_INSERT];
                 assert!(mono.iter().any(|s| s.inner() != 0));

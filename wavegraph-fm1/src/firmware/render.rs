@@ -2,7 +2,7 @@
 use super::{Motion, Performance, Settings};
 use crate::{
     bumper::Cue,
-    instrument::{BUS_COUNT, Instrument, STRIP_BUS},
+    instrument::{BUS_COUNT, Instrument, STRIP_BUS, mix_master},
     midi_out::Batch,
     mixer::Meter,
     panel::{Assignment, CHANNELS, Channel, Navigation, View},
@@ -22,7 +22,8 @@ pub(super) struct RenderBlock {
     pub(super) usb_session: Option<u32>,
     pub(super) capture_source: bool,
     pub(super) hold: bool,
-    pub(super) pcm: [i32; OUTPUT_FRAMES],
+    // CPU0 borrows the selected master until it returns this slot to CPU1.
+    buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
     pub(super) source: [i32; OUTPUT_FRAMES],
     pub(super) motion: Motion,
     pub(super) bass_cycle: Option<usize>,
@@ -34,7 +35,7 @@ pub(super) struct RenderBlock {
 }
 
 impl RenderBlock {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT]) -> Self {
         Self {
             settings: Settings::INITIAL,
             settings_revision: 0,
@@ -44,7 +45,7 @@ impl RenderBlock {
             usb_session: None,
             capture_source: false,
             hold: false,
-            pcm: [0; OUTPUT_FRAMES],
+            buses,
             source: [0; OUTPUT_FRAMES],
             motion: Motion::default(),
             bass_cycle: None,
@@ -71,7 +72,6 @@ impl RenderBlock {
 
 pub(super) struct Renderer {
     instrument: &'static mut Instrument<'static>,
-    buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
     release: wavegraph_dsp::mailbox::Receiver<'static, ()>,
     measured: Option<u32>,
     next_frame: u64,
@@ -82,14 +82,12 @@ pub(super) struct Renderer {
 impl Renderer {
     pub(super) fn new(
         instrument: &'static mut Instrument<'static>,
-        buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
         release: wavegraph_dsp::mailbox::Receiver<'static, ()>,
     ) -> Self {
         Self {
             release,
             measured: None,
             instrument,
-            buses,
             next_frame: 0,
             meter: Meter::default(),
             assignments: Navigation::INITIAL.assignments,
@@ -138,20 +136,17 @@ impl Renderer {
         if let Some(session) = block.usb_session {
             block.midi.begin(session);
         }
-        let mono = graph
-            .render_with_midi(&settings.tracks, self.buses, |channel, event| {
+        graph
+            .render_with_midi(&settings.tracks, block.buses, |channel, event| {
                 if block.usb_session.is_some() {
                     block.midi.push(channel, event);
                 }
             })
             .expect("fixed patch");
-        for (out, sample) in block.pcm.iter_mut().zip(mono) {
-            *out = sample.inner();
-        }
         let i = nav.focus.index();
         if block.capture_source {
             nav.focus
-                .copy_scope(nav.part(), nav.view, self.buses, &mut block.source);
+                .copy_scope(nav.part(), nav.view, block.buses, &mut block.source);
         }
         block.bass_cycle = graph.bass_cycles[i];
         for i in 0..CHANNELS {
@@ -162,7 +157,7 @@ impl Renderer {
         self.assignments = nav.assignments;
         let peaks = if nav.view.is_mixer() {
             self.meter
-                .update(settings.mixer, &self.buses[STRIP_BUS..][..CHANNELS])
+                .update(settings.mixer, &block.buses[STRIP_BUS..][..CHANNELS])
         } else {
             self.meter = Meter::default();
             [0; CHANNELS]
@@ -192,7 +187,7 @@ impl Settings {
 
 impl wavegraph_fm1_core::AudioBlock for RenderBlock {
     fn write(&self, out: &mut fm1_audio::OutputBlock) {
-        self.pcm.write(out);
+        mix_master(self.buses, self.half_gain, out);
     }
 }
 
