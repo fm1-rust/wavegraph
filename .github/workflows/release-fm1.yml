@@ -34,11 +34,21 @@ jobs:
 
   firmware:
     needs: verify
+    strategy:
+      matrix:
+        include:
+          - variant: hardware
+            extension: fwsc
+            args: --features=fm1-audio/dsp
+          - variant: emulator
+            extension: bin
+            args: ''
     uses: fm1-rust/fm1-rust/.github/workflows/pi32v2-build.yml@4c6a3fe082ec013ff594a06b8cd377a65bd96ffb # fm1-rticx/v0.2.0
     with:
       script: wavegraph-fm1/build.sh
-      artifact-name: wavegraph-fm1
-      artifact-path: target/pi32v2-none/firmware/wavegraph-fm1.*
+      args: ${{ matrix.args }}
+      artifact-name: wavegraph-fm1-${{ matrix.variant }}
+      artifact-path: target/pi32v2-none/firmware/wavegraph-fm1.${{ matrix.extension }}
 
   release:
     needs: [verify, firmware]
@@ -49,7 +59,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: wavegraph-fm1
+          pattern: wavegraph-fm1-*
+          merge-multiple: true
           path: dist
       - name: Prepare versioned release assets
         env:
@@ -62,11 +73,11 @@ jobs:
           mv dist/wavegraph-fm1.fwsc "dist/wavegraph-fm1-$VERSION.fwsc"
           mv dist/wavegraph-fm1.bin "dist/wavegraph-fm1-$VERSION.bin"
           cat > release-notes.md <<'EOF'
-          Flash the `.fwsc` package with M-Flasher, or open it in the [FM-1 browser emulator](https://joakimeriksson.github.io/fm1-emu/). The `.bin` is the raw application image for emulators that accept it, such as [fm1-emulator](https://github.com/simonjohansson/fm1-emulator).
+          Flash the `.fwsc` package with M-Flasher to use the FM-1's native DSP mixer. The raw `.bin` uses the portable mixer for emulators such as [fm1-emulator](https://github.com/simonjohansson/fm1-emulator).
 
           This release enables copied USB MIDI on the tested black FM-1 (CHIP_ID 0x6f01). Select **WaveGraph FM-1** in your DAW. Other silicon revisions keep local synthesis available.
 
-          Play the latest stable firmware on [wavegraph.org](https://wavegraph.org/).
+          Play the latest stable emulator build on [wavegraph.org](https://wavegraph.org/).
           EOF
       - name: Publish the GitHub Release
         env:
@@ -91,7 +102,7 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # same runtime as v7.0.1
         with:
           ref: gh-pages
-      - name: Update the emulator from the latest stable firmware release
+      - name: Deploy the latest stable emulator image
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
