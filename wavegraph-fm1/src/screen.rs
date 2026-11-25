@@ -7,7 +7,7 @@ use crate::{
     envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion, Timing},
     instrument::Part,
-    panel::{CHANNELS, Channel, PresetRole, View, preset_age},
+    panel::{Channel, PresetRole, View, preset_age},
     scope::{Damage, GRID, Palette, Pen, Sweep},
     sequencer::{BankPosition, Position, SeqPage},
 };
@@ -17,7 +17,7 @@ use core::{
     pin::{Pin, pin},
     task::{Context, Poll},
 };
-use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
+use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, RgbColor, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
@@ -59,6 +59,8 @@ const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
 // The timing monitor uses the original green CRT.
 const STYLE: WaveformStyle = style::MONO.scope;
 const MENU_TICKS: u32 = 100;
+// Foreground and background for the global instrument picker and channel badge.
+const GLO_OVERLAY: [Rgb565; 2] = [Rgb565::WHITE, Rgb565::BLACK];
 const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
@@ -168,13 +170,32 @@ impl Screen {
         self.sequence.invalidate();
     }
 
-    async fn paint_mixer(
+    async fn paint_global(
         &mut self,
         lcd: &mut Display,
         clock: &mut Clock,
         labels: Labels,
-        peaks: [u8; CHANNELS],
+        motion: &Motion,
     ) -> Result<(), Error> {
+        if let View::MasterFx(selected) = labels.view {
+            if self.page.replace(Page::MasterFx) != Some(Page::MasterFx) {
+                self.change_view(WaveformStyle {
+                    background: mixer::BACKGROUND,
+                    ..STYLE
+                });
+                self.rack = master_fx::Rack::default();
+            }
+            return self
+                .rack
+                .paint(
+                    lcd,
+                    clock,
+                    self.strip,
+                    (labels.fx, selected),
+                    motion.reduction,
+                )
+                .await;
+        }
         if self.page.replace(Page::Mixer) != Some(Page::Mixer) {
             self.change_view(WaveformStyle {
                 background: self.selector.shade(mixer::BACKGROUND),
@@ -183,7 +204,7 @@ impl Screen {
             self.mixer.reset();
         }
         self.mixer
-            .paint(lcd, clock, self.strip, self.selector, labels, peaks)
+            .paint(lcd, clock, self.strip, self.selector, labels, motion.peaks)
             .await
     }
 
@@ -494,7 +515,7 @@ impl Screen {
         t: Timing,
     ) -> Result<(), Error> {
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
-            self.selector.select(None);
+            self.selector.select(None, GLO_OVERLAY);
             self.change_view(STYLE);
             lcd.as_async(clock)?
                 .fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())
@@ -583,7 +604,17 @@ impl Screen {
         motion: Motion,
     ) -> Result<(), Error> {
         let labels = &frame.labels;
-        let theme = InstrumentStyle::for_part(labels.focus);
+        let theme = match labels.view {
+            View::Mixer | View::Channel | View::MasterFx(_) => None,
+            View::Scope
+            | View::SampleEdit
+            | View::VoiceMode
+            | View::Envelope
+            | View::Arp
+            | View::Lfo
+            | View::Fx
+            | View::Sequencer => Some(InstrumentStyle::for_part(labels.focus)),
+        };
         let feedback = labels
             .preset_since
             .and_then(|since| preset_age(since, ticks()));
@@ -597,7 +628,8 @@ impl Screen {
         self.paint_page(lcd, clock, frame, motion, theme, feedback)
             .await?;
         if let Some(channel) = channel {
-            badge::paint(lcd, clock, self.strip, channel, theme).await?;
+            let colors = theme.map_or(GLO_OVERLAY, |t| [t.face, t.ink]);
+            badge::paint(lcd, clock, self.strip, channel, colors).await?;
         }
         if severity != self.dot {
             let color = match severity {
@@ -632,7 +664,7 @@ impl Screen {
         clock: &mut Clock,
         frame: &Frame,
         motion: Motion,
-        theme: &InstrumentStyle,
+        theme: Option<&InstrumentStyle>,
         elapsed: Option<u32>,
     ) -> Result<(), Error> {
         let labels = frame.labels;
@@ -643,19 +675,22 @@ impl Screen {
                     focus: labels.channel,
                 }),
                 PresetRole::Instrument => Some(Menu::Instruments(labels.focus)),
-                PresetRole::Insert(slot) => Some(Menu::Effects(
-                    labels.focus,
-                    labels.inserts[usize::from(slot)].kind(),
-                )),
+                PresetRole::Insert(slot) => {
+                    Some(Menu::Effects(labels.inserts[usize::from(slot)].kind()))
+                }
                 PresetRole::Channel => None,
             }
         } else {
             None
         };
-        if self.selector.select(menu) {
-            // Repaint the instrument with the new palette and list mask.
+        let colors = theme.map_or(GLO_OVERLAY, |t| [t.ink, t.surface]);
+        if self.selector.select(menu, colors) {
             self.page = None;
         }
+        let Some(theme) = theme else {
+            let mut page = pin!(self.paint_global(lcd, clock, labels, &motion));
+            return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
+        };
         if let Some(page) = labels.seq.page {
             return self
                 .paint_sequencer(
@@ -722,29 +757,6 @@ impl Screen {
                     (theme, entering),
                 )
                 .await;
-        }
-        if let View::MasterFx(selected) = labels.view {
-            if self.page.replace(Page::MasterFx) != Some(Page::MasterFx) {
-                self.change_view(WaveformStyle {
-                    background: mixer::BACKGROUND,
-                    ..STYLE
-                });
-                self.rack = master_fx::Rack::default();
-            }
-            return self
-                .rack
-                .paint(
-                    lcd,
-                    clock,
-                    self.strip,
-                    (labels.fx, selected),
-                    motion.reduction,
-                )
-                .await;
-        }
-        if labels.view.is_mixer() {
-            let mut page = pin!(self.paint_mixer(lcd, clock, labels, motion.peaks));
-            return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
         }
         let head = motion
             .position

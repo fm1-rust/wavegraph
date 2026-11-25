@@ -51,7 +51,8 @@ pub(super) struct RackColors {
 }
 
 impl RackColors {
-    pub const MASTER: Self = Self {
+    /// GLO's mixer and master rack share one palette across all channels.
+    pub const GLOBAL: Self = Self {
         surface: STRIP,
         selected: SELECTED,
         label: LABEL,
@@ -200,12 +201,7 @@ impl Surface {
 
 impl ChannelStrip {
     fn background(self) -> Rgb565 {
-        let colors = RackColors::channel(InstrumentStyle::for_part(self.part));
-        if self.selected {
-            colors.selected
-        } else {
-            colors.surface
-        }
+        if self.selected { SELECTED } else { STRIP }
     }
 }
 
@@ -291,7 +287,7 @@ impl<'a> Band<'a> {
     }
 
     fn strip(&mut self, index: usize, y: u16, strip: ChannelStrip, peak: u8) {
-        let colors = RackColors::channel(InstrumentStyle::for_part(strip.part));
+        let colors = RackColors::GLOBAL;
         let y = i32::from(y);
         self.rect(Point::new(5, y), Size::new(230, 45), strip.background());
         if strip.selected {
@@ -303,9 +299,13 @@ impl<'a> Band<'a> {
             colors.label
         };
         self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), active);
-        self.panel_type = super::lettering::panel_type(strip.part);
-        self.title(strip.part.name(), Point::new(25, y + 3), colors.ink);
-        self.panel_type = false;
+        self.panel_text(
+            strip.part.name(),
+            Point::new(25, y + 3),
+            Alignment::Left,
+            colors.ink,
+            super::lettering::HEADING,
+        );
         self.meter(y as u16, peak);
         let Strip {
             level,
@@ -328,7 +328,7 @@ impl<'a> Band<'a> {
         );
         self.rect(Point::new(unity, y + 30), Size::new(1, 11), colors.rim);
         self.rect(Point::new(thumb - 3, y + 31), Size::new(7, 9), ink);
-        self.rect(Point::new(thumb, y + 32), Size::new(1, 7), colors.cap);
+        self.rect(Point::new(thumb, y + 32), Size::new(1, 7), colors.surface);
         self.label(
             str::from_utf8(&decibels(level)).expect("ASCII fader"),
             Point::new(151, y + 5),
