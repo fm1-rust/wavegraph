@@ -23,3 +23,8 @@ ASSERT(__wavegraph_job_reserve == 0 || __cpu1_payload_end <= __cpu1_mailbox + __
        "WaveGraph block exceeds its mailbox")
 ASSERT(__fm1_statics_end <= __cpu1_mailbox, "CPU1 storage overlaps BSP statics")
 ASSERT(__cpu1_ustack_top + 1K <= __sstack_bottom, "WaveGraph needs a 1 KiB CPU0 stack margin")
+/* The BSP's USB window experiments retained SRAM here across software reset.
+   This app reserves one record, outside both stacks and the ROM update mailbox. */
+__wavegraph_fault_sram = 0x01c7c000;
+ASSERT(__stack_top <= __wavegraph_fault_sram && __wavegraph_fault_sram + 64 <= 0x01c7fd80,
+       "USB fault record overlaps application RAM or the loader mailbox")

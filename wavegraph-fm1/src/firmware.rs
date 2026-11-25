@@ -414,20 +414,19 @@ mod app {
         // after the BSP bootstrap has finished using it for the ROM handshake.
         let boot = unsafe { peer::start() };
         let board = Board::take().expect("CPU0 board");
-        let port = board.take_usb().expect("one USB device");
         let identity = Identity {
             vendor_id: 0x1209,
             product_id: 0x0001,
             manufacturer: "fm1-rust",
             product: "WaveGraph FM-1",
         };
+        #[cfg(feature = "qualified-usb")]
+        let board = crate::usb_midi::recover(board, identity);
+        let port = board.take_usb().expect("one USB device");
         #[cfg(not(feature = "qualified-usb"))]
         let usb = port.try_into_midi(identity).ok();
-        // SAFETY: this opt-in image requires the bench operator to qualify the
-        // controller, host and physical connection for the BSP's complete
-        // USB0 receive DMA contract, including reset, suspend and reconnect.
         #[cfg(feature = "qualified-usb")]
-        let usb = Some(unsafe { port.assume_midi_dma() }.into_midi(identity));
+        let usb = crate::usb_midi::start(port, identity);
         let mut timers = board.timers.with_panel_scan_rate();
         // Draw and USB can each have a coarse timeout outstanding. The cold
         // CPU1 handshake is the only high-resolution waiter.

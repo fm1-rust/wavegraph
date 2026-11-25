@@ -60,11 +60,17 @@ mod sequencer;
 )]
 #[path = "screen/style.rs"]
 mod style;
+#[cfg(any(all(target_os = "none", feature = "qualified-usb"), test))]
+mod usb_fault;
+#[cfg(all(target_os = "none", feature = "qualified-usb"))]
+mod usb_midi;
 #[cfg(any(target_os = "none", test))]
 mod wavetable;
 
 #[cfg(target_os = "none")]
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
+fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+    #[cfg(feature = "qualified-usb")]
+    usb_midi::save_copy_fault(_info);
     wavegraph_fm1_core::peer::download()
 }

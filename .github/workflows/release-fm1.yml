@@ -64,6 +64,8 @@ jobs:
           cat > release-notes.md <<'EOF'
           Flash the `.fwsc` package with M-Flasher, or open it in the [FM-1 browser emulator](https://joakimeriksson.github.io/fm1-emu/). The `.bin` is the raw application image for emulators that accept it, such as [fm1-emulator](https://github.com/simonjohansson/fm1-emulator).
 
+          This release enables copied USB MIDI on the tested black FM-1 (CHIP_ID 0x6f01). Select **WaveGraph FM-1** in your DAW. Other silicon revisions keep local synthesis available.
+
           Play the latest stable firmware on [wavegraph.org](https://wavegraph.org/).
           EOF
       - name: Publish the GitHub Release
