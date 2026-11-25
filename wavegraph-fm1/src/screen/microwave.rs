@@ -1,35 +1,27 @@
 //! Blue rack face, red position dial and a green readout around the live scope.
 
-use super::{GRID, mixer::Band, selector::Selector};
+use super::{mixer::Band, selector::Selector};
 use crate::assets::fonts::FONT_9X15_BOLD;
 use crate::{envelope::EnvelopeTarget, firmware::Labels, panel::Channel, wavetable::Program};
+use fm1_graphics::Rgb565;
 use fm1_graphics::embedded_graphics::{
     Drawable,
     mono_font::MonoTextStyle,
     prelude::{Point, Size},
     text::{Alignment, Baseline, Text},
 };
-use fm1_graphics::{Rgb565, WaveformStyle};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
 };
 use wavegraph_wavetable::Mode;
 
-pub(super) const FACE: Rgb565 = Rgb565::new(8, 17, 16);
-pub(super) const RED: Rgb565 = Rgb565::new(29, 9, 6);
-pub(super) const PRINT: Rgb565 = Rgb565::new(28, 57, 30);
+pub(super) const FACE: Rgb565 = super::style::MICROWAVE.face;
+pub(super) const RED: Rgb565 = super::style::MICROWAVE.accent;
+pub(super) const PRINT: Rgb565 = super::style::MICROWAVE.ink;
 const SHADOW: Rgb565 = Rgb565::new(3, 7, 7);
 pub(super) const LIME: Rgb565 = Rgb565::new(20, 48, 11);
 const INK: Rgb565 = Rgb565::new(2, 8, 3);
-pub(super) const STYLE: WaveformStyle = WaveformStyle {
-    background: Rgb565::new(2, 8, 4),
-    grid: Rgb565::new(4, 15, 6),
-    center: Rgb565::new(6, 23, 8),
-    trace: Rgb565::new(23, 58, 15),
-    grid_x: GRID,
-    grid_y: GRID,
-};
 
 #[derive(Default)]
 pub(super) struct Panel {
@@ -55,7 +47,6 @@ impl Panel {
         if entering || self.bank != Some(bank) {
             let mut top = Band::new(pixels, 4, 0, 112, 16, ink(FACE));
             wordmark(&mut top, ink(PRINT));
-            top.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(4, 0, 112, 16, top.pixels.as_flattened())
                 .await?;
             let mut sub = Band::new(pixels, 4, 16, 112, 16, ink(FACE));
@@ -65,7 +56,6 @@ impl Panel {
                 Left,
                 ink(PRINT),
             );
-            sub.compose_badge(&mut selector.badge);
             lcd.write_rect_buffered(4, 16, 112, 16, sub.pixels.as_flattened())
                 .await?;
             self.bank = Some(bank);

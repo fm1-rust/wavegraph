@@ -1,7 +1,7 @@
 //! Per-instrument arpeggiator panel and a one-octave monitor of outgoing notes.
 
-use super::{BAND, WIDTH, drums, jp8080, microwave, mixer::Band};
-use crate::{arp::Controls, firmware::Labels, instrument::Part};
+use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
+use crate::{arp::Controls, firmware::Labels};
 use core::fmt::Write;
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
@@ -14,42 +14,6 @@ use fm1_rticx::{
 };
 use heapless::String;
 use wavegraph_arp::{Division, Mode};
-
-#[derive(Clone, Copy)]
-pub(super) struct Colors {
-    pub(super) face: Rgb565,
-    ink: Rgb565,
-    accent: Rgb565,
-}
-
-impl Colors {
-    pub(super) fn for_part(part: Part) -> Self {
-        let (face, ink, accent) = match part {
-            Part::Mono => (super::STYLE.background, palette::WHITE, super::STYLE.trace),
-            Part::Sampler => (
-                super::sampler::FACE,
-                super::sampler::PRINT,
-                super::sampler::LCD,
-            ),
-            Part::Organ => (
-                super::ORGAN_STYLE.background,
-                palette::WHITE,
-                super::ORGAN_LIME,
-            ),
-            Part::Bass => (
-                super::SILVER.background,
-                super::SILVER.trace,
-                super::OXIDE_RED,
-            ),
-            Part::Tr808 => (drums::STYLE_808.background, drums::CREAM, drums::HOT),
-            Part::Tr909 => (drums::STYLE.background, drums::GRAPHITE, drums::ORANGE),
-            Part::Supersaw => (jp8080::FACE, jp8080::PRINT, jp8080::AMBER),
-            Part::Fm => (super::fm::FACE, super::fm::PRINT, super::fm::GREEN),
-            Part::Wavetable => (microwave::FACE, microwave::PRINT, microwave::LIME),
-        };
-        Self { face, ink, accent }
-    }
-}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct State {
@@ -71,7 +35,7 @@ impl Panel {
         pixels: &mut [[u8; 2]; BAND * WIDTH],
         labels: &Labels,
         note: Option<u8>,
-        entering: bool,
+        (colors, entering): (&InstrumentStyle, bool),
     ) -> Result<(), Error> {
         let state = State {
             controls: labels.arp,
@@ -82,7 +46,6 @@ impl Panel {
         if previous == Some(state) {
             return Ok(());
         }
-        let colors = Colors::for_part(labels.focus);
         let c = state.controls.config;
         let mode = match c.mode {
             Mode::Up => "Up",
@@ -121,7 +84,7 @@ impl Panel {
                 0..48 => {
                     band.title("ARPEGGIATOR", Point::new(10, 7), colors.ink);
                     band.label(
-                        ["CH 1", "CH 2", "CH 3", "CH 4"][labels.channel.index()],
+                        labels.channel.label(),
                         Point::new(220, 9),
                         Alignment::Right,
                         colors.ink,
@@ -190,7 +153,7 @@ impl Panel {
     }
 }
 
-fn keyboard(band: &mut Band<'_>, note: Option<u8>, colors: Colors) {
+fn keyboard(band: &mut Band<'_>, note: Option<u8>, colors: &InstrumentStyle) {
     let pitch = note.map(|n| n % 12);
     for (i, key) in (0..7).zip([0, 2, 4, 5, 7, 9, 11]) {
         let fill = if pitch == Some(key) {

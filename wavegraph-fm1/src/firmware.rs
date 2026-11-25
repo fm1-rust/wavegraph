@@ -68,6 +68,7 @@ impl Settings {
             organ: track.organ,
             fm: track.fm,
             drums808: track.drums808,
+            decay909: track.decay909,
             sampler: track.sample_program(),
             saw: track.saw,
             wave: track.wave_program(),
@@ -102,6 +103,7 @@ impl Settings {
             {
                 self.tracks[self.nav.focus.index()].envelope_target != EnvelopeTarget::Amp
             }
+            View::Envelope if self.nav.part().is_kit() => false,
             View::Scope | View::SampleEdit | View::Envelope => {
                 self.tracks[self.nav.focus.index()].voice_tap
             }
@@ -127,6 +129,7 @@ pub(super) struct Labels {
     pub(super) organ: OrganControls,
     pub(super) fm: crate::fm::Controls,
     pub(super) drums808: wavegraph_808::Controls,
+    pub(super) decay909: [u8; 3],
     pub(super) sampler: crate::sampler::Program,
     pub(super) saw: SawControls,
     pub(super) wave: WaveProgram,
@@ -224,7 +227,10 @@ mod app {
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
         midi_out::OutputQueue,
         overload::Overloads,
-        panel::{CHANNELS, Channel, Navigation, PageButton, View, pattern_press_lamp, preset_age},
+        panel::{
+            CHANNELS, Channel, Navigation, PageButton, PresetRole, View, pattern_press_lamp,
+            preset_age,
+        },
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer, edit::EDITS, pattern::Slot},
     };
@@ -613,13 +619,8 @@ mod app {
             }
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
-            let show_picker = match self.nav.view {
-                View::Scope => channel_changed,
-                View::Channel => true,
-                View::Fx => self.nav.insert_slot().is_some(),
-                _ => false,
-            };
-            if !home && presets != 0 && show_picker {
+            let show_picker = self.nav.view.presets(self.nav.insert_slot()) != PresetRole::Channel;
+            if !home && presets != 0 && (channel_changed || show_picker) {
                 self.nav.preset_since = Some(ticks());
             } else if home
                 || channel_changed
@@ -912,9 +913,11 @@ mod app {
                     .edit(select, algorithm, sel, knobs[0]),
                 View::Mixer => self.settings.mixer.turn_faders(knobs),
                 View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
-                View::Lfo => self.settings.tracks[channel.index()]
-                    .lfo
-                    .edit(select, knobs, sel),
+                View::Lfo => {
+                    self.settings.tracks[channel.index()]
+                        .lfo
+                        .edit(nav.part(), select, knobs, sel)
+                }
                 View::Arp => self.settings.tracks[channel.index()]
                     .arp
                     .edit(select, knobs, sel),

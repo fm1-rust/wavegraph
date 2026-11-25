@@ -16,10 +16,10 @@ use fm1_graphics::embedded_graphics::{
         raw::{BigEndian, RawU1, ToBytes},
     },
     prelude::{DrawTarget, Point, Primitive, Size},
-    primitives::{ContainsPoint, PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
+    primitives::{PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
     text::{Baseline, Text},
 };
-use fm1_graphics::{Rgb565, WaveformStyle, palette};
+use fm1_graphics::{Rgb565, WaveformStyle};
 
 // Nine 18-pixel rows fit the LCD. The numbered SUPER SAW label needs 123 pixels.
 const WIDTH: usize = 128;
@@ -52,30 +52,23 @@ pub(super) enum Menu {
         focus: Channel,
     },
     Instruments(Part),
-    Effects(InsertKind),
+    Effects(Part, InsertKind),
 }
 
 pub(super) struct Selector {
     menu: Option<Menu>,
     mask: Mask<HEIGHT, { buffer_size::<BinaryColor>(WIDTH, HEIGHT) }>,
-    row_inset: [u8; ROW_HEIGHT],
-    pub(super) badge: super::badge::ChannelBadge,
+    ink: Rgb565,
+    face: Rgb565,
 }
 
 impl Selector {
     pub(super) fn new() -> Self {
-        let row = highlight(0);
-        // Each rounded scanline is symmetric, so its first filled x describes both edges.
-        let row_inset = core::array::from_fn(|y| {
-            (0..=4)
-                .find(|&x| row.contains(Point::new(i32::from(x), y as i32)))
-                .expect("corner radius is four pixels")
-        });
         Self {
             menu: None,
             mask: Mask::new(),
-            row_inset,
-            badge: super::badge::ChannelBadge::new(),
+            ink: Rgb565::WHITE,
+            face: Rgb565::BLACK,
         }
     }
 
@@ -85,6 +78,13 @@ impl Selector {
         }
         self.menu = menu;
         if let Some(menu) = menu {
+            let part = match menu {
+                Menu::Instruments(part) | Menu::Effects(part, _) => part,
+                Menu::Channels { parts, focus } => parts[focus.index()],
+            };
+            let theme = super::InstrumentStyle::for_part(part);
+            self.ink = theme.ink;
+            self.face = theme.surface;
             self.mask
                 .clear(BinaryColor::Off)
                 .expect("infallible framebuffer");
@@ -97,7 +97,7 @@ impl Selector {
             let (parts, active, numbered): (&[Part], _, _) = match &menu {
                 Menu::Channels { parts, focus } => (parts, focus.index(), true),
                 Menu::Instruments(part) => (&Part::ALL, *part as usize, false),
-                Menu::Effects(active) => {
+                Menu::Effects(_, active) => {
                     let offset = (HEIGHT - InsertKind::ALL.len() * ROW_HEIGHT) / 2;
                     for (row, kind) in InsertKind::ALL.into_iter().enumerate() {
                         let y = (offset + row * ROW_HEIGHT) as i32;
@@ -202,10 +202,12 @@ impl Selector {
         self.ink(x, y).unwrap_or(background)
     }
 
-    pub(super) fn bounds(&self) -> Option<Window> {
+    pub(super) fn scope_overhang(&self) -> Option<Window> {
         let height = match self.menu? {
             Menu::Channels { .. } => CHANNELS * ROW_HEIGHT,
-            _ => HEIGHT,
+            Menu::Instruments(_) => HEIGHT,
+            // The insert rack composites its own rows above and below the plot.
+            Menu::Effects(..) => return None,
         };
         Some(Window {
             x: LEFT,
@@ -231,23 +233,22 @@ impl Selector {
     fn ink(&self, x: usize, y: usize) -> Option<Rgb565> {
         let (x, y) = (x - LEFT, y - TOP);
         if marked(self.mask.data(), x, y) {
-            return Some(palette::WHITE);
+            return Some(self.ink);
         }
-        if let Menu::Effects(_) = self.menu? {
+        if let Menu::Effects(..) = self.menu? {
             let height = InsertKind::ALL.len() * ROW_HEIGHT;
             let top = (HEIGHT - height) / 2;
             if !(top..top + height).contains(&y) {
                 return None;
             }
         }
-        if let Menu::Channels { focus, .. } = self.menu? {
-            let top = (HEIGHT - CHANNELS * ROW_HEIGHT) / 2 + focus.index() * ROW_HEIGHT;
-            let row = y.checked_sub(top)?;
-            let inset = usize::from(*self.row_inset.get(row)?);
-            if x < inset || x >= WIDTH - inset {
+        if let Menu::Channels { .. } = self.menu? {
+            let height = CHANNELS * ROW_HEIGHT;
+            let top = (HEIGHT - height) / 2;
+            if !(top..top + height).contains(&y) {
                 return None;
             }
         }
-        Some(Rgb565::BLACK)
+        Some(self.face)
     }
 }

@@ -25,16 +25,16 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 
 | Monosynth | 303 direct knobs | 303 editing Drive |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with Drive highlighted in green beside the readout](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with Drive highlighted in oxide red beside the readout](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
 | PLAY/STOP | Start all enabled patterns on beat one from any page (green). Press again to release sequenced notes, silence the kit and stop (red). Live held keys keep sounding. |
-| LFO on a TB-303 | Open the channel’s modulation page. LFO or HOME returns to the instrument. |
-| SEL in LFO | Enable or bypass modulation. Each 303 starts bypassed with a 5 Hz sine routed to pitch at 25% depth. |
-| KNOBS 1–4 in LFO | Set waveform, rate, depth and destination. Pitch gives up to ±2 semitones of vibrato around the tuning knob. The other destinations are cutoff, resonance, env mod, decay, accent, attack and overdrive. |
+| LFO | Open the focused channel’s modulation page. LFO or HOME returns to the instrument. |
+| SEL in LFO | Enable or bypass modulation. Each instrument starts bypassed with a 5 Hz sine at 25% depth. |
+| KNOBS 1–4 in LFO | Set waveform, rate, depth and destination. Knob 4 lists the controls available on the assigned instrument. |
 | SELECT in LFO | Clockwise selects tempo divisions from two bars to a sixteenth. Playback start resets the synced waveform. Counterclockwise selects 0.1–20 Hz. |
-| MIDI CC1 | The mod wheel sets the same depth as knob 3 on the addressed 303, from zero to full. SEL remains the bypass switch. USB MIDI uses the existing `qualified-usb` build. |
+| MIDI CC1 | The mod wheel sets the same depth as knob 3 on the addressed channel, from zero to full. SEL remains the bypass switch. USB MIDI uses the existing `qualified-usb` build. |
 | ARP on an instrument | Open that channel’s arpeggiator. ARP or HOME returns to the instrument. PRESETS browses channels while the editor is open. |
 | SEL in ARP | Enable or bypass the displayed channel’s arpeggiator. Each channel starts bypassed. |
 | KNOBS 1–4 in ARP | Set order (up, down, up/down, as played, random), rate (1/4 through 1/32, including triplets), octave range (1–4), and gate (1–100%). |
@@ -49,7 +49,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | KNOB 2 in the pattern bank | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
 | SEL in the pattern bank | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in the pattern bank | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
-| PRESETS encoder | Cycle channels 1–4. On the main instrument scope, changing channels flashes the new channel number in the upper-left corner for 1.5 seconds. New notes go to that channel. Held keys keep theirs. |
+| PRESETS encoder | Cycle channels 1–4. The new channel number flashes in the upper-left corner for 1.5 seconds on the instrument and its pages, including FX, ENV, LFO, ARP and SEQ. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, load the next FM program, or choose a sampler clip. While a 303 knob is selected, ALGORITHM adjusts its value. |
@@ -60,7 +60,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | Knobs 1–4 on the wavetable | Set START, END, one-way TIME and scan MODE. In ENV mode knob 3 sets position attack. |
 | Knobs 1–4 on the Super Saw | Set low-pass cutoff (10 Hz–20 kHz), resonance, detune and side-saw mix. |
 | EDIT on the sampler | Open or close the sample region and keyboard tracking controls. |
-| ENV | Open or close the monosynth, FM, organ, 303, Super Saw, wavetable or sampler envelope page. ENV stays lit while the page is open. |
+| ENV | Open or close the focused instrument’s envelope or drum shaping page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth, FM, organ, Super Saw, wavetable or sampler ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to choose the envelope on FM (carrier, modulator, pitch), Super Saw or sampler (amp, filter), or wavetable (amp, position). |
 | Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
 | HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
@@ -98,12 +98,12 @@ Each key starts its own three envelopes. Both operators follow its pitch bend.
 
 The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
-[Roland TB-03][tb03]. The four numbered encoders map to the boxed, blue-gray
-knobs in the middle. Turn SELECT clockwise to select Attack, then Drive, then the
+[Roland TB-03][tb03]. The numbered encoders map to the four lighter graphite
+knobs inside the red outline. Turn SELECT clockwise to select Attack, then Drive, then the
 six dials from Tuning to Accent. One click counterclockwise
 from idle goes straight to Drive.
 
-The selected cap turns neon green with a black pointer and HOME lights up.
+The selected cap turns oxide red with an ivory pointer and HOME lights up.
 ALGORITHM adjusts that knob, and the display beside the logo shows its value
 even while you turn a numbered encoder. Press HOME to finish. With the
 selection cleared, the display shows the last knob you adjusted. Tuning covers
@@ -133,6 +133,26 @@ around one pitch (approximately ±2 and ±7 cents). In either stacked mode the
 newest held root wins. Releasing it recalls the previous held root and its
 velocity. Changes on the EDIT page apply immediately to held notes, including
 notes from MIDI, the sequencer and the arpeggiator.
+
+## Channel modulation
+
+The faceplate, knobs, sequencer and both insert units use the assigned instrument’s colors. The same scope palette follows the signal from the instrument page to the post-insert, pre-fader tap on FX. On the FX overview, PRESETS moves between channels. Once SELECT picks an insert, PRESETS changes that slot’s effect. HOME returns to channel browsing.
+
+Each channel runs its own control-rate LFO. Depth scales a bipolar sweep around the current knob setting. Changing the destination or bypassing the LFO restores that setting, including edits made during the sweep.
+
+| Instrument | LFO destinations in knob 4 order |
+| --- | --- |
+| Monosynth | Filter cutoff |
+| M1 organ | Tone, percussion, click decay, release |
+| TB-303 | Pitch (±2 semitones), cutoff, resonance, env mod, decay, accent, attack, overdrive |
+| TR-808 | Kick tone, kick decay, snare tone, snappy |
+| TR-909 | Kick decay, snare decay, clap decay |
+| Super Saw | Filter cutoff, resonance, detune, side-saw mix |
+| Wavetable | Scan start, scan end, travel time (attack in envelope mode), scan mode |
+| FM | Modulation index, feedback, frequency ratio, modulator decay |
+| Sampler | Filter cutoff, resonance, filter envelope amount, velocity-to-cutoff depth |
+
+On the TR-808, ENV exposes the kick body and transient controls alongside snare tone and wire level. On the TR-909, knobs 1–3 adjust the modeled kick, snare and clap tails from 0–100% of their stock decay times. The factory pattern starts at 55%. Both drum pages show strike and tail activity. The 909 hats and ride play their recorded tails, and closing the hat still chokes the open hat.
 
 ## M1-inspired organ
 
@@ -225,7 +245,7 @@ covers the scan engine and the sources of both banks.
 Hold a key and turn Knob 3 to hear the sustain level change. Release the key
 and turn Knob 4 to shorten or extend the tail. The graph and readouts also
 respond while the keyboard is idle. Press ENV again to return to the scope.
-Switching instruments with PRESETS closes the editor. Each part recalls its own settings.
+PRESETS moves to the next channel’s ENV page. Each channel recalls its own settings.
 
 | Knob | Parameter | Monosynth range (initial) | Organ range (initial) |
 | --- | --- | --- | --- |
@@ -621,7 +641,7 @@ depth, bypass the compressor or switch to the send controls. The TB-303 has a
 compressor in slot 1. To flange the compressed bass, select slot 2 and turn
 PRESETS to **FLANGER**. Each slot keeps its own delay line.
 
-![Channel FX racks showing the TB-303 compressor and the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
+![Channel FX racks showing the TB-303 compressor and flanger alongside the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
 
 Each assigned 303 keeps its own key, depth, crossover and bypass. Named external sources sum all matching
 channels before their faders. With two 909s assigned, a kick from either kit

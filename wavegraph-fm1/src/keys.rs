@@ -373,7 +373,7 @@ impl<const PANEL: usize> Keys<PANEL> {
                 keys.clear_midi();
                 track.bass.slide = false;
             }
-            MidiAction::Control(1, value) if track.assignment.part == Part::Bass => {
+            MidiAction::Control(1, value) => {
                 track.lfo.depth = value;
             }
             MidiAction::Control(cc, value) if track.assignment.part == Part::Bass => {

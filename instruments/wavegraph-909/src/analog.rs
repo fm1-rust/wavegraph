@@ -108,7 +108,7 @@ impl BassDrum {
     }
 
     pub(crate) fn from_clock(clock: Clock, decay: f32) -> Self {
-        Self {
+        let mut voice = Self {
             oscillator: Oscillator::new(clock, 49.5),
             noise: 0x8469_f235,
             body: 0.0,
@@ -116,10 +116,16 @@ impl BassDrum {
             click: 0.0,
             hold: 0,
             hold_frames: clock.frames(0.049),
-            body_decay: clock.decay(0.070 * decay),
+            body_decay: 0.0,
             bend_decay: clock.decay(0.0107),
             click_decay: clock.decay(0.0014),
-        }
+        };
+        voice.set_decay(clock, decay);
+        voice
+    }
+
+    pub(crate) fn set_decay(&mut self, clock: Clock, decay: f32) {
+        self.body_decay = clock.decay(0.070 * decay);
     }
 
     /// Retrigger the oscillator and its pitch, attack and volume envelopes.
@@ -183,7 +189,7 @@ impl SnareDrum {
     }
 
     pub(crate) fn from_clock(clock: Clock, decay: f32) -> Self {
-        Self {
+        let mut voice = Self {
             shells: [172.0, 272.0].map(|hz| Oscillator::new(clock, hz)),
             noise: 0x9352_6a7d,
             low: 0.0,
@@ -193,10 +199,17 @@ impl SnareDrum {
             body: 0.0,
             snap: 0.0,
             bend: 0.0,
-            body_decay: clock.decay(0.036 * decay),
-            snap_decay: clock.decay(0.048 * decay),
+            body_decay: 0.0,
+            snap_decay: 0.0,
             bend_decay: clock.decay(0.007),
-        }
+        };
+        voice.set_decay(clock, decay);
+        voice
+    }
+
+    pub(crate) fn set_decay(&mut self, clock: Clock, decay: f32) {
+        self.body_decay = clock.decay(0.036 * decay);
+        self.snap_decay = clock.decay(0.048 * decay);
     }
 
     /// Retrigger the shells and snare-wire noise envelopes.

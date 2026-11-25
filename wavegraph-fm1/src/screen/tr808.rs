@@ -1,7 +1,7 @@
 //! Charcoal 808 faceplate with panel-linked dials and four illuminated rhythm switches.
 
 use super::{
-    drums::{CREAM, HOT, STYLE_808},
+    drums::{CREAM, HOT},
     mixer::Band,
     selector::Selector,
 };
@@ -21,7 +21,7 @@ use wavegraph_909::Voice;
 
 const RIM: Rgb565 = Rgb565::new(15, 29, 13);
 const RUBBER: Rgb565 = Rgb565::new(5, 10, 5);
-const PANEL: Rgb565 = STYLE_808.background;
+const PANEL: Rgb565 = super::style::TR808.face;
 
 pub(super) async fn status(
     lcd: &mut AsyncDisplay<'_, Clock>,

@@ -7,7 +7,7 @@
 )]
 
 use super::TextGrid;
-use super::{drums, mixer::Band};
+use super::{InstrumentStyle, drums, mixer::Band, style::ACID_LANES};
 use crate::{
     bass::CC_SLIDE,
     instrument::Part,
@@ -17,12 +17,12 @@ use crate::{
         pattern::{BAR, Clip, SLOTS, Slot},
     },
 };
+use fm1_graphics::Rgb565;
 use fm1_graphics::embedded_graphics::{
     pixelcolor::raw::ToBytes,
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::display::{AsyncDisplay, Display, Error},
     time::Clock,
@@ -35,31 +35,6 @@ const TOP: usize = 48;
 const WIDTH: usize = 12;
 const HEIGHT: usize = 160;
 const HALF: usize = HEIGHT / 2;
-const INKS: [Rgb565; 3] = [
-    palette::CYAN,
-    Rgb565::new(30, 49, 7),
-    Rgb565::new(28, 15, 20),
-];
-const ACID: Rgb565 = Rgb565::new(31, 24, 4);
-
-pub(super) fn style(part: Part) -> WaveformStyle {
-    if part == Part::Fm {
-        super::fm::PANEL_STYLE
-    } else if part.is_kit() {
-        drums::style(part)
-    } else {
-        super::STYLE
-    }
-}
-
-pub(super) fn ink(part: Part) -> Rgb565 {
-    if part == Part::Tr909 {
-        drums::GRAPHITE
-    } else {
-        palette::WHITE
-    }
-}
-
 fn drum_label(v: Voice) -> &'static str {
     match v {
         Voice::Kick => "KICK",
@@ -213,36 +188,35 @@ impl Roll {
 
     fn drum_pixel(
         &self,
-        part: Part,
+        (part, theme): (Part, &InstrumentStyle),
         step: usize,
         x: usize,
         y: usize,
         head: bool,
         enabled: bool,
     ) -> Rgb565 {
-        let skin = style(part);
         // ReDrum-style voice lanes and a separate row of transport lamps.
         let row_h = if part == Part::Tr808 { 32 } else { 22 };
         let row = y / row_h;
         let dy = y % row_h;
         if row >= part.pads().len() {
             if (140..146).contains(&y) && (2..10).contains(&x) {
-                return if head { drums::HOT } else { skin.grid };
+                return if head { theme.accent } else { theme.surface };
             }
             if (151..154).contains(&y) && step.is_multiple_of(4) {
-                return skin.trace;
+                return theme.accent;
             }
-            return skin.background;
+            return theme.face;
         }
         if x < 2 && step.is_multiple_of(4) {
-            return skin.center;
+            return theme.muted;
         }
         if !(2..11).contains(&x) || !(3..row_h - 3).contains(&dy) {
-            return skin.background;
+            return theme.face;
         }
         let cell = self.cells[row][step];
         if cell.gate == 0 || !enabled {
-            return if head { skin.center } else { skin.grid };
+            return if head { theme.muted } else { theme.surface };
         }
         let color = if part == Part::Tr808 {
             [
@@ -252,16 +226,16 @@ impl Roll {
                 drums::CREAM,
             ][step / 4]
         } else if cell.accent {
-            Rgb565::new(24, 18, 2)
+            theme.accent
         } else {
-            Rgb565::new(15, 22, 16)
+            theme.muted
         };
-        if head && dy < 7 { ink(part) } else { color }
+        if head && dy < 7 { theme.ink } else { color }
     }
 
     fn pixel(
         &self,
-        part: Part,
+        (part, theme): (Part, &InstrumentStyle),
         rows: usize,
         step: usize,
         x: usize,
@@ -270,15 +244,11 @@ impl Roll {
         enabled: bool,
     ) -> Rgb565 {
         if part.is_kit() {
-            return self.drum_pixel(part, step, x, y, head, enabled);
+            return self.drum_pixel((part, theme), step, x, y, head, enabled);
         }
         let row = y / 16;
         let dy = y % 16;
-        let background = if head {
-            Rgb565::new(3, 14, 9)
-        } else {
-            super::STYLE.background
-        };
+        let background = if head { theme.surface } else { theme.face };
         if row < rows {
             let c = self.cells[row][step];
             if part == Part::Bass && (1..=5).contains(&dy) {
@@ -290,27 +260,19 @@ impl Roll {
                     None
                 };
                 if flag.is_some_and(|(glyph, dx)| glyph[dy - 1] & (4 >> dx) != 0) {
-                    return if enabled {
-                        palette::WHITE
-                    } else {
-                        palette::MUTED
-                    };
+                    return if enabled { theme.ink } else { theme.muted };
                 }
             }
             if (7..=12).contains(&dy) && (c.gate & (1 << (x * 8 / WIDTH))) != 0 {
                 return if !enabled {
-                    palette::MUTED
+                    theme.muted
                 } else if head {
-                    palette::WHITE
+                    theme.ink
                 } else {
-                    match part {
-                        Part::Bass if c.accent => INKS[1],
-                        Part::Bass => ACID,
-                        Part::Wavetable => super::microwave::STYLE.trace,
-                        Part::Supersaw => super::jp8080::STYLE.trace,
-                        Part::Organ => super::ORGAN_LIME,
-                        Part::Fm => super::fm::GREEN,
-                        _ => palette::GREEN,
+                    if part == Part::Bass && c.accent {
+                        theme.ink
+                    } else {
+                        theme.accent
                     }
                 };
             }
@@ -324,7 +286,11 @@ impl Roll {
                 let b = self.curves[t.saturating_sub(1)][lane];
                 let b = if b < 128 { height(b) } else { a };
                 if (a.min(b)..=a.max(b)).contains(&dy) {
-                    return if enabled { INKS[lane] } else { palette::MUTED };
+                    return if enabled {
+                        ACID_LANES[lane]
+                    } else {
+                        theme.muted
+                    };
                 }
             }
         } else {
@@ -332,9 +298,9 @@ impl Roll {
         }
         if x == 0 || dy == 15 {
             if step.is_multiple_of(4) {
-                super::STYLE.center
+                theme.muted
             } else {
-                super::STYLE.grid
+                theme.surface
             }
         } else {
             background
@@ -388,10 +354,10 @@ impl Grid {
         &self,
         lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
-        part: Part,
+        (part, theme): (Part, &InstrumentStyle),
     ) -> Result<(), Error> {
         let rows = self.roll.rows(part);
-        let paper = style(part).background;
+        let paper = theme.face;
         for y in (0..HEIGHT).step_by(16) {
             let mut band = Band::new(strip, 0, 0, LEFT as u16, 16, paper)
                 .with_panel_type(super::lettering::panel_type(part));
@@ -406,14 +372,14 @@ impl Grid {
                             .trim_ascii_end(),
                         Point::new(4, 4),
                         Alignment::Left,
-                        ink(part),
+                        theme.ink,
                     );
                 } else if part == Part::Bass && row < rows + 3 {
                     band.label(
                         ["CUT", "RES", "DRV"][row - rows],
                         Point::new(4, 4),
                         Alignment::Left,
-                        INKS[row - rows],
+                        ACID_LANES[row - rows],
                     );
                 }
             }
@@ -431,7 +397,7 @@ impl Grid {
             for (i, v) in part.pads().iter().enumerate() {
                 let mut band = Band::new(strip, 0, 0, LEFT as u16, 12, paper)
                     .with_panel_type(super::lettering::panel_type(part));
-                band.label(drum_label(*v), Point::new(4, 1), Alignment::Left, ink(part));
+                band.label(drum_label(*v), Point::new(4, 1), Alignment::Left, theme.ink);
                 lcd.write_rect_buffered(
                     0,
                     (TOP + i * h + (h - 12) / 2) as u16,
@@ -449,14 +415,13 @@ impl Grid {
         &mut self,
         lcd: &mut AsyncDisplay<'_, Clock>,
         strip: &mut [[u8; 2]],
-        part: Part,
+        (part, theme): (Part, &InstrumentStyle),
         active: Slot,
         next: Slot,
         pressed_off: bool,
     ) -> Result<(), Error> {
         const LABELS: [&str; SLOTS] = ["1 F", "2 G", "3 A", "4 B", "5 C", "6 D", "7 E", "8 F"];
         const WIDTH: u16 = 240 / SLOTS as u16;
-        let skin = style(part);
         for (i, label) in LABELS.into_iter().enumerate() {
             let number = i as u8 + 1;
             let requested = number == next.number();
@@ -468,13 +433,13 @@ impl Grid {
             if self.buttons[i] == Some(state) {
                 continue;
             }
-            let mut button = Band::new(strip, 0, 0, WIDTH, 16, skin.background)
+            let mut button = Band::new(strip, 0, 0, WIDTH, 16, theme.face)
                 .with_panel_type(super::lettering::panel_type(part));
             if !state.dark {
                 let (cap, text) = if state.selected {
-                    (ink(part), skin.background)
+                    (theme.ink, theme.face)
                 } else {
-                    (skin.grid, ink(part))
+                    (theme.surface, theme.ink)
                 };
                 button.rect(Point::new(1, 2), Size::new(u32::from(WIDTH - 4), 14), cap);
                 button.label(
@@ -488,7 +453,7 @@ impl Grid {
                 button.rect(
                     Point::new(2, 14),
                     Size::new(u32::from(WIDTH - 6), 2),
-                    drums::HOT,
+                    theme.accent,
                 );
             }
             lcd.write_rect_buffered(
@@ -514,7 +479,7 @@ impl Grid {
         clock: &mut Clock,
         text: &mut TextGrid,
         strip: &mut [[u8; 2]],
-        (seq, part): (Sequencer, Part),
+        (seq, part, theme): (Sequencer, Part, &InstrumentStyle),
         position: Option<Position>,
         bank: BankPosition,
     ) -> Result<(), Error> {
@@ -534,11 +499,18 @@ impl Grid {
         let changed = self.previous != Some(key);
         let mut lcd = lcd.as_async(clock)?;
         if seq.page == Some(SeqPage::Pattern) {
-            self.buttons(&mut lcd, strip, part, slot, next, seq.pressed_key_dark)
-                .await?;
+            self.buttons(
+                &mut lcd,
+                strip,
+                (part, theme),
+                slot,
+                next,
+                seq.pressed_key_dark,
+            )
+            .await?;
         } else {
-            text.text(0, 13, b"P", ink(part));
-            text.number(1, 13, 1, u32::from(slot.number()), ink(part));
+            text.text(0, 13, b"P", theme.ink);
+            text.number(1, 13, 1, u32::from(slot.number()), theme.ink);
             text.text(
                 4,
                 13,
@@ -547,27 +519,27 @@ impl Grid {
                 } else {
                     b"PLAY TO OVERDUB "
                 },
-                ink(part),
+                theme.ink,
             );
         }
-        text.number(16, 0, 1, u32::from(bar) + 1, ink(part));
-        text.text(17, 0, [b'/', b'0' + clip.bars], ink(part));
+        text.number(16, 0, 1, u32::from(bar) + 1, theme.ink);
+        text.text(17, 0, [b'/', b'0' + clip.bars], theme.ink);
         if let Some(head) = cursor.or(head) {
-            text.number(17, 1, 2, u32::from(head) + 1, ink(part));
+            text.number(17, 1, 2, u32::from(head) + 1, theme.ink);
         } else {
-            text.text(17, 1, b"--", ink(part));
+            text.text(17, 1, b"--", theme.ink);
         }
         if seq.full && matches!(seq.page, Some(SeqPage::Record | SeqPage::Step)) {
-            text.text(0, 14, b"EDIT LIMIT REACHED  ", ink(part));
+            text.text(0, 14, b"EDIT LIMIT REACHED  ", theme.ink);
         } else if editing {
-            text.text(0, 14, b"KEY SET  SEL+KEY DEL", ink(part));
+            text.text(0, 14, b"KEY SET  SEL+KEY DEL", theme.ink);
         } else if seq.page == Some(SeqPage::Record) {
-            text.text(0, 14, b"REC AGAIN TO FINISH ", ink(part));
+            text.text(0, 14, b"REC AGAIN TO FINISH ", theme.ink);
         } else if slot != next {
-            text.text(0, 14, b"QUEUED   / NEXT BAR ", ink(part));
-            text.number(7, 14, 1, u32::from(next.number()), ink(part));
+            text.text(0, 14, b"QUEUED   / NEXT BAR ", theme.ink);
+            text.number(7, 14, 1, u32::from(next.number()), theme.ink);
         } else {
-            text.text(0, 14, b"KEYS:BANK   REC EDIT", ink(part));
+            text.text(0, 14, b"KEYS:BANK   REC EDIT", theme.ink);
         }
         if !changed && head == self.head && cursor == self.cursor {
             return lcd.flush().await;
@@ -585,7 +557,7 @@ impl Grid {
                 },
             );
             if self.previous.is_none() || old_labels != (self.roll.pitch_count, self.roll.pitches) {
-                self.labels(&mut lcd, strip, part).await?;
+                self.labels(&mut lcd, strip, (part, theme)).await?;
             }
         }
         let rows = self.roll.rows(part);
@@ -600,10 +572,10 @@ impl Grid {
                         pixels[(y - top) * WIDTH + x] = if cursor == Some(step)
                             && (x == 0 || x == WIDTH - 1 || y == 0 || y == HEIGHT - 1)
                         {
-                            ink(part)
+                            theme.ink
                         } else {
                             self.roll.pixel(
-                                part,
+                                (part, theme),
                                 rows,
                                 usize::from(step),
                                 x,

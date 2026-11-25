@@ -1,13 +1,10 @@
 //! Voice mode selector for the four-voice instruments.
 
-use super::{BAND, ORGAN_LIME, ORGAN_STYLE, WIDTH, jp8080, microwave, mixer::Band};
-use crate::{firmware::Labels, instrument::Part};
-use fm1_graphics::{
-    embedded_graphics::{
-        prelude::{Point, Size},
-        text::Alignment,
-    },
-    palette,
+use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
+use crate::firmware::Labels;
+use fm1_graphics::embedded_graphics::{
+    prelude::{Point, Size},
+    text::Alignment,
 };
 use fm1_rticx::{
     bsp::display::{Display, Error, SIZE},
@@ -20,14 +17,10 @@ pub(super) async fn paint(
     clock: &mut Clock,
     pixels: &mut [[u8; 2]; BAND * WIDTH],
     labels: &Labels,
+    theme: &InstrumentStyle,
     entering: bool,
 ) -> Result<(), Error> {
-    let (face, ink, accent) = match labels.focus {
-        Part::Fm => (super::fm::FACE, super::fm::PRINT, super::fm::GREEN),
-        Part::Organ => (ORGAN_STYLE.background, palette::WHITE, ORGAN_LIME),
-        Part::Supersaw => (jp8080::FACE, jp8080::PRINT, jp8080::AMBER),
-        _ => (microwave::FACE, microwave::PRINT, microwave::LIME),
-    };
+    let (face, ink, accent) = (theme.face, theme.ink, theme.accent);
     let (selected, value) = match labels.mode {
         VoiceMode::Poly => (0, "One voice per key"),
         VoiceMode::Chord(chord) => (1, chord.name()),
@@ -48,7 +41,7 @@ pub(super) async fn paint(
                     accent,
                 );
                 band.label(
-                    ["CH 1", "CH 2", "CH 3", "CH 4"][labels.channel.index()],
+                    labels.channel.label(),
                     Point::new(228, 10),
                     Alignment::Right,
                     ink,

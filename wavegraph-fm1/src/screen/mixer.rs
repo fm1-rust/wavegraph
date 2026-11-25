@@ -1,6 +1,6 @@
 //! Four horizontal strips. Only changed strips and meter rectangles go to the LCD.
 
-use super::{BAND, Selector, WIDTH, selector};
+use super::{BAND, InstrumentStyle, Selector, WIDTH, selector};
 use crate::assets::fonts::{FONT_6X10, FONT_7X13_BOLD};
 use crate::{
     firmware::Labels,
@@ -36,6 +36,45 @@ const AMBER: Rgb565 = Rgb565::new(31, 44, 1);
 const RED: Rgb565 = Rgb565::new(31, 11, 8);
 const MOTION_OFF: Rgb565 = Rgb565::new(2, 6, 8);
 pub(super) const LABEL: Rgb565 = Rgb565::new(20, 41, 25);
+
+/// Colors shared by the channel and master rack drawing primitives.
+#[derive(Clone, Copy)]
+pub(super) struct RackColors {
+    pub surface: Rgb565,
+    pub selected: Rgb565,
+    pub label: Rgb565,
+    pub ink: Rgb565,
+    pub accent: Rgb565,
+    cap: Rgb565,
+    rim: Rgb565,
+    pointer: Rgb565,
+}
+
+impl RackColors {
+    pub const MASTER: Self = Self {
+        surface: STRIP,
+        selected: SELECTED,
+        label: LABEL,
+        ink: palette::WHITE,
+        accent: palette::CYAN,
+        cap: KNOB,
+        rim: OUTLINE,
+        pointer: POINTER,
+    };
+
+    pub fn channel(theme: &InstrumentStyle) -> Self {
+        Self {
+            surface: theme.surface,
+            selected: super::style::mix(theme.surface, theme.face),
+            label: theme.muted,
+            ink: theme.ink,
+            accent: theme.accent,
+            cap: theme.face,
+            rim: theme.muted,
+            pointer: theme.ink,
+        }
+    }
+}
 
 const TOP: u16 = 23;
 const STRIP_HEIGHT: u16 = 48;
@@ -89,7 +128,6 @@ impl Surface {
                     band.label(label, Point::new(x, 9), Alignment::Center, LABEL);
                 }
                 band.compose(selector);
-                band.compose_badge(&mut selector.badge);
                 lcd.write_rect_buffered(0, y, SIZE, band.height, band.pixels.as_flattened())
                     .await?;
             }
@@ -107,7 +145,6 @@ impl Surface {
                     let mut band = Band::new(pixels, 0, row, SIZE, BAND as u16, BACKGROUND);
                     band.strip(i, y, strip, peaks[i]);
                     band.compose(selector);
-                    band.compose_badge(&mut selector.badge);
                     lcd.write_rect_buffered(0, row, SIZE, BAND as u16, band.pixels.as_flattened())
                         .await?;
                 }
@@ -163,7 +200,12 @@ impl Surface {
 
 impl ChannelStrip {
     fn background(self) -> Rgb565 {
-        if self.selected { SELECTED } else { STRIP }
+        let colors = RackColors::channel(InstrumentStyle::for_part(self.part));
+        if self.selected {
+            colors.selected
+        } else {
+            colors.surface
+        }
     }
 }
 
@@ -249,15 +291,20 @@ impl<'a> Band<'a> {
     }
 
     fn strip(&mut self, index: usize, y: u16, strip: ChannelStrip, peak: u8) {
+        let colors = RackColors::channel(InstrumentStyle::for_part(strip.part));
         let y = i32::from(y);
         self.rect(Point::new(5, y), Size::new(230, 45), strip.background());
         if strip.selected {
-            self.rect(Point::new(5, y), Size::new(2, 45), palette::CYAN);
+            self.rect(Point::new(5, y), Size::new(2, 45), colors.accent);
         }
-        let active = if strip.active { palette::CYAN } else { LABEL };
+        let active = if strip.active {
+            colors.accent
+        } else {
+            colors.label
+        };
         self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), active);
         self.panel_type = super::lettering::panel_type(strip.part);
-        self.title(strip.part.name(), Point::new(25, y + 3), palette::WHITE);
+        self.title(strip.part.name(), Point::new(25, y + 3), colors.ink);
         self.panel_type = false;
         self.meter(y as u16, peak);
         let Strip {
@@ -266,9 +313,9 @@ impl<'a> Band<'a> {
             delay,
         } = strip.controls;
         let ink = if strip.selected {
-            palette::CYAN
+            colors.accent
         } else {
-            POINTER
+            colors.pointer
         };
         let rail = i32::from(METER_X) + 3;
         let travel = i32::from(METER_WIDTH) - 7;
@@ -279,23 +326,28 @@ impl<'a> Band<'a> {
             Size::new(travel as u32 + 1, 3),
             MOTION_OFF,
         );
-        self.rect(Point::new(unity, y + 30), Size::new(1, 11), OUTLINE);
+        self.rect(Point::new(unity, y + 30), Size::new(1, 11), colors.rim);
         self.rect(Point::new(thumb - 3, y + 31), Size::new(7, 9), ink);
-        self.rect(Point::new(thumb, y + 32), Size::new(1, 7), STRIP);
+        self.rect(Point::new(thumb, y + 32), Size::new(1, 7), colors.cap);
         self.label(
             str::from_utf8(&decibels(level)).expect("ASCII fader"),
             Point::new(151, y + 5),
             Alignment::Right,
-            LABEL,
+            colors.label,
         );
         for (x, value) in CENTERS.into_iter().zip([reverb, delay]) {
             let readout = percent(value);
-            self.small_knob(Point::new(x, y + 17), value, UNITY, ink);
+            self.small_knob(
+                Point::new(x, y + 17),
+                value,
+                UNITY,
+                [colors.cap, colors.rim, ink],
+            );
             self.label(
                 str::from_utf8(&readout).expect("ASCII readout"),
                 Point::new(x, y + 30),
                 Alignment::Center,
-                LABEL,
+                colors.label,
             );
         }
     }
@@ -322,14 +374,18 @@ impl<'a> Band<'a> {
         }
     }
 
-    pub(super) fn rack_row(&mut self, y: i32, selected: bool) -> Rgb565 {
-        let face = if selected { SELECTED } else { STRIP };
+    pub(super) fn rack_row(&mut self, y: i32, selected: bool, colors: &RackColors) -> Rgb565 {
+        let face = if selected {
+            colors.selected
+        } else {
+            colors.surface
+        };
         self.rect(Point::new(4, y), Size::new(232, 38), face);
         if selected {
-            self.rect(Point::new(4, y), Size::new(2, 38), palette::CYAN);
-            palette::CYAN
+            self.rect(Point::new(4, y), Size::new(2, 38), colors.accent);
+            colors.accent
         } else {
-            POINTER
+            colors.pointer
         }
     }
 
@@ -340,24 +396,25 @@ impl<'a> Band<'a> {
         position: u8,
         readout: &str,
         ink: Rgb565,
+        colors: &RackColors,
     ) {
-        self.label(label, top, Alignment::Center, LABEL);
-        self.small_knob(top + Point::new(0, 17), position, UNITY, ink);
+        self.label(label, top, Alignment::Center, colors.label);
+        self.small_knob(
+            top + Point::new(0, 17),
+            position,
+            UNITY,
+            [colors.cap, colors.rim, ink],
+        );
         self.label(
             readout,
             top + Point::new(0, 27),
             Alignment::Center,
-            palette::WHITE,
+            colors.ink,
         );
     }
 
-    pub(super) fn small_knob(&mut self, center: Point, value: u8, max: u8, ink: Rgb565) {
-        self.draw_knob(
-            center,
-            Self::knob_offset(value, max) * 5 / 7,
-            15,
-            [KNOB, OUTLINE, ink],
-        );
+    pub(super) fn small_knob(&mut self, center: Point, value: u8, max: u8, colors: [Rgb565; 3]) {
+        self.draw_knob(center, Self::knob_offset(value, max) * 5 / 7, 15, colors);
     }
 
     pub(super) fn knob(&mut self, center: Point, value: u8, max: u8, colors: [Rgb565; 3]) {
@@ -453,15 +510,6 @@ impl<'a> Band<'a> {
         )
         .draw(self)
         .expect("infallible strip");
-    }
-
-    pub(super) fn compose_badge(&mut self, badge: &mut super::badge::ChannelBadge) {
-        badge.compose(
-            usize::from(self.x),
-            usize::from(self.y),
-            usize::from(self.width),
-            self.pixels,
-        );
     }
 
     pub(super) fn compose(&mut self, list: &Selector) {

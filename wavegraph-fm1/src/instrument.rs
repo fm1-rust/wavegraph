@@ -10,6 +10,7 @@ use crate::{
     fx::{Device, Fx, INSERT_SLOTS, Insert},
     keys::HitLog,
     keys::PolyKey,
+    lfo::{KnobOffset, Route},
     mixer::Mixer,
     organ::Controls as OrganControls,
     panel::{Assignment, CHANNELS, Channel, View},
@@ -93,19 +94,6 @@ impl Part {
         matches!(
             self,
             Self::Organ | Self::Supersaw | Self::Wavetable | Self::Fm
-        )
-    }
-
-    pub(super) const fn has_envelope(self) -> bool {
-        matches!(
-            self,
-            Self::Mono
-                | Self::Organ
-                | Self::Bass
-                | Self::Supersaw
-                | Self::Wavetable
-                | Self::Fm
-                | Self::Sampler
         )
     }
 
@@ -341,6 +329,7 @@ pub(super) struct Track {
     pub(super) envelope_target: EnvelopeTarget,
     pub(super) voice_tap: bool,
     pub(super) drums808: wavegraph_808::Controls,
+    pub(super) decay909: [u8; 3],
 }
 
 impl Track {
@@ -392,6 +381,7 @@ impl Track {
                     | Part::Sampler
             ),
             drums808: wavegraph_808::Controls::INITIAL,
+            decay909: [crate::sequencer::DECAY_909; 3],
         }
     }
 
@@ -501,7 +491,11 @@ impl Track {
                 }
             }
             Part::Sampler => self.sample_program_mut().turn(detents),
-            Part::Tr909 => (),
+            Part::Tr909 => {
+                for (value, delta) in self.decay909.iter_mut().zip(detents) {
+                    *value = value.saturating_add_signed(delta).min(100);
+                }
+            }
         }
     }
 
@@ -568,6 +562,10 @@ impl Track {
                 }
                 return;
             }
+            (View::Envelope, Part::Tr808 | Part::Tr909) => {
+                self.turn_knobs(knobs);
+                return;
+            }
             (View::Envelope, Part::Mono) => self.voice_envelope.turn(knobs),
             (View::Envelope, Part::Organ) => self.organ.envelope.turn_organ(knobs),
             _ => {
@@ -590,7 +588,8 @@ impl Track {
     }
 
     // The direct path releases its gates when the arpeggiator takes ownership.
-    fn direct(mut self) -> Self {
+    fn direct(mut self, offset: KnobOffset) -> Self {
+        offset.apply(&mut self);
         if self.arp.enabled {
             self.voice.gate = Gate::default();
             self.poly_keys = [PolyKey::EMPTY; POLYPHONY];
@@ -629,6 +628,13 @@ impl Track {
                 {
                     events
                         .push(at(Message::Drum(DrumMessage::Controls808(self.drums808))))
+                        .map_err(|_| Error::Capacity)?;
+                }
+                if self.assignment.part == Part::Tr909
+                    && old.map_or([crate::sequencer::DECAY_909; 3], |t| t.decay909) != self.decay909
+                {
+                    events
+                        .push(at(Message::Drum(DrumMessage::Decay909(self.decay909))))
                         .map_err(|_| Error::Capacity)?;
                 }
                 events
@@ -1293,6 +1299,7 @@ impl Programs {
             wavegraph_lfo::Lfo::new(rate.0 as f32 / rate.1 as f32).expect("audio sample clock");
         Ok(Instrument {
             lfos: [lfo; CHANNELS],
+            offsets: [KnobOffset::default(); CHANNELS],
             programs: self,
             patch: self.0[0].bind_nodes(nodes)?,
             half_gain: false,
@@ -1332,6 +1339,7 @@ pub(super) struct Instrument<'a> {
     pub(super) sequences: [bool; CHANNELS],
     player: PatternPlayer,
     lfos: [wavegraph_lfo::Lfo; CHANNELS],
+    offsets: [KnobOffset; CHANNELS],
     arps: [ChannelArp; CHANNELS],
     events: &'a mut [RoutedEvents; CHANNELS],
     pub(super) position: Option<Position>,
@@ -1435,7 +1443,7 @@ impl Instrument<'_> {
         )?;
         for (i, arp) in self.arps.iter_mut().enumerate() {
             let track = &tracks[i];
-            if track.assignment.part == Part::Bass && track.lfo.enabled {
+            if track.lfo.enabled {
                 self.lfos[i].advance(frames);
             }
             if track.arp.enabled
@@ -1479,6 +1487,7 @@ impl Instrument<'_> {
         let mut inserts = Vec::<_, 8>::new();
         let mut enabled = self.sequences;
         let mut live_counts = [0; CHANNELS];
+        let mut offsets = [KnobOffset::default(); CHANNELS];
         let recovering = core::mem::take(&mut self.gap_events);
         for (i, events) in self.events.iter_mut().enumerate() {
             let track = tracks[i];
@@ -1501,7 +1510,28 @@ impl Instrument<'_> {
             } else {
                 part.is_kit() || track.voice.gate.note.is_none()
             };
-            let mut panel = track.direct().events(old.map(Track::direct))?;
+            let c = track.lfo;
+            let was_enabled = old.is_some_and(|t| t.lfo.enabled);
+            let amount = c.tick(
+                &mut self.lfos[i],
+                self.transport.bpm,
+                !was_enabled || (c.sync && downbeat),
+                N,
+            );
+            let mut offset = KnobOffset::default();
+            let mut bass_mod = None;
+            if let Some(amount) =
+                amount.or_else(|| (was_enabled && !c.enabled && part == Part::Bass).then_some(0.0))
+            {
+                match c.target(part).route {
+                    Route::Bass(target) => bass_mod = Some(BassMessage::Modulate(target, amount)),
+                    Route::Knob { index, span } => offset = KnobOffset::new(index, span, amount),
+                }
+            }
+            let mut panel = track
+                .direct(offset)
+                .events(old.map(|t| t.direct(self.offsets[i])))?;
+            offsets[i] = offset;
             if part == Part::Sampler && (old.is_none() || self.previous_bpm != self.transport.bpm) {
                 panel
                     .push(at(Message::Sampler(SampleMessage::Tempo(
@@ -1526,26 +1556,8 @@ impl Instrument<'_> {
             events
                 .extend_from_slice(&panel)
                 .map_err(|_| Error::Capacity)?;
-            if part == Part::Bass {
-                let c = track.lfo;
-                let clock = &mut self.lfos[i];
-                if c.enabled {
-                    if old.is_none_or(|t| !t.lfo.enabled) || (c.sync && downbeat) {
-                        clock.reset();
-                    }
-                    clock.set_frequency(c.frequency(self.transport.bpm));
-                    clock.shape = c.shape();
-                    if let Some(event) = clock.tick(N) {
-                        let amount = event.message * (f32::from(c.depth) / 127.0);
-                        events
-                            .push(at(BassMessage::Modulate(c.target(), amount)))
-                            .map_err(|_| Error::Capacity)?;
-                    }
-                } else if old.is_some_and(|t| t.lfo.enabled) {
-                    events
-                        .push(at(BassMessage::Modulate(c.target(), 0.0)))
-                        .map_err(|_| Error::Capacity)?;
-                }
+            if let Some(message) = bass_mod {
+                events.push(at(message)).map_err(|_| Error::Capacity)?;
             }
             if let Some(last) = previous.filter(|t| t.arp.enabled)
                 && (!track.arp.enabled
@@ -1659,6 +1671,7 @@ impl Instrument<'_> {
         self.wave_frames = wave_frames;
         self.bass_cycles = bass_cycles;
         self.reduction = reduction;
+        self.offsets = offsets;
         self.previous = Some(*tracks);
         self.previous_mixer = Some(self.mixer);
         self.previous_bpm = self.transport.bpm;
@@ -1723,6 +1736,7 @@ fn event_order(event: &Event<Message>) -> u8 {
 #[cfg(test)]
 mod tests {
     mod arpeggiator;
+    mod modulation;
     mod sampler;
     use super::*;
     use crate::{
@@ -1807,16 +1821,17 @@ mod tests {
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             let mut keys = Keys::<1>::new();
             // Square -> cutoff on bass 2; the wheel must also work off-page.
-            tracks[1].lfo.edit(0, [3, 0, 0, 1], true);
+            tracks[1].lfo.edit(Part::Bass, 0, [3, 0, 0, 1], true);
             for (status, value) in [(0xb1, 127), (0xb2, 0)] {
                 let (ch, cc) = decode_midi([11, status, 1, value]).expect("CC1");
                 keys.midi(ch, cc, &mut tracks[ch.index()]);
             }
             assert_eq!(tracks[0].lfo, crate::lfo::Controls::INITIAL);
-            assert_eq!(tracks[2].lfo, crate::lfo::Controls::INITIAL);
+            assert_eq!(tracks[2].lfo.depth, 0);
+            assert!(!tracks[2].lfo.enabled);
             rack.render(tracks, &mut buses)?;
             assert!(rack.events[1].contains(&at(BassMessage::Modulate(Destination::Cutoff, 1.0))));
-            tracks[1].lfo.edit(0, [0; 4], true);
+            tracks[1].lfo.edit(Part::Bass, 0, [0; 4], true);
             rack.render(tracks, &mut buses)?;
             assert!(rack.events[1].contains(&at(BassMessage::Modulate(Destination::Cutoff, 0.0))));
             Ok(())
@@ -1827,7 +1842,7 @@ mod tests {
     fn synced_lfo_counts_missed_frames_and_restarts_on_play() -> Result<(), Error> {
         with_instrument(8192, |rack| {
             let mut tracks = Track::rack(Navigation::INITIAL.assignments);
-            tracks[0].lfo.edit(1, [2, 0, 127, 0], true);
+            tracks[0].lfo.edit(Part::Bass, 1, [2, 0, 127, 0], true);
             rack.transport.bpm = 120;
             rack.sequences = [false; CHANNELS];
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
