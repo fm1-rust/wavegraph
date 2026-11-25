@@ -582,6 +582,24 @@ mod tests {
     }
 
     #[test]
+    fn glo_presets_cycle_in_alphabetical_display_order() {
+        let parts = Part::ALL;
+        assert!(parts.windows(2).all(|w| w[0].name() < w[1].name()));
+        let mut nav = Navigation::INITIAL;
+        nav.assignments[0] = Assignment::new(parts[0]);
+        nav.press(PageButton::Glo);
+        nav.turn(1, 0);
+        for &expected in parts.iter().cycle().skip(1).take(parts.len()) {
+            nav.turn(0, 1);
+            assert_eq!(nav.part(), expected);
+        }
+        for &expected in parts.iter().rev() {
+            nav.turn(0, -1);
+            assert_eq!(nav.part(), expected);
+        }
+    }
+
+    #[test]
     fn presets_and_home_follow_the_mixer_hierarchy() {
         let mut nav = Navigation::SYNTH_RACK;
         nav.press(PageButton::Glo);
@@ -591,7 +609,7 @@ mod tests {
         nav.turn(1, 0);
         assert_eq!((nav.view, nav.focus), (View::Channel, Channel::Two));
         nav.turn(0, 1);
-        assert_eq!(nav.part(), Part::Bass);
+        assert_eq!(nav.part(), Part::Mono);
         assert_eq!(nav.assignments[2].part, Part::Bass);
         nav.turn(-2, 0);
         assert_eq!(nav.focus, Channel::Four);

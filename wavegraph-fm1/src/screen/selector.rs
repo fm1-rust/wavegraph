@@ -1,28 +1,27 @@
 //! A one-bit ink mask over the live scope.
 
-use crate::assets::fonts::FONT_9X15_BOLD;
+use super::lettering::GRID;
 use crate::{
     fx::InsertKind,
     instrument::Part,
     panel::{CHANNELS, Channel},
     scope::Window,
 };
+use core::ops::Range;
 use fm1_graphics::embedded_graphics::{
-    Drawable,
+    Drawable, Pixel,
     framebuffer::{Framebuffer, buffer_size},
-    mono_font::MonoTextStyle,
     pixelcolor::{
         BinaryColor, RgbColor,
         raw::{BigEndian, RawU1, ToBytes},
     },
     prelude::{DrawTarget, Point, Primitive, Size},
     primitives::{PrimitiveStyleBuilder, Rectangle, RoundedRectangle},
-    text::{Baseline, Text},
 };
 use fm1_graphics::{Rgb565, WaveformStyle};
 
-// Nine 18-pixel rows fit the LCD. The numbered SUPER SAW label needs 123 pixels.
-const WIDTH: usize = 128;
+// Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the border.
+const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 18;
 const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
 pub(super) const LEFT: usize = (crate::capture::WIDTH - WIDTH) / 2;
@@ -53,6 +52,19 @@ pub(super) enum Menu {
     },
     Instruments(Part),
     Effects(Part, InsertKind),
+}
+
+impl Menu {
+    fn mask_rows(self) -> Range<usize> {
+        let count = match self {
+            Self::Channels { .. } => CHANNELS,
+            Self::Instruments(_) => Part::ALL.len(),
+            Self::Effects(..) => InsertKind::ALL.len(),
+        };
+        let height = count * ROW_HEIGHT;
+        let top = (HEIGHT - height) / 2;
+        top..top + height
+    }
 }
 
 pub(super) struct Selector {
@@ -88,82 +100,57 @@ impl Selector {
             self.mask
                 .clear(BinaryColor::Off)
                 .expect("infallible framebuffer");
-            let text = MonoTextStyle::new(&FONT_9X15_BOLD, BinaryColor::On);
             let selected = PrimitiveStyleBuilder::new()
                 .fill_color(BinaryColor::Off)
                 .stroke_color(BinaryColor::On)
                 .stroke_width(2)
                 .build();
-            let (parts, active, numbered): (&[Part], _, _) = match &menu {
-                Menu::Channels { parts, focus } => (parts, focus.index(), true),
-                Menu::Instruments(part) => (&Part::ALL, *part as usize, false),
-                Menu::Effects(_, active) => {
-                    let offset = (HEIGHT - InsertKind::ALL.len() * ROW_HEIGHT) / 2;
-                    for (row, kind) in InsertKind::ALL.into_iter().enumerate() {
-                        let y = (offset + row * ROW_HEIGHT) as i32;
-                        if kind == *active {
-                            highlight(y)
-                                .into_styled(selected)
-                                .draw(&mut self.mask)
-                                .expect("infallible framebuffer");
-                        }
-                        Text::with_baseline(kind.name(), Point::new(8, y + 2), text, Baseline::Top)
-                            .draw(&mut self.mask)
-                            .expect("infallible framebuffer");
+            for (row, y) in menu.mask_rows().step_by(ROW_HEIGHT).enumerate() {
+                let (name, active) = match menu {
+                    Menu::Channels { parts, focus } => (parts[row].name(), row == focus.index()),
+                    Menu::Instruments(active) => {
+                        let part = Part::ALL[row];
+                        (part.name(), part == active)
                     }
-                    return true;
-                }
-            };
-            let offset = (HEIGHT - parts.len() * ROW_HEIGHT) / 2;
-            for (row, part) in parts.iter().enumerate() {
-                let y = (offset + row * ROW_HEIGHT) as i32;
-                if row == active {
-                    highlight(y)
+                    Menu::Effects(_, active) => {
+                        let kind = InsertKind::ALL[row];
+                        (kind.name(), kind == active)
+                    }
+                };
+                if active {
+                    highlight(y as i32)
                         .into_styled(selected)
                         .draw(&mut self.mask)
                         .expect("infallible framebuffer");
                 }
-                if numbered {
-                    Text::with_baseline(
-                        ["1", "2", "3", "4"][row],
-                        Point::new(8, y + 2),
-                        text,
-                        Baseline::Top,
-                    )
-                    .draw(&mut self.mask)
-                    .expect("infallible framebuffer");
-                }
-                if super::lettering::panel_type(*part) {
-                    let left = if numbered { 24 } else { 8 };
-                    for (i, ch) in part.name().bytes().enumerate() {
-                        let mask = super::lettering::GRID.glyph(ch);
-                        for dy in 0..mask.height {
-                            for dx in 0..mask.width {
-                                if mask.coverage(dx, dy) >= 2 {
-                                    let p = Point::new(
-                                        (left + i * mask.width + dx) as i32,
-                                        y + 2 + dy as i32,
-                                    );
-                                    fm1_graphics::embedded_graphics::Pixel(p, BinaryColor::On)
-                                        .draw(&mut self.mask)
-                                        .expect("infallible mask");
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                }
-                Text::with_baseline(
-                    part.name(),
-                    Point::new(if numbered { 24 } else { 8 }, y + 2),
-                    text,
-                    Baseline::Top,
-                )
-                .draw(&mut self.mask)
-                .expect("infallible framebuffer");
+                let text_y = y + (ROW_HEIGHT - GRID.height) / 2;
+                let left = if matches!(menu, Menu::Channels { .. }) {
+                    self.label(8, text_y, ["1", "2", "3", "4"][row]);
+                    24
+                } else {
+                    8
+                };
+                self.label(left, text_y, name);
             }
         }
         true
+    }
+
+    fn label(&mut self, x: usize, y: usize, text: &str) {
+        for (i, byte) in text.bytes().enumerate() {
+            let glyph = GRID.glyph(byte);
+            let left = x + i * glyph.width;
+            for dy in 0..glyph.height {
+                for dx in 0..glyph.width {
+                    if glyph.coverage(dx, dy) >= 2 {
+                        let point = Point::new((left + dx) as i32, (y + dy) as i32);
+                        Pixel(point, BinaryColor::On)
+                            .draw(&mut self.mask)
+                            .expect("infallible framebuffer");
+                    }
+                }
+            }
+        }
     }
 
     pub(super) fn visible(&self) -> bool {
@@ -203,17 +190,17 @@ impl Selector {
     }
 
     pub(super) fn scope_overhang(&self) -> Option<Window> {
-        let height = match self.menu? {
-            Menu::Channels { .. } => CHANNELS * ROW_HEIGHT,
-            Menu::Instruments(_) => HEIGHT,
-            // The insert rack composites its own rows above and below the plot.
-            Menu::Effects(..) => return None,
-        };
+        let menu = self.menu?;
+        // The insert rack composites its own rows above and below the plot.
+        if matches!(menu, Menu::Effects(..)) {
+            return None;
+        }
+        let rows = menu.mask_rows();
         Some(Window {
             x: LEFT,
-            y: TOP + (HEIGHT - height) / 2,
+            y: TOP + rows.start,
             width: WIDTH,
-            height,
+            height: rows.len(),
         })
     }
 
@@ -232,23 +219,13 @@ impl Selector {
 
     fn ink(&self, x: usize, y: usize) -> Option<Rgb565> {
         let (x, y) = (x - LEFT, y - TOP);
-        if marked(self.mask.data(), x, y) {
-            return Some(self.ink);
+        if !self.menu?.mask_rows().contains(&y) {
+            return None;
         }
-        if let Menu::Effects(..) = self.menu? {
-            let height = InsertKind::ALL.len() * ROW_HEIGHT;
-            let top = (HEIGHT - height) / 2;
-            if !(top..top + height).contains(&y) {
-                return None;
-            }
-        }
-        if let Menu::Channels { .. } = self.menu? {
-            let height = CHANNELS * ROW_HEIGHT;
-            let top = (HEIGHT - height) / 2;
-            if !(top..top + height).contains(&y) {
-                return None;
-            }
-        }
-        Some(self.face)
+        Some(if marked(self.mask.data(), x, y) {
+            self.ink
+        } else {
+            self.face
+        })
     }
 }

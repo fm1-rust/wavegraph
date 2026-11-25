@@ -572,10 +572,11 @@ keyboard between channels. Turn
 SELECT clockwise to open the active strip, then turn it either way to move
 between strips. The highlight shows which channel Knobs 1–3 will edit.
 
-Turn PRESETS while a strip is highlighted to replace its instrument and hear
-the new assignment immediately. Any slot can run any of the nine instruments,
-including four independent TB-303s. The slot keeps its MIDI channel, fader,
-sends and sequence mute. The new processor starts from its factory settings.
+Turn PRESETS while a strip is highlighted to browse instruments alphabetically
+by their displayed names. Each detent applies the new assignment immediately.
+Any slot can run any of the nine instruments, including four independent
+TB-303s. The slot keeps its MIDI channel, fader, sends and sequence mute.
+The new processor starts from its factory settings.
 
 | Factory mix (128 = unity) | 303 bass | 303 harmony | TR-808 | TR-909 |
 | --- | ---: | ---: | ---: | ---: |
@@ -818,10 +819,11 @@ The monochrome UI fonts come from the public-domain X.Org misc-fixed faces in
 upstream atlas pixels for upper flash. The firmware uses the same upstream
 glyph mappings and metrics for layout.
 
-The TB-303, TR-808, TR-909 and JP-8080 panels use Orbitron Bold. Their model
-marks and the temporary channel digits are rasterized on the host at their LCD
-sizes. Dynamic labels use packed two-bit glyphs, and the shared dashboard grid
-uses a 12 × 16 atlas. The panel blends grayscale coverage into its RGB565 strip.
+The instrument, channel and effect pickers use Orbitron Bold, as do the
+TB-303, TR-808, TR-909 and JP-8080 panels. The model marks and temporary
+channel digits are rasterized on the host at their LCD sizes. Dynamic labels
+use packed two-bit glyphs, and the shared dashboard grid uses a 12 × 16 atlas.
+The panel blends grayscale coverage into its RGB565 strip.
 The generator and Open Font License are in `assets/panel-type/`.
 
 The 208 × 36 title and 104 × 38 model name occupy 2,860 bytes of packed
