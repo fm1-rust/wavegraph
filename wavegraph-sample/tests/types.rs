@@ -81,3 +81,15 @@ test_type!(I24, i24);
 test_type!(U24, u24);
 test_type!(I48, i48);
 test_type!(U48, u48);
+
+#[test]
+fn i24_slice_borrows_the_original_words() {
+    use wavegraph_sample::types::i24::{EQUILIBRIUM, I24, MAX, MIN};
+
+    let samples = [EQUILIBRIUM, MIN, I24::from(-1), EQUILIBRIUM, MAX];
+    let plane = &samples[1..];
+    let words = I24::as_i32_slice(plane);
+    assert_eq!(words.as_ptr(), plane.as_ptr().cast::<i32>());
+    assert_eq!(words, &[-8_388_608, -1, 0, 8_388_607]);
+    assert!(I24::as_i32_slice(&samples[..0]).is_empty());
+}

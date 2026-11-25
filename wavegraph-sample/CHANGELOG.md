@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.2.0-pre (Unreleased)
 
 - Raise the minimum supported Rust version from 1.85 to 1.88.
+- Give `I24` the layout of `i32` and expose its native PCM words through `I24::as_i32_slice`.
 
 ## 0.1.0 (2026-11-20)
 Initial release

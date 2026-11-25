@@ -7,7 +7,7 @@ pub use wavegraph_dsp::control;
 
 /// Application state that moves with a block between the two cores.
 pub trait AudioBlock: Send + 'static {
-    /// Copy rendered samples to the cleared stereo DAC half on CPU0.
+    /// Write the rendered samples to CPU0's cleared stereo staging block before MASTER.
     fn write(&self, out: &mut OutputBlock);
 }
 

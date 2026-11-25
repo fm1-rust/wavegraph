@@ -446,7 +446,7 @@ mod app {
         // the StaticCell flag, before main. The unique slot moves between tasks.
         #[unsafe(link_section = ".wavegraph.job")]
         static SLOT: StaticCell<RenderBlock> = StaticCell::new();
-        let slot = SLOT.init_with(RenderBlock::new);
+        let slot = SLOT.init_with(|| RenderBlock::new(BUSES.take()));
         static GATE: ConstStaticCell<mailbox::Mailbox<()>> =
             ConstStaticCell::new(mailbox::Mailbox::new());
         let (release, gate) = GATE.take().split();
@@ -454,7 +454,7 @@ mod app {
         static EDITS: ConstStaticCell<EditQueue<bool>> = ConstStaticCell::new(EditQueue::new());
         let (editor, host) = EDITS.take().split();
         let driver = (boot == 1).then(|| {
-            let mut driver = DSP.connect(Renderer::new(instrument, BUSES.take(), gate), slot, host);
+            let mut driver = DSP.connect(Renderer::new(instrument, gate), slot, host);
             // Prime the muted graph before enabling DMA.
             driver.request(|_, host| host.begin_block(|_| Ok(())));
             driver

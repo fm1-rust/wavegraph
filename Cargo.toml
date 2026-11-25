@@ -22,7 +22,7 @@ license = "Apache-2.0 OR MIT"
 fm1-assets = { version = "0.2.0", default-features = false }
 fm1-graphics = { version = "0.2.0", features = ["embedded-graphics"] }
 fm1-rticx = "0.2.0"
-fm1-audio = "0.2.1"
+fm1-audio = { version = "0.2.1", default-features = false }
 heapless = { version = "0.9.4", default-features = false }
 wavegraph-adsr = { version = "0.0.0", path = "wavegraph-adsr" }
 wavegraph-arp = { version = "0.0.0", path = "wavegraph-arp" }

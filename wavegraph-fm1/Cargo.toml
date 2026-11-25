@@ -14,7 +14,7 @@ default = ["lofi-samples", "packed-cymbals", "packed-samples"]
 lofi-samples = []
 late-block-probe = []
 # Opt in on hardware. The browser emulator currently lacks the paired 32-bit add.
-pi32v2-simd = ["wavegraph-supersaw/pi32v2-simd"]
+pi32v2-simd = ["fm1-audio/dsp", "wavegraph-supersaw/pi32v2-simd"]
 # Store the factory 909 cymbals as losslessly packed PCM16.
 packed-cymbals = []
 # Use the same PCM1 format for the chromatic sampler bank.
