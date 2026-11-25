@@ -63,3 +63,24 @@ wavegraph_ssp_free:
 3:  r0 = r2 - r0
     {r4} = [sp++]
     rts
+
+/* WaveGraph's 64-byte crash record is outside application allocations and
+   bootloader mailboxes. A cold read can return any word. Mask byte offsets
+   to aligned words inside the slot. SSYNC/CSYNC order individual accesses. */
+.section .text.wavegraph_fault,"ax",@progbits
+.global wavegraph_fault_read
+wavegraph_fault_read:
+    r1 = __wavegraph_fault_sram
+    r0 = r0 & 60
+    r1 = r1 + r0
+    ssync
+    r0 = [r1+0]
+    rts
+.global wavegraph_fault_write
+wavegraph_fault_write:
+    r2 = __wavegraph_fault_sram
+    r0 = r0 & 60
+    r2 = r2 + r0
+    [r2+0] = r1
+    csync
+    rts

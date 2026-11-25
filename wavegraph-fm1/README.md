@@ -20,9 +20,10 @@ including the [monosynth](../instruments/wavegraph-monosynth/),
 [wavetable synth](../instruments/wavegraph-wavetable/) and
 [chromatic sampler](#chromatic-sampler).
 The transport starts stopped. You can play the panel keys immediately.
-The default build tries to start USB MIDI at boot. The current AC791N BSP
-returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
-`fm1 log` offline. The firmware updater remains available through the bootloader.
+The standard image starts USB MIDI on the tested black FM-1. Select
+**WaveGraph FM-1** in your DAW and enable **Track** in Ableton Live. MIDI
+channels 1–4 play mixer strips 1–4. Run `fm1 log` for a round trip over both
+USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 
 | Monosynth | 303 direct knobs | 303 editing Drive |
 | --- | --- | --- |
@@ -35,7 +36,7 @@ returns `DmaProtectionUnavailable`, so the synth runs locally with USB MIDI and
 | SEL in LFO | Enable or bypass modulation. Each instrument starts bypassed with a 5 Hz sine at 25% depth. |
 | KNOBS 1–4 in LFO | Set waveform, rate, depth and destination. Knob 4 lists the controls available on the assigned instrument. |
 | SELECT in LFO | Clockwise selects tempo divisions from two bars to a sixteenth. Playback start resets the synced waveform. Counterclockwise selects 0.1–20 Hz. |
-| MIDI CC1 | The mod wheel sets the same depth as knob 3 on the addressed channel, from zero to full. SEL remains the bypass switch. USB MIDI uses the existing `qualified-usb` build. |
+| MIDI CC1 | The mod wheel sets the same depth as knob 3 on the addressed channel, from zero to full. SEL remains the bypass switch. |
 | ARP on an instrument | Open that channel’s arpeggiator. ARP or HOME returns to the instrument. PRESETS browses channels while the editor is open. |
 | SEL in ARP | Enable or bypass the displayed channel’s arpeggiator. Each channel starts bypassed. |
 | KNOBS 1–4 in ARP | Set order (up, down, up/down, as played, random), rate (1/4 through 1/32, including triplets), octave range (1–4), and gate (1–100%). |
@@ -605,14 +606,53 @@ change presets. The 303 still discharges its accent capacitor while silent.
 
 [cli]: https://github.com/fm1-rust/fm1-rust/tree/main/fm1-cli
 
-Normal USB MIDI requires a board and host setup qualified for the BSP's
-[`UsbPort::assume_midi_dma` contract][usb-dma]. That covers receive writes
-staying in their programmed arenas, stable ownership across acknowledgements,
-and quiescent transfers through reset, suspend, detach and reconnect.
-For such a bench, build with `./wavegraph-fm1/build.sh --features qualified-usb`.
-The default build exposes the same timing measurements on the LCD.
+### USB MIDI errata
 
-[usb-dma]: https://docs.rs/fm1/0.2.0/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
+The black FM-1 used for the board tests played a note from Live, answered
+`fm1 log` over SysEx, and reappeared in Live after unplugging and reconnecting.
+The ID probe reported WL82 chip ID `0x00006f01` and loader tag `fm1`.
+WaveGraph targets the FM-1 and selects the copied MIDI driver by the full chip
+ID. Other revisions and emulators reporting zero use the BSP's checked
+startup. In `fm1` 0.2.0 that leaves USB detached and the instrument playable.
+The application keeps these assumptions in [USB startup](src/usb_midi.rs).
+The MIDI router, mixer and synths consume safe packet values.
+
+* **USB0 write extent.** A legal 64-byte packet wrote two more CRC bytes. The
+  largest observed write reached offset 1023. The hardware write-window probe
+  allowed all eight boundary crossings. The BSP reserves 2048 data bytes and
+  16 guard bytes per receive area. It assumes USB0 stays within its own areas
+  on every packet and bus transition, including during simultaneous copies.
+* **CPU access.** Redirecting EP0 mid-SETUP split one packet between two
+  buffers. The driver therefore keeps endpoint addresses fixed for the entire
+  boot. A separate WL82 engine transfers payloads in both directions. Rust
+  reads private copies. CRC checks can drop a damaged packet. A CRC collision
+  can still deliver an incorrect event.
+* **Copy completion and faults.** The trusted loader must leave the copy
+  engine idle. WaveGraph gives it and its IRQ to the BSP on CPU0. The driver
+  assumes ordered, bounded transfers and fresh DONE only after all accesses
+  retire. A failed calibration, copy timeout, bus error or changed guard
+  quarantines the engine, detaches USB and panics. No further copy can reuse
+  staging in that boot. WaveGraph saves the copy control/status word in
+  reserved SRAM, commits a CRC-protected record before waiting for clean completion.
+  An out-of-arena write can damage live Rust memory before a guard check runs. [Driver contract][usb-dma] · [Board captures][usb-captures]
+
+A copy fault records the controller status in 64 bytes of reserved SRAM. A clean
+completion permits download mode. A stuck or errored engine stays parked with
+its memory reserved. On the next warm boot the firmware displays a retained
+record before activating MIDI. Power loss can erase it.
+
+**Release decision.** The 65 physical EP1 snapshots each cover 8192 bytes.
+The highest observed changed offset was 1023, inside the ordinary 2048-byte
+data area. Longer-than-advertised writes and a replacement SETUP while READY
+was set are real behavior. Neither observation demonstrates Rust undefined
+behavior in copied MIDI. A concrete counterexample would be a write outside
+the permanent allocation, a copy access to private staging after a fresh DONE
+and SSYNC while CPU0 reuses it, or DMA still accessing memory reassigned by
+a warm reset. No such execution has been demonstrated. The driver accepts
+arbitrary initialized packet bytes, including CRC collisions, as input.
+
+[usb-dma]: https://docs.rs/fm1/0.2.0/fm1/usb_midi/struct.UsbPort.html#method.into_midi_with_dma_copy
+[usb-captures]: https://github.com/fm1-rust/fm1-rust/blob/27703c9184488987e3f4119b176394593861054d/docs/usb-dma/copied-midi.md
 
 ## Four-track mixer and effects
 

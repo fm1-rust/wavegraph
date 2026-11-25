@@ -1,6 +1,6 @@
 [package]
 name = "wavegraph-fm1"
-version = "0.0.0"
+version = "0.2.0"
 edition = "2024"
 rust-version.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ build = "assets/bumper.rs"
 description = "Four assignable WaveGraph channels with synths, 808 and 909 kits, and an oscilloscope for FM-1"
 
 [features]
-default = ["lofi-samples", "packed-cymbals", "packed-samples"]
+default = ["lofi-samples", "packed-cymbals", "packed-samples", "qualified-usb"]
 # Use the compact Amen and lower-rate IMA versions of the two stabs and zap.
 lofi-samples = []
 late-block-probe = []
@@ -21,8 +21,8 @@ packed-cymbals = []
 packed-samples = []
 # A/B the master compressor detector on the same board and factory patch.
 short-detector-probe = ["wavegraph-fx/short-detector-probe"]
-# Requires the board and host qualifications documented in the firmware README.
-qualified-usb = []
+# Copied USB MIDI on the measured FM-1 silicon revision.
+qualified-usb = ["dep:fm1"]
 
 [dependencies]
 fm1-assets.workspace = true
@@ -47,6 +47,7 @@ wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
+fm1 = { version = "0.2.0", optional = true, features = ["usb-midi-copy"] }
 wavegraph-fm1-core = { path = "../wavegraph-fm1-core" }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 futures-util = { version = "0.3", default-features = false }
