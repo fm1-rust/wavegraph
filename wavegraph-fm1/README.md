@@ -431,8 +431,10 @@ Focus the source strip in **GLO**, press **EDIT** to open **PCM CLIPBOARD**,
 then press **REC** to arm. With transport stopped, play a chord to start the
 take. During playback it starts on the next bar. Knob **1** selects one beat
 or one, two or four bars. Knob **2** sets the note that will replay the chord
-at its recorded pitch. Press **REC** again to cancel while armed or finish a
-take early. Capture taps the instrument before its strip effects and fader.
+at its recorded pitch. You can change both settings while armed. Once recording
+starts, the knobs set the length and root for the next take. Press **REC** again
+to cancel while armed or finish a take early. Capture taps the instrument before
+its strip effects and fader.
 
 On any **SAMPLER** strip, select **CLIPBOARD** with **ALGORITHM** (one click
 back from the Amen), or press **SEL** on the clipboard page. Play a new chord

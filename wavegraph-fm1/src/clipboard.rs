@@ -40,9 +40,10 @@ impl Options {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Request {
-    pub serial: u32,
-    pub source: Channel,
-    pub assignment: Assignment,
+    serial: u32,
+    source: Channel,
+    assignment: Assignment,
+    /// The recorder latches the current length and root at the first recorded frame.
     pub options: Options,
 }
 
@@ -54,13 +55,10 @@ impl Request {
         options: Options::INITIAL,
     };
 
-    pub fn press(&mut self, source: Channel, assignment: Assignment, options: Options) {
-        *self = Self {
-            serial: self.serial.wrapping_add(1),
-            source,
-            assignment,
-            options,
-        };
+    pub fn press(&mut self, source: Channel, assignment: Assignment) {
+        self.serial = self.serial.wrapping_add(1);
+        self.source = source;
+        self.assignment = assignment;
     }
 }
 
@@ -99,7 +97,7 @@ pub(super) struct Status {
 pub(super) struct Recorder {
     pub status: Status,
     serial: u32,
-    armed: Request,
+    root: u8,
     rate: (u32, u32),
     remaining: u32,
     divisor: u16,
@@ -114,7 +112,7 @@ impl Recorder {
         Self {
             status: Status::default(),
             serial: 0,
-            armed: Request::INITIAL,
+            root: Options::INITIAL.root,
             rate,
             remaining: 0,
             divisor: 1,
@@ -137,7 +135,6 @@ impl Recorder {
             State::Armed => self.status.state = State::Idle,
             State::Recording => self.finish(),
             _ => {
-                self.armed = request;
                 self.status.state = State::Armed;
                 self.status.source = request.source;
             }
@@ -148,8 +145,9 @@ impl Recorder {
         clippy::arithmetic_side_effects,
         reason = "Nonzero validated audio clock, tempo and capacity; 16 beats fit the 64-bit numerator."
     )]
-    fn begin(&mut self, bpm: u16) {
-        let frames = (u64::from(self.rate.0) * 60 * u64::from(self.armed.options.beats()))
+    fn begin(&mut self, bpm: u16, options: Options) {
+        self.root = options.root;
+        let frames = (u64::from(self.rate.0) * 60 * u64::from(options.beats()))
             .div_ceil(u64::from(self.rate.1) * u64::from(bpm));
         self.remaining = u32::try_from(frames).expect("FM-1 capture length");
         self.divisor = u16::try_from(frames.div_ceil(FRAMES as u64)).expect("bounded decimation");
@@ -183,7 +181,7 @@ impl Recorder {
             serial: self.serial,
             frames: self.written,
             hz: self.hz,
-            root: self.armed.options.root,
+            root: self.root,
         });
         self.status.state = State::Idle;
     }
@@ -206,9 +204,9 @@ impl Recorder {
         if !matches!(self.status.state, State::Armed | State::Recording) {
             return;
         }
-        let source = self.armed.source;
+        let source = request.source;
         let track = &tracks[source.index()];
-        if track.assignment != self.armed.assignment {
+        if track.assignment != request.assignment {
             self.status.state = State::Interrupted;
             return;
         }
@@ -224,7 +222,7 @@ impl Recorder {
                 input.iter().position(|s| s.inner().unsigned_abs() >= 256)
             };
             let Some(start) = start else { return };
-            self.begin(transport.bpm);
+            self.begin(transport.bpm, request.options);
             input = &input[start..];
         }
         for sample in input {

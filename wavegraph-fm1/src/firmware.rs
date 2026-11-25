@@ -57,7 +57,7 @@ impl Settings {
         let track = self.tracks[channel.index()];
         Labels {
             channel,
-            clip_options: self.nav.clip_options,
+            clip_options: self.nav.clip_request.options,
             assignments: self.nav.assignments.map(|assignment| assignment.part),
             voice: track.voice,
             lfo: track.lfo,
@@ -668,17 +668,15 @@ mod app {
                 self.nav.preset_since = None;
             }
             if self.nav.view == View::Clipboard {
-                self.nav.clip_options.turn(
+                self.nav.clip_request.options.turn(
                     scan.encoder_delta(Encoder::Knob1),
                     scan.encoder_delta(Encoder::Knob2),
                 );
                 if scan.pressed(Button::Rec) {
                     let source = self.nav.focus;
-                    self.nav.clip_request.press(
-                        source,
-                        self.nav.assignments[source.index()],
-                        self.nav.clip_options,
-                    );
+                    self.nav
+                        .clip_request
+                        .press(source, self.nav.assignments[source.index()]);
                 }
             }
             let rec = scan.pressed(Button::Rec) && self.nav.view != View::Clipboard;

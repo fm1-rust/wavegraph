@@ -192,3 +192,34 @@ fn a_latched_kit_owns_only_its_lane_and_panic_preserves_held_panel_keys() -> Res
         Ok(())
     })
 }
+
+#[test]
+fn entering_and_leaving_amen_slice_mode_releases_the_arps_previous_midi_pitch() -> Result<(), Error>
+{
+    with_instrument(8_000, |rack| {
+        let mut keys = Keyboard::<4>::new();
+        let channel = Channel::One;
+        let assignment = Assignment::new(Part::Sampler);
+        keys.nav.assignments[0] = assignment;
+        keys.tracks[0] = Track::new(assignment);
+        keys.tracks[0].turn_select(12);
+        keys.tracks[0].arp.enabled = true;
+        keys.press(note(60, 100));
+        let mut buses = [[I24::default(); 128]; BUS_COUNT];
+        let mut messages = |keys: &mut Keyboard<4>| -> Result<Output<_>, Error> {
+            Ok(play(keys, rack, &mut buses)?
+                .into_iter()
+                .filter_map(|(c, e)| (c == channel).then_some(e.message))
+                .collect())
+        };
+        assert_eq!(messages(&mut keys)?, [MidiAction::On(note(72, 100))]);
+        for (mode, before, after) in [(3, 72, 60), (-3, 60, 72)] {
+            keys.tracks[0].edit_panel(View::SampleEdit, 0, [mode, 0, 0, 0], false);
+            assert_eq!(
+                messages(&mut keys)?,
+                [MidiAction::Off(before), MidiAction::On(note(after, 100))]
+            );
+        }
+        Ok(())
+    })
+}
