@@ -16,7 +16,7 @@ use fm1_graphics::embedded_graphics::{
     geometry::Point,
     mono_font::MonoTextStyle,
     pixelcolor::{
-        Gray2,
+        Gray2, IntoStorage,
         raw::{BigEndian, RawU2, ToBytes},
     },
     text::{Baseline, Text},
@@ -100,6 +100,11 @@ impl Screen {
         clock: &mut Clock,
         start_cue: impl FnOnce(),
     ) -> Result<(), Error> {
+        // The first completed LCD window turns the panel on. Initialize every pixel
+        // before painting the boot waveform in eight-row strips.
+        lcd.as_async(clock)?
+            .fill_rect(0, 0, SIZE, SIZE, BOOT_STYLE.background.into_storage())
+            .await?;
         // A phase-modulated sine with a second harmonic. One sample per LCD column.
         let trace: Trace = core::array::from_fn(|x| {
             let t = x as f32 / WIDTH as f32;
