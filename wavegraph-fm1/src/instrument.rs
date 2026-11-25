@@ -59,6 +59,8 @@ pub(super) const CUTOFF_HZ: [u16; MAX_CUTOFF_STEP as usize + 1] = [
     7937, 8909, 10000, 11225, 12599, 14142, 15874, 17818, 20000,
 ];
 
+/// Keep these discriminants stable for sequencer banks and recorded edits.
+/// GLO uses `Part::ALL` for its alphabetical display order.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Part {
     #[default]
@@ -74,16 +76,17 @@ pub(super) enum Part {
 }
 
 impl Part {
+    /// Keep the GLO instrument list in alphabetical order by its on-screen name.
     pub(super) const ALL: [Self; 9] = [
-        Self::Mono,
-        Self::Organ,
-        Self::Bass,
-        Self::Tr909,
-        Self::Tr808,
-        Self::Supersaw,
-        Self::Wavetable,
         Self::Fm,
+        Self::Organ,
+        Self::Mono,
         Self::Sampler,
+        Self::Supersaw,
+        Self::Bass,
+        Self::Tr808,
+        Self::Tr909,
+        Self::Wavetable,
     ];
 
     pub(super) const fn is_kit(self) -> bool {
@@ -156,17 +159,25 @@ impl Part {
         }
     }
 
+    fn picker_index(self) -> i8 {
+        let row = Self::ALL
+            .iter()
+            .position(|&part| part == self)
+            .expect("instrument in GLO picker");
+        i8::try_from(row).expect("small instrument catalog")
+    }
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "A part index plus an i8 fits i16"
     )]
     pub(super) fn turn(&mut self, detents: i8) {
-        let index = (i16::from(*self as u8) + i16::from(detents))
+        let index = (i16::from(self.picker_index()) + i16::from(detents))
             .rem_euclid(i16::try_from(Self::ALL.len()).expect("small catalog"));
         *self = Self::ALL[usize::try_from(index).expect("wrapped instrument index")];
     }
 
-    #[cfg(target_os = "none")]
+    #[cfg(any(target_os = "none", test))]
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Mono => "MONOSYNTH",
@@ -1755,6 +1766,15 @@ mod tests {
         dynamics_enabled: false,
         ..Fx::INITIAL
     };
+
+    fn select_instrument(nav: &mut Navigation, target: Part) {
+        nav.turn(
+            0,
+            target
+                .picker_index()
+                .saturating_sub(nav.part().picker_index()),
+        );
+    }
 
     #[test]
     fn edit_page_cycles_each_polysynth_and_recalls_its_chord() {
@@ -3436,8 +3456,7 @@ mod tests {
             let mut keys = Keyboard::<4>::new();
             keys.nav.press(PageButton::Glo);
             keys.nav.turn(1, 0);
-            let steps = (Part::Fm as i8).saturating_sub(keys.nav.part() as i8);
-            keys.nav.turn(0, steps);
+            select_instrument(&mut keys.nav, Part::Fm);
             assert_eq!(keys.nav.part(), Part::Fm);
             let channel = keys.nav.focus;
             let i = channel.index();
@@ -3550,7 +3569,7 @@ mod tests {
                 let i = channel.index();
                 nav.turn(1, 0);
                 assert_eq!((nav.view, nav.focus), (View::Channel, channel));
-                nav.turn(0, [3, 3, 1, 2][i]);
+                select_instrument(&mut nav, Part::Supersaw);
                 assert_eq!(nav.part(), Part::Supersaw);
                 tracks[i] = Track::factory(channel, nav.assignments[i]);
                 assert!(tracks[i].voice_tap);
@@ -3610,7 +3629,7 @@ mod tests {
                     // Swapping away during a held note discards only this engine.
                     nav.press(PageButton::Glo);
                     nav.turn(1, 0);
-                    nav.turn(0, -(Part::Supersaw as i8));
+                    select_instrument(&mut nav, Part::Mono);
                     assert_eq!(nav.part(), Part::Mono);
                     keys.clear(Channel::Four);
                     tracks[3] = Track::factory(Channel::Four, nav.assignments[3]);
@@ -3749,7 +3768,7 @@ mod tests {
             for channel in Channel::ALL {
                 let i = channel.index();
                 nav.turn(1, 0);
-                nav.turn(0, [4, 4, 2, 3][i]);
+                select_instrument(&mut nav, Part::Wavetable);
                 assert_eq!((nav.focus, nav.part()), (channel, Part::Wavetable));
                 let track = &mut tracks[i];
                 *track = Track::factory(channel, nav.assignments[i]);

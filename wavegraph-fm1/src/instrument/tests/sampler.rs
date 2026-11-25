@@ -16,8 +16,7 @@ fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> 
             keys.nav.view = View::Scope;
             keys.nav.press(PageButton::Glo);
             keys.nav.turn(1, 0);
-            let steps = (Part::Sampler as i8).saturating_sub(keys.nav.part() as i8);
-            keys.nav.turn(0, steps);
+            select_instrument(&mut keys.nav, Part::Sampler);
             assert_eq!(keys.nav.part(), Part::Sampler);
             keys.tracks[channel.index()] =
                 Track::factory(channel, keys.nav.assignments[channel.index()]);
