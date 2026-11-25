@@ -1,7 +1,7 @@
 [package]
 name = "wavegraph-audio"
 description = "Audio device routing and block I/O for WaveGraph"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 rust-version.workspace = true
 license.workspace = true
@@ -19,8 +19,8 @@ fm1-audio = { workspace = true, optional = true }
 sdl3 = { version = "0.22.1", features = ["use-pkg-config"], optional = true }
 
 [dev-dependencies]
-wavegraph-dsp = { version = "0.1", path = "../wavegraph-dsp" }
-wavegraph-monosynth = { version = "0.1", path = "../instruments/wavegraph-monosynth" }
+wavegraph-dsp = { version = "0.0.0", path = "../wavegraph-dsp" }
+wavegraph-monosynth = { version = "0.0.0", path = "../instruments/wavegraph-monosynth" }
 wavegraph-sample.workspace = true
 
 [[example]]

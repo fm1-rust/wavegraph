@@ -1,7 +1,7 @@
 [package]
 name = "wavegraph-fm"
 description = "Four-voice, two-operator FM synthesizer for WaveGraph"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 rust-version.workspace = true
 license.workspace = true

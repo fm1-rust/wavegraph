@@ -1,7 +1,7 @@
 [package]
 name = "wavegraph-lfo"
 description = "A frame-clocked control-rate LFO for WaveGraph patches"
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 rust-version.workspace = true
 license.workspace = true

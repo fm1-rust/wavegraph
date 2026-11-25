@@ -573,7 +573,7 @@ and quiescent transfers through reset, suspend, detach and reconnect.
 For such a bench, build with `./wavegraph-fm1/build.sh --features qualified-usb`.
 The default build exposes the same timing measurements on the LCD.
 
-[usb-dma]: https://docs.rs/fm1/0.2.0-rc.2/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
+[usb-dma]: https://docs.rs/fm1/0.2.0/fm1/usb_midi/struct.UsbPort.html#method.assume_midi_dma
 
 ## Four-track mixer and effects
 
@@ -889,10 +889,9 @@ WaveGraph workspace root run
 
 Both files are written to `target/pi32v2-none/firmware/`. The build reports
 both file sizes, the asset address, the end of the install and the whole sectors
-available for growth. Cargo.lock selects `fm1` 0.2.0-rc.2, `fm1-audio`,
-`fm1-graphics` and `fm1-rticx` 0.2.0-rc.1, and `fm1-assets` and
-`fm1-controls` 0.2.0-rc.0.
-CI and release builds use the pi32v2 workflow from the `fm1-rticx` 0.2.0-rc.1 tag.
+available for growth. `Cargo.lock` selects `fm1-audio` 0.2.1 and `fm1`, `fm1-assets`,
+`fm1-controls`, `fm1-graphics` and `fm1-rticx` 0.2.0.
+CI and release builds use the pi32v2 workflow from the `fm1-rticx/v0.2.0` tag.
 
 By default the build packs the 909 closed hat, open hat and ride from their
 original `.s16le` files. In each group of 32 samples it stores only the bits
@@ -957,14 +956,14 @@ or the [MIT License](LICENSE-MIT).
 [sh101]: https://support.roland.com/hc/en-us/articles/201921519-SH-101-Technical-Specifications
 [tb03]: https://static.roland.com/assets/media/pdf/TB-03_e02_W.pdf
 [korg-m1]: https://www.korg.com/us/products/software/kc_m1/
-[fm1-graphics]: https://docs.rs/fm1-graphics/0.2.0-rc.0/fm1_graphics/
+[fm1-graphics]: https://docs.rs/fm1-graphics/0.2.0/fm1_graphics/
 [firmware workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/wavegraph-fm1.yml
 [release workflow]: https://github.com/fm1-rust/wavegraph/actions/workflows/release-fm1.yml
 [WaveGraph browser emulator]: https://wavegraph.org/
 [flasher-install]: https://github.com/jvitkauskas/m-flasher/blob/8fbece7348d758ac284325eed455781675ac95ff/src/ops.rs#L360-L405
 [flash-layout]: https://sbegueria.github.io/fm1-dev-wiki/Flash-Storage.html
 [fm1-emu]: https://github.com/joakimeriksson/fm1-emu
-[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/f360cf357a71b9a3f59ed0f68c8e33a3ac3aa0d7/fm1/README.md#build-and-flash
+[FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/4c6a3fe082ec013ff594a06b8cd377a65bd96ffb/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
 

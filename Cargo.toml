@@ -19,21 +19,17 @@ rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
 
 [workspace.dependencies]
-fm1-assets = { version = "0.2.0-rc.0", default-features = false }
-fm1-graphics = { version = "0.2.0-rc.1", features = ["embedded-graphics"] }
-fm1-rticx = "0.2.0-rc.1"
-fm1-audio = "0.2.0-rc.1"
+fm1-assets = { version = "0.2.0", default-features = false }
+fm1-graphics = { version = "0.2.0", features = ["embedded-graphics"] }
+fm1-rticx = "0.2.0"
+fm1-audio = "0.2.1"
 heapless = { version = "0.9.4", default-features = false }
-wavegraph-adsr = { version = "0.1", path = "wavegraph-adsr" }
-wavegraph-arp = { version = "0.1", path = "wavegraph-arp" }
-wavegraph-lfo = { version = "0.1", path = "wavegraph-lfo" }
-wavegraph-core = { version = "0.1", path = "wavegraph-core" }
-wavegraph-fx = { version = "0.1", path = "wavegraph-fx" }
-wavegraph-sample = { version = "0.1", path = "wavegraph-sample", default-features = false }
-
-[patch.crates-io]
-# Share the workspace PCM type with the FM-1 audio mixer.
-wavegraph-sample = { path = "wavegraph-sample" }
+wavegraph-adsr = { version = "0.0.0", path = "wavegraph-adsr" }
+wavegraph-arp = { version = "0.0.0", path = "wavegraph-arp" }
+wavegraph-lfo = { version = "0.0.0", path = "wavegraph-lfo" }
+wavegraph-core = { version = "0.0.0", path = "wavegraph-core" }
+wavegraph-fx = { version = "0.0.0", path = "wavegraph-fx" }
+wavegraph-sample = { version = "0.2.0-pre", path = "wavegraph-sample", default-features = false }
 
 [workspace.lints.clippy]
 arithmetic_side_effects = "warn"

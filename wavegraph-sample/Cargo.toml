@@ -1,6 +1,6 @@
 [package]
 name = "wavegraph-sample" # Forked from RustAudio's `dasp_sample`
-version = "0.1.0"
+version = "0.2.0-pre"
 authors = [
     "WaveGraph Developers",
     "mitchmindtree <mitchell.nordine@gmail.com>"

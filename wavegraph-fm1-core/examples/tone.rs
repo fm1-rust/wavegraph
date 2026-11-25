@@ -17,10 +17,10 @@ fn panic(_: &core::panic::PanicInfo<'_>) -> ! {
 
 #[cfg(target_os = "none")]
 mod synth {
-    use fm1_audio::I24;
     use wavegraph_dsp::{Event, bytecode::Patch, dsp::Software};
     use wavegraph_fm1_core::{OUTPUT_FRAMES, Render};
     use wavegraph_monosynth::{Message, Monosynth};
+    use wavegraph_sample::I24;
 
     pub(super) struct Tone(pub(super) Patch<'static, 'static, Message, I24, 1, Monosynth<'static>>);
     impl Render for Tone {
