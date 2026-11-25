@@ -183,6 +183,7 @@ fn insert(
         Insert::Saturator(_) => "SAT",
         Insert::Phaser(_) => "PHASER",
         Insert::Flanger(_) => "FLANGER",
+        Insert::Chorus(_) => "CHORUS",
         Insert::Eq(_) => "EQ",
         Insert::None => "NONE",
     };
@@ -251,6 +252,27 @@ fn insert(
                 let position = (i16::from(db) + 12) * 128 / 24;
                 dial(x, name, u8::try_from(position).expect("Q7 dial"), &text);
             }
+        }
+        Insert::Chorus(fx) => {
+            let mhz = 150 + 12 * u16::from(fx.rate);
+            let text =
+                heapless::format!(6; "{}.{:02}", mhz / 1000, (mhz % 1000) / 10).expect("rate");
+            dial(104, "1 HZ", fx.rate, &text);
+            for (x, name, value) in [(143, "2 DEP", fx.depth), (182, "3 TONE", fx.tone)] {
+                dial(
+                    x,
+                    name,
+                    value,
+                    str::from_utf8(&percent(value)).expect("ASCII percent"),
+                );
+            }
+            let mix = heapless::format!(5; "{}%", fx.mix).expect("percent");
+            dial(
+                221,
+                "4 MIX",
+                u8::try_from(u16::from(fx.mix) * 128 / 100).expect("Q7"),
+                &mix,
+            );
         }
         Insert::Phaser(fx) | Insert::Flanger(fx) => {
             let rate = fx.centihz();

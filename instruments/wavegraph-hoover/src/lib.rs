@@ -2,12 +2,11 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
-mod chorus;
 mod envelope;
-use chorus::Chorus;
 use envelope::{Envelope, Timing};
 use wavegraph_core::{Port, Process, ProcessContext, midi::Note, polyphony::Keyboard};
 pub use wavegraph_core::{Tuning, polyphony::VoiceMode};
+use wavegraph_fx::{Chorus, ChorusControls};
 use wavegraph_sample::FromSample;
 
 /// Number of simultaneous oscillator and envelope pairs.
@@ -245,7 +244,6 @@ pub struct Hoover<'a> {
     timing: Timing,
     pwm_phase: u32,
     pwm_step: u32,
-    chorus_step: u32,
     chorus: Chorus,
     noise: u32,
     cutoff: f32,
@@ -266,7 +264,6 @@ impl<'a> Hoover<'a> {
             timing: Timing::new(patch.times, patch.levels, period),
             pwm_phase: 0,
             pwm_step: 0,
-            chorus_step: 0,
             chorus: Chorus::new(period),
             noise: 1,
             cutoff: 0.0,
@@ -292,7 +289,11 @@ impl<'a> Hoover<'a> {
             period,
         );
         self.pwm = 0.94 * f32::from(p.pwm.min(127)) / 127.0;
-        self.chorus_step = Self::rate(0.15 + f32::from(p.chorus.min(127)) * 0.012, period);
+        self.chorus.set_controls(ChorusControls {
+            rate: p.chorus,
+            enabled: p.chorus != 0,
+            ..ChorusControls::INITIAL
+        });
     }
     fn strike(&mut self, i: usize, note: Note, step: u32) {
         let v = &mut self.voices[i];
@@ -391,8 +392,7 @@ impl<'a> Hoover<'a> {
                 );
             }
         }
-        self.chorus
-            .sample(sum, self.chorus_step, self.patch.chorus != 0)
+        self.chorus.stereo_frame(sum)
     }
     fn render<S: FromSample<f32>>(&mut self, out: &mut [S]) {
         for frame in out {

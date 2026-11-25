@@ -16,9 +16,10 @@ pub use delay::Delay;
 pub use ducker::SidechainDucker;
 pub use eq::{EqControls, ThreeBandEq};
 pub use insert::{
-    FILTER_PATTERNS, FilterMode, FilterPattern, Flanger, ModulationControls,
-    ModulationControls as FlangerControls, ModulationControls as PhaserControls, PatternFilter,
-    PatternFilterControls, Phaser, Saturator, SaturatorControls,
+    Chorus, ChorusControls, FILTER_PATTERNS, FilterMode, FilterPattern, Flanger,
+    ModulationControls, ModulationControls as FlangerControls,
+    ModulationControls as PhaserControls, PatternFilter, PatternFilterControls, Phaser, Saturator,
+    SaturatorControls,
 };
 pub use master::{Dynamics, MasterBus, MasterControls};
 pub use mixer::{ChannelMixer, MixerMessage};
@@ -61,6 +62,8 @@ pub enum Message {
     Eq(EqControls),
     /// Phaser controls.
     Phaser(PhaserControls),
+    /// Parallel-tap chorus controls.
+    Chorus(ChorusControls),
     /// Flanger controls.
     Flanger(FlangerControls),
     /// Resonant pattern filter and envelope settings.
