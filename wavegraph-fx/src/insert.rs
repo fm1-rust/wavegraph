@@ -1,5 +1,7 @@
 //! Small, allocation-free Q23 insert effects.
 
+mod chorus;
+pub use chorus::{Chorus, ChorusControls};
 mod flanger;
 mod pattern_filter;
 pub use flanger::Flanger;
@@ -282,6 +284,7 @@ macro_rules! node {
 }
 node!(Saturator, Saturator => set_controls);
 node!(Phaser, Phaser => set_controls);
+node!(Chorus, Chorus => set_controls, Enabled => set_enabled);
 node!(Flanger, Flanger => set_controls, Enabled => set_enabled);
 node!(super::ThreeBandEq, Eq => set_controls);
 node!(PatternFilter, PatternFilter => set_controls, FilterTrigger => trigger, Enabled => set_enabled);

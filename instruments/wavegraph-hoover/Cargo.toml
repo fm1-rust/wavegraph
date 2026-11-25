@@ -10,6 +10,7 @@ categories = ["embedded", "multimedia::audio", "no-std"]
 keywords = ["audio", "dsp", "synthesizer", "hoover"]
 
 [dependencies]
+wavegraph-fx.workspace = true
 wavegraph-core.workspace = true
 wavegraph-sample.workspace = true
 

@@ -5,6 +5,7 @@ on:
     paths: &wavegraph-hoover-paths
       - 'instruments/wavegraph-hoover/**'
       - 'wavegraph-core/**'
+      - 'wavegraph-fx/**'
       - 'wavegraph-sample/**'
       - 'Cargo.toml'
       - 'Cargo.lock'

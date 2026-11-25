@@ -1,4 +1,4 @@
-//! A one-bit ink mask over the live scope.
+//! Picker rows composited over the live scope from flash-backed GRID glyphs.
 
 use super::{InstrumentStyle, lettering::GRID, style::RowColors};
 use crate::{
@@ -8,15 +8,7 @@ use crate::{
     scope::Window,
 };
 use core::ops::Range;
-use fm1_graphics::embedded_graphics::{
-    Drawable, Pixel,
-    framebuffer::{Framebuffer, buffer_size},
-    pixelcolor::{
-        BinaryColor, RgbColor,
-        raw::{BigEndian, RawU1, ToBytes},
-    },
-    prelude::{DrawTarget, Point},
-};
+use fm1_graphics::embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle};
 
 // Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the selection arrow.
@@ -28,12 +20,10 @@ pub(super) const RIGHT: usize = LEFT + WIDTH;
 pub(super) const TOP: usize = (crate::capture::WIDTH - HEIGHT) / 2;
 pub(super) const BOTTOM: usize = TOP + HEIGHT;
 
-type Mask<const H: usize, const BYTES: usize> =
-    Framebuffer<BinaryColor, RawU1, BigEndian, WIDTH, H, BYTES>;
-
-fn marked(mask: &[u8], x: usize, y: usize) -> bool {
-    let i = y * WIDTH + x;
-    mask[i / 8] & (0x80 >> (i % 8)) != 0
+fn letter_ink(label: &[u8], x: usize, y: usize) -> bool {
+    label
+        .get(x / GRID.width)
+        .is_some_and(|&byte| GRID.glyph(byte).coverage(x % GRID.width, y) >= 2)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -61,7 +51,7 @@ impl Menu {
 
 pub(super) struct Selector {
     menu: Option<Menu>,
-    mask: Mask<HEIGHT, { buffer_size::<BinaryColor>(WIDTH, HEIGHT) }>,
+    labels: [&'static [u8]; Part::ALL.len()],
     rows: [RowColors; 2],
     selected_top: usize,
 }
@@ -75,7 +65,7 @@ impl Selector {
     pub(super) fn new() -> Self {
         Self {
             menu: None,
-            mask: Mask::new(),
+            labels: [&[]; Part::ALL.len()],
             rows: Self::GLOBAL,
             selected_top: 0,
         }
@@ -89,9 +79,6 @@ impl Selector {
         self.menu = menu;
         if let Some(menu) = menu {
             self.rows = rows;
-            self.mask
-                .clear(BinaryColor::Off)
-                .expect("infallible framebuffer");
             for (row, y) in menu.mask_rows().step_by(ROW_HEIGHT).enumerate() {
                 let (name, active) = match menu {
                     Menu::Channels { parts, focus } => (parts[row].name(), row == focus.index()),
@@ -104,38 +91,13 @@ impl Selector {
                         (kind.name(), kind == active)
                     }
                 };
-                let text_y = y + (ROW_HEIGHT - GRID.height) / 2;
+                self.labels[row] = name.as_bytes();
                 if active {
                     self.selected_top = y;
-                    self.label(WIDTH - GRID.width, text_y, ">");
                 }
-                let left = if matches!(menu, Menu::Channels { .. }) {
-                    self.label(8, text_y, ["1", "2", "3", "4"][row]);
-                    24
-                } else {
-                    8
-                };
-                self.label(left, text_y, name);
             }
         }
         true
-    }
-
-    fn label(&mut self, x: usize, y: usize, text: &str) {
-        for (i, byte) in text.bytes().enumerate() {
-            let glyph = GRID.glyph(byte);
-            let left = x + i * glyph.width;
-            for dy in 0..glyph.height {
-                for dx in 0..glyph.width {
-                    if glyph.coverage(dx, dy) >= 2 {
-                        let point = Point::new((left + dx) as i32, (y + dy) as i32);
-                        Pixel(point, BinaryColor::On)
-                            .draw(&mut self.mask)
-                            .expect("infallible framebuffer");
-                    }
-                }
-            }
-        }
     }
 
     pub(super) fn visible(&self) -> bool {
@@ -204,15 +166,22 @@ impl Selector {
 
     fn ink(&self, x: usize, y: usize) -> Option<Rgb565> {
         let (x, y) = (x - LEFT, y - TOP);
-        if !self.menu?.mask_rows().contains(&y) {
+        let menu = self.menu?;
+        let rows = menu.mask_rows();
+        if !rows.contains(&y) {
             return None;
         }
         let active = (self.selected_top..self.selected_top + ROW_HEIGHT).contains(&y);
         let row = self.rows[usize::from(active)];
-        Some(if marked(self.mask.data(), x, y) {
-            row.ink
-        } else {
-            row.fill
-        })
+        let local = y - rows.start;
+        let index = local / ROW_HEIGHT;
+        let text_y = (local % ROW_HEIGHT).wrapping_sub((ROW_HEIGHT - GRID.height) / 2);
+        let channels = matches!(menu, Menu::Channels { .. });
+        let left = if channels { 24 } else { 8 };
+        let marked = text_y < GRID.height
+            && (letter_ink(self.labels[index], x.wrapping_sub(left), text_y)
+                || (active && letter_ink(b">", x.wrapping_sub(WIDTH - GRID.width), text_y))
+                || (channels && letter_ink(&b"1234"[index..=index], x.wrapping_sub(8), text_y)));
+        Some(if marked { row.ink } else { row.fill })
     }
 }

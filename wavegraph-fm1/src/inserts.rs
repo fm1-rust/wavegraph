@@ -8,16 +8,21 @@ use crate::{
 use heapless::Vec;
 use wavegraph_dsp::{Event, Port, Process, ProcessContext};
 use wavegraph_fx::{
-    Flanger, Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq,
+    Chorus, Flanger, Message as FxMessage, Phaser, Saturator, SidechainDucker, ThreeBandEq,
 };
 use wavegraph_sample::I24;
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Each assignable slot owns its delay storage without a heap."
+)]
 #[derive(Clone, Copy)]
 enum Processor {
     None,
     Compressor(SidechainDucker),
     Saturator(Saturator),
     Phaser(Phaser),
+    Chorus(Chorus),
     Flanger(Flanger),
     Eq(ThreeBandEq),
 }
@@ -30,6 +35,7 @@ impl Processor {
             Self::Saturator(_) => InsertKind::Saturator,
             Self::Phaser(_) => InsertKind::Phaser,
             Self::Flanger(_) => InsertKind::Flanger,
+            Self::Chorus(_) => InsertKind::Chorus,
             Self::Eq(_) => InsertKind::Eq,
         }
     }
@@ -37,6 +43,8 @@ impl Processor {
     fn new(kind: InsertKind, rate_hz: u32, factory: SidechainDucker, eq: ThreeBandEq) -> Self {
         match kind {
             InsertKind::None => Self::None,
+            #[allow(clippy::cast_precision_loss)]
+            InsertKind::Chorus => Self::Chorus(Chorus::new(1.0 / rate_hz as f32)),
             InsertKind::Eq => Self::Eq(eq),
             InsertKind::Compressor => Self::Compressor(factory),
             InsertKind::Saturator => Self::Saturator(Saturator::new()),
@@ -229,6 +237,14 @@ impl Process<Message, I24> for ChannelInserts {
                         }
                     }
                     (Processor::Flanger(fx), Insert::Flanger(settings)) => {
+                        if changed[i][slot] {
+                            fx.set_controls(settings);
+                        }
+                        for sample in &mut *strip {
+                            *sample = fx.tick(*sample);
+                        }
+                    }
+                    (Processor::Chorus(fx), Insert::Chorus(settings)) => {
                         if changed[i][slot] {
                             fx.set_controls(settings);
                         }

@@ -13,6 +13,9 @@ two-input send-only node.
   `Message::TimeMs` sets echo spacing and `Message::Feedback` sets the fraction
   fed back (0–95%). Zero feedback gives a single echo. Changes to the time
   crossfade the live taps over 64 frames.
+- `Chorus` shares the Fast Hoover stereo ensemble. Two opposing triangle-modulated
+  taps read one filtered delay line. Set rate, depth, wet-path tone and mix with
+  `Message::Chorus`. Use `stereo_frame` for stereo or `Process` for a mono strip.
 - `Flanger::new(rate_hz)` mixes the dry signal with a fractionally delayed
   copy. A 0.10–3.94 Hz triangle LFO sweeps a 64-sample PCM16 line. At full
   depth the delay runs from one sample to 2 ms, up to 63 samples. Send

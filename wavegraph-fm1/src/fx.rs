@@ -4,8 +4,8 @@ use crate::instrument::{Message, Part, at};
 use heapless::Vec;
 use wavegraph_dsp::Event;
 use wavegraph_fx::{
-    Delay, Dynamics, EqControls, FlangerControls, MasterControls, Message as FxMessage,
-    PhaserControls, SaturatorControls,
+    ChorusControls, Delay, Dynamics, EqControls, FlangerControls, MasterControls,
+    Message as FxMessage, PhaserControls, SaturatorControls,
 };
 
 // Shared by the delay-line allocation, panel clamp and rack readout.
@@ -127,16 +127,18 @@ pub(super) enum InsertKind {
     Phaser,
     Flanger,
     Eq,
+    Chorus,
 }
 
 impl InsertKind {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::None,
         Self::Compressor,
         Self::Saturator,
         Self::Phaser,
         Self::Flanger,
         Self::Eq,
+        Self::Chorus,
     ];
 
     pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
@@ -165,6 +167,7 @@ impl InsertKind {
             Self::Saturator => "SATURATOR",
             Self::Phaser => "PHASER",
             Self::Flanger => "FLANGER",
+            Self::Chorus => "CHORUS",
             Self::Eq => "3-BAND EQ",
         }
     }
@@ -183,6 +186,7 @@ impl InsertKind {
             Self::Saturator => Insert::Saturator(SaturatorControls::INITIAL),
             Self::Phaser => Insert::Phaser(PhaserControls::INITIAL),
             Self::Flanger => Insert::Flanger(FlangerControls::INITIAL),
+            Self::Chorus => Insert::Chorus(ChorusControls::INITIAL),
             Self::Eq => Insert::Eq(EqControls::INITIAL),
         }
     }
@@ -195,6 +199,7 @@ pub(super) enum Insert {
     Saturator(SaturatorControls),
     Phaser(PhaserControls),
     Flanger(FlangerControls),
+    Chorus(ChorusControls),
     Eq(EqControls),
 }
 
@@ -217,6 +222,7 @@ impl Insert {
             Self::Saturator(_) => InsertKind::Saturator,
             Self::Phaser(_) => InsertKind::Phaser,
             Self::Flanger(_) => InsertKind::Flanger,
+            Self::Chorus(_) => InsertKind::Chorus,
             Self::Eq(_) => InsertKind::Eq,
         }
     }
@@ -233,6 +239,7 @@ impl Insert {
             Self::Compressor(fx) => fx.enabled,
             Self::Saturator(fx) => fx.enabled,
             Self::Phaser(fx) | Self::Flanger(fx) => fx.enabled,
+            Self::Chorus(fx) => fx.enabled,
             Self::Eq(fx) => fx.enabled,
         }
     }
@@ -247,6 +254,13 @@ impl Insert {
                 turn(&mut fx.mix, knobs[1]);
                 turn(&mut fx.level, knobs[2]);
                 turn(&mut fx.shape, knobs[3]);
+                fx.enabled ^= toggle;
+            }
+            Self::Chorus(fx) => {
+                fx.rate = fx.rate.saturating_add_signed(knobs[0]).min(127);
+                turn(&mut fx.depth, knobs[1]);
+                turn(&mut fx.tone, knobs[2]);
+                fx.mix = fx.mix.saturating_add_signed(knobs[3]).min(100);
                 fx.enabled ^= toggle;
             }
             Self::Eq(fx) => {
