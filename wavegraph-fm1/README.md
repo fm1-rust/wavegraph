@@ -78,7 +78,7 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | SELECT in ARP | Turn clockwise to latch the chord. Release all keys and play a new chord to replace it. Turn counterclockwise to release unheld keys. |
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
-| REC outside PCM CLIPBOARD | Record notes into the current channel’s sequence. REC ends recording and keeps the loop playing. PLAY stops both. |
+| REC | In SAMPLE mode, REC outside the clipboard records notes into the current sequence. With TAPE LOOP selected, REC arms or punches out an audio pass from an instrument or FX page. On SEQ, REC ends an active tape pass first, then records notes. |
 | Hold EDIT on any instrument scope | [Swap the instrument on this channel](#swap-the-instrument-on-one-channel). While EDIT blinks, turn PRESETS and pause for 200 ms to audition. Tap EDIT to keep the displayed choice and exit. |
 | EDIT on an FM, Hoover, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
@@ -104,7 +104,7 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | HOME while editing a 303 control | Clear the selection and turn off the HOME lamp. ALGORITHM browses sound presets again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
-| EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard) to record audio from the focused channel. REC arms capture on this page. |
+| EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard). Knob 3 selects SAMPLE or [TAPE LOOP](#layer-a-live-tape-loop). REC arms capture. |
 | SEL in the GLO overview or channel edit | Toggle the focused channel’s audio. Each strip shows ON or OFF. SEL lights when the focused channel is enabled. |
 | Knobs 1–4 in the GLO overview | Set channel faders 1–4 independently. |
 | SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
@@ -604,6 +604,46 @@ in RAM and keep their own sample controls. A new recording replaces the old
 take when capture starts. Powering off clears it. Longer takes use a lower
 sample rate to fit. At the factory 122 BPM, **1 BEAT** keeps the full 44.1 kHz
 and **1 BAR** records at 14.7 kHz.
+
+### Layer a live tape loop
+
+1. Press **GLO → EDIT** and turn **knob 3** clockwise to **TAPE LOOP**.
+   Turn **PRESETS** to the drum strip and **ALGORITHM** counterclockwise for
+   **STRIP**. Choose **1 BAR** with knob **1** and set the sample root with
+   knob **2**. Knob **4** controls the incoming recording level.
+2. Press **REC**, then **PLAY**. If already playing, REC arms the next loop
+   boundary. Play the drums or let their pattern run. The first pass closes
+   after the selected length and immediately plays back on its own return.
+   Mute the original drum strip in GLO to hear the loop by itself.
+3. Choose a 303 strip with **PRESETS**. Press **REC** to arm an overdub,
+   open its **Beat FX → PCF** page and audition rhythms or sweep the cutoff.
+   The previous pass keeps playing. Each lap adds what you play until you
+   press **REC** again to punch out. REC works on the instrument and FX pages
+   too. The recording source stays on the strip you armed.
+4. **PLAY** stops or restarts the loop with the sequencer. Turn knob **3**
+   back to **SAMPLE** to silence the tape return and play the layered take
+   chromatically or slice it on a sampler strip. To start a fresh loop,
+   stop the transport and hold **SEL** while pressing **REC** on TAPE LOOP.
+
+**STRIP** records the instrument, both inserts, Beat Flanger, PCF and Slicer
+before the fader. Turn **ALGORITHM** clockwise for **MIX** to print the live
+strip levels, mutes and shared Echo and reverb returns. Both taps exclude
+the tape return. The input selection latches when you arm. Lower knob **4**
+to leave headroom for more layers. A silent pass preserves the old audio,
+and the stored PCM saturates if layers exceed full scale.
+
+Loops use the sequencer grid of one beat or one, two or four bars. A tempo
+change speeds up or slows down a finished loop and changes its pitch.
+An existing clipboard sample can seed a loop and fits its original selected
+beat length, including a sample finished early. **REC** cancels an armed
+pass or an unfinished first pass. Keep the tempo steady during that first
+pass. Punching out of an overdub keeps the audio printed so far. If the DSP
+misses a block, the overdub punches out and playback rejoins at the next
+loop boundary. All layers share the original 64 KiB RAM slot and are
+combined into one take. Powering off clears it.
+
+If the source is a sampler playing this clipboard, choose another strip.
+For MIX, mute that sampler strip before arming the next pass.
 
 ## Pattern banks
 
@@ -1132,7 +1172,7 @@ live panel and MIDI changes in bounded per-channel queues. A swap replaces the
 channel's processor at the start of a block, before its first control or note
 message. The other processors and the shared returns continue with their current DSP
 state. Each channel feeds the Q23 mixer, which produces dry, reverb and delay
-buses.
+buses. TAPE LOOP adds its playback to the dry bus before master processing.
 One reverb and one mono digital delay run in parallel. The dry bus reserves
 three bits of headroom for four boosted tracks. The master node restores that
 gain and sums both returns and the startup cue in a widened accumulator. EQ,

@@ -65,3 +65,7 @@ opt-level = 3
 codegen-units = 1
 lto = true
 panic = "abort"
+
+# Leave room for the sample banks when linking the full FM-1 application.
+[profile.firmware.package.wavegraph-fm1]
+opt-level = 2

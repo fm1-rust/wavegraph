@@ -36,6 +36,10 @@ impl Transport {
         self.generation & 1 != 0
     }
 
+    pub(super) fn same_run(self, other: Self) -> bool {
+        self.generation == other.generation
+    }
+
     pub(super) fn toggle(&mut self) {
         self.generation = self.generation.wrapping_add(1);
     }
@@ -728,10 +732,7 @@ impl PatternPlayer {
         while frame < frames {
             if let Some(tick) = self.clock.take_tick() {
                 if tick.is_multiple_of(8) {
-                    step(
-                        frame,
-                        u8::try_from(tick / 8 % 16).map_err(|_| Error::Capacity)?,
-                    )?;
+                    step(frame, u8::try_from(tick / 8).map_err(|_| Error::Capacity)?)?;
                 }
                 if tick.is_multiple_of(16 * 8) && self.downbeat.is_none() {
                     self.downbeat = Some(frame);

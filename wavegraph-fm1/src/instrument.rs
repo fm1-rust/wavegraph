@@ -1160,6 +1160,7 @@ pub(super) enum Message {
     Wavetable(WaveMessage),
     Sampler(SampleMessage),
     Recording(Option<crate::clipboard::Take>),
+    Tape(crate::clipboard::Playback),
     WaveFrame(u8),
     Organ(OrganMessage),
     Bass(BassMessage),
@@ -1457,6 +1458,12 @@ impl Process<Message, I24> for FxMixer {
             Message::Mixer(m) => Some(m),
             _ => None,
         });
+        if let Some(tape) = cx.events.iter().find_map(|e| match e.message {
+            Message::Tape(tape) => Some(tape),
+            _ => None,
+        }) {
+            tape.mix(cx.outputs[0]);
+        }
     }
 }
 
@@ -1625,8 +1632,43 @@ fn unpack_events<M>(
 /// The contiguous, post-insert signals immediately upstream of the faders.
 pub(super) const STRIP_BUS: usize = 8;
 pub(super) const DRY_HEADROOM: u8 = 3;
+const REVERB_RETURN: usize = 16;
+const DELAY_RETURN: usize = 17;
 const MASTER_BUS: usize = 18;
 pub(super) const BUS_COUNT: usize = MASTER_BUS + 4;
+
+/// An isolated post-insert strip, or the live faders plus shared effects.
+/// Reconstruct the dry sum from the strips so the tape return cannot feed back.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "Each Q23 by Q7 gain fits i32, as do four post-fader signals and both returns."
+)]
+fn tape_input<const N: usize>(
+    buses: &[[I24; N]; BUS_COUNT],
+    mixer: Mixer,
+    source: Channel,
+    mix: bool,
+) -> impl ExactSizeIterator<Item = I24> + '_ {
+    let strips = &buses[STRIP_BUS..][..CHANNELS];
+    let levels = mixer.0.map(|s| i32::from(s.output_level()));
+    (0..N).map(move |frame| {
+        if !mix {
+            return strips[source.index()][frame];
+        }
+        let dry = strips
+            .iter()
+            .zip(levels)
+            .map(|(s, gain)| (s[frame].inner() * gain) >> 7)
+            .sum::<i32>();
+        let live = ((dry >> DRY_HEADROOM) << DRY_HEADROOM)
+            + buses[REVERB_RETURN][frame].inner()
+            + buses[DELAY_RETURN][frame].inner();
+        I24::new_unchecked(live.clamp(
+            wavegraph_sample::types::i24::MIN.inner(),
+            wavegraph_sample::types::i24::MAX.inner(),
+        ))
+    })
+}
 
 fn master_channels<const N: usize>(
     buses: &[[I24; N]; BUS_COUNT],
@@ -2221,6 +2263,10 @@ impl Instrument<'_> {
             self.player.position().map_or(0, |p| p.step)
         };
         gate_step(0, step)?;
+        let recording = self.recording_request;
+        let tape_mode = recording.options.tape;
+        let cycle_steps = self.recorder.loop_beats(recording.options) << 2;
+        let mut loop_edge = None;
         let player = &mut self.player;
         player.render_steps(
             N,
@@ -2232,8 +2278,25 @@ impl Instrument<'_> {
                     .push(event)
                     .map_err(|_| Error::Capacity)
             },
-            (&mut wire, gate_step),
+            (&mut wire, |frame, step| {
+                if tape_mode && step.is_multiple_of(cycle_steps) {
+                    loop_edge.get_or_insert(frame);
+                }
+                gate_step(frame, step)
+            }),
         )?;
+        self.previous_take = self.recorder.status.take;
+        let tape = if tape_mode {
+            self.recorder
+                .prepare_tape(recording, tracks, self.mixer, self.transport, loop_edge)
+        } else {
+            None
+        };
+        if let Some(playback) = tape {
+            mixer_events
+                .insert(0, at(Message::Tape(playback)))
+                .map_err(|_| Error::Capacity)?;
+        }
         // Insert controls run at the DMA block rate. The clip adds to the
         // panel setting, so knob edits survive a loop, mute or transport stop.
         let shape_offsets =
@@ -2340,14 +2403,19 @@ impl Instrument<'_> {
                 _ => Err(event),
             },
         )?;
-        self.previous_take = self.recorder.status.take;
-        self.recorder.process(
-            self.recording_request,
-            tracks,
-            self.transport,
-            player.downbeat,
-            buses,
-        );
+        if tape_mode {
+            let input = tape_input(
+                buses,
+                self.mixer,
+                self.recorder.status.source,
+                self.recorder.status.mix,
+            );
+            self.recorder
+                .print_tape(recording, self.transport, loop_edge, tape, input);
+        } else {
+            self.recorder
+                .process(recording, tracks, self.transport, player.downbeat, buses);
+        }
         self.shape_offsets = shape_offsets;
         self.position = player.position();
         self.drums = drums;
@@ -2445,8 +2513,6 @@ mod tests {
     const DRY_BUS: usize = 13;
     const REVERB_SEND: usize = 14;
     const DELAY_SEND: usize = 15;
-    const REVERB_RETURN: usize = 16;
-    const DELAY_RETURN: usize = 17;
     const BASS_INSERT: usize = STRIP_BUS + Channel::Three.index();
     const FX_WITHOUT_DYNAMICS: Fx = Fx {
         dynamics_enabled: false,

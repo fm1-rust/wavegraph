@@ -298,19 +298,30 @@ pub(super) async fn clipboard(
 ) -> Result<(), Error> {
     use crate::clipboard::State;
     let colors = super::mixer::RackColors::GLOBAL;
-    let root = Voice::pitch_name(labels.clip_options.root);
-    let length = match labels.clip_options.beats() {
+    let options = labels.clip_options;
+    let tape = options.tape;
+    let loop_take = status.take.filter(|_| tape);
+    let root = Voice::pitch_name(loop_take.map_or(options.root, |t| t.root));
+    let length = match loop_take.map_or(options.beats(), |t| t.beats) {
         1 => "1 BEAT",
         4 => "1 BAR",
         8 => "2 BARS",
         _ => "4 BARS",
     };
     let state = match status.state {
+        State::Idle if tape && status.monitoring => "LOOP PLAYING",
+        State::Idle if tape && loop_take.is_some() && labels.seq.transport.playing() => {
+            "WAITING FOR LOOP"
+        }
         State::Idle if status.take.is_some() => "READY",
         State::Idle => "EMPTY",
+        State::Armed if tape && !labels.seq.transport.playing() => "ARMED / PRESS PLAY",
+        State::Armed if tape => "WAITING FOR LOOP",
         State::Armed if labels.seq.transport.playing() => "WAITING FOR DOWNBEAT",
         State::Armed => "PLAY A NOTE",
+        State::Recording if tape => "FIRST PASS",
         State::Recording => "RECORDING",
+        State::Dubbing => "OVERDUBBING",
         State::Interrupted => "TAKE INTERRUPTED",
         State::SelfInput => "CHOOSE ANOTHER SOURCE",
     };
@@ -326,26 +337,63 @@ pub(super) async fn clipboard(
         )
         .expect("take");
     }
-    let source_hint = if matches!(status.state, State::Armed | State::Recording) {
-        status.source.label()
+    let source_hint = if matches!(
+        status.state,
+        State::Armed | State::Recording | State::Dubbing
+    ) {
+        if tape && status.mix {
+            "MIX"
+        } else {
+            status.source.label()
+        }
     } else {
         ""
     };
     let action = match status.state {
         State::Armed => "REC  CANCEL",
+        State::Recording if tape => "REC  CANCEL FIRST PASS",
         State::Recording => "REC  FINISH",
+        State::Dubbing => "REC  PUNCH OUT",
+        _ if loop_take.is_some() => "REC  ARM OVERDUB",
+        _ if tape => "REC  ARM FIRST PASS",
         _ => "REC  ARM CAPTURE",
     };
-    let (length_label, root_label) = if status.state == State::Recording {
+    let (length_label, root_label) = if loop_take.is_some() {
+        ("LOOP LENGTH", "LOOP ROOT")
+    } else if status.state == State::Recording {
         ("1  NEXT LENGTH", "2  NEXT ROOT")
     } else {
         ("1  LENGTH", "2  ROOT")
     };
+    let level = heapless::format!(4; "{}%", (u16::from(options.level) * 100 + 64) / 128)
+        .expect("percentage");
+    let rows = [
+        (117, length_label, length),
+        (133, root_label, ascii(&root)),
+        (149, "3  MODE", if tape { "TAPE LOOP" } else { "SAMPLE" }),
+        (165, "4  RECORD LEVEL", level.as_str()),
+    ];
     let mut display = lcd.as_async(clock)?;
     for y in (0..SIZE).step_by(BAND) {
         let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, super::mixer::BACKGROUND);
-        band.title("PCM CLIPBOARD", Point::new(8, 8), colors.ink);
+        band.title(
+            if tape { "TAPE LOOP" } else { "PCM CLIPBOARD" },
+            Point::new(8, 8),
+            colors.ink,
+        );
         band.label(&source, Point::new(8, 35), Alignment::Left, colors.ink);
+        if tape {
+            band.label(
+                if options.mix {
+                    "ALG / MIX"
+                } else {
+                    "ALG / STRIP"
+                },
+                Point::new(228, 35),
+                Alignment::Right,
+                colors.accent,
+            );
+        }
         band.rect(Point::new(7, 55), Size::new(226, 57), colors.surface);
         band.label(state, Point::new(14, 65), Alignment::Left, colors.accent);
         band.label(
@@ -355,12 +403,12 @@ pub(super) async fn clipboard(
             colors.accent,
         );
         band.label(&info, Point::new(14, 89), Alignment::Left, colors.accent);
-        for (row, label, value) in [(132, length_label, length), (151, root_label, ascii(&root))] {
+        for &(row, label, value) in &rows[..if tape { 4 } else { 3 }] {
             band.label(label, Point::new(8, row), Alignment::Left, colors.ink);
             band.label(value, Point::new(228, row), Alignment::Right, colors.ink);
         }
         band.label(action, Point::new(8, 187), Alignment::Left, colors.ink);
-        if labels.focus == crate::instrument::Part::Sampler {
+        if !tape && labels.focus == crate::instrument::Part::Sampler {
             band.label(
                 "SEL  USE CLIPBOARD",
                 Point::new(8, 209),
@@ -371,6 +419,14 @@ pub(super) async fn clipboard(
             band.label(
                 "PRESETS  CHOOSE CHANNEL",
                 Point::new(8, 209),
+                Alignment::Left,
+                colors.ink,
+            );
+        }
+        if tape && !labels.seq.transport.playing() && loop_take.is_some() {
+            band.label(
+                "SEL + REC  CLEAR LOOP",
+                Point::new(8, 225),
                 Alignment::Left,
                 colors.ink,
             );

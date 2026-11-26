@@ -231,6 +231,8 @@ pub(super) struct Band<'a> {
     reason = "All coordinates and pixel indexes are bounded by the 240 px panel"
 )]
 impl<'a> Band<'a> {
+    // Share the pixel fill and bounds check across the LCD pages.
+    #[inline(never)]
     pub(super) fn new(
         storage: &'a mut [[u8; 2]],
         x: u16,

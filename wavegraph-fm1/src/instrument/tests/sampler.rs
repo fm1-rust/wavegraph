@@ -8,6 +8,223 @@ fn first_frames(pcm: &[u8]) -> [i32; 128] {
 }
 
 #[test]
+fn tape_prints_post_fx_and_loops_on_the_sample_while_other_strips_play() -> Result<(), Error> {
+    use crate::clipboard::{PCM, State};
+    use core::sync::atomic::Ordering;
+    use wavegraph_sample::Sample;
+    let _slot = crate::clipboard::test_slot();
+    with_instrument(2048, |engine| {
+        let assignment = Assignment::new(Part::Mono);
+        let mut tracks = [Track::new(assignment); CHANNELS];
+        tracks[0].voice.gate.note = Some(note(45, 115));
+        tracks[1].voice.gate.note = Some(note(55, 104));
+        let mut fx = Fx::INITIAL;
+        fx.filters[0].pick.press(3);
+        engine.set_fx(fx);
+        engine.sequences = [false; CHANNELS];
+        let mut mixer = Mixer::DRY;
+        for strip in &mut mixer.0 {
+            strip.enabled = false;
+        }
+        engine.set_mixer(mixer);
+        engine.transport.bpm = 120;
+        let req = &mut engine.recording_request;
+        req.options.turn(-1, 2); // One beat, D4.
+        req.options.turn_tape(1, 0, 0);
+        req.press(Channel::One, assignment);
+        let mut buses = [[I24::default(); 37]; BUS_COUNT];
+        engine.render(tracks, &mut buses)?;
+        assert_eq!(engine.recorder.status.state, State::Armed);
+        engine.transport.toggle();
+        let mut expected = [0i16; 1024];
+        let mut audible_fx = false;
+        for block in 0..115 {
+            match block {
+                30 => {
+                    engine.recording_request.options.turn_tape(0, -16, 0); // 50% on the new layer.
+                    engine.recording_request.press(Channel::Two, assignment);
+                }
+                88 => engine.recording_request.press(Channel::Two, assignment),
+                _ => (),
+            }
+            engine.render(tracks, &mut buses)?;
+            for frame in 0..37 {
+                let n = block * 37 + frame;
+                let i = n % 1024;
+                let monitored = if n < 1024 {
+                    0
+                } else {
+                    i32::from(expected[i]) << (8 - DRY_HEADROOM)
+                };
+                assert_eq!(buses[DRY_BUS][frame].inner(), monitored, "frame {n}");
+                if n < 1024 {
+                    expected[i] = buses[STRIP_BUS][frame].to_sample::<i16>();
+                    audible_fx |= buses[STRIP_BUS][frame] != buses[0][frame];
+                } else if (2048..88 * 37).contains(&n) {
+                    let layer = buses[STRIP_BUS + 1][frame].to_sample::<i16>() >> 1;
+                    expected[i] = expected[i].saturating_add(layer);
+                }
+            }
+        }
+        assert!(audible_fx && expected.iter().any(|&s| s != 0));
+        for (actual, expected) in PCM.iter().zip(expected) {
+            assert_eq!(actual.load(Ordering::Relaxed), expected);
+        }
+        let take = engine.recorder.status.take.expect("playable sampler take");
+        assert_eq!((take.frames, take.beats, take.root), (1024, 1, 62));
+        // The live strips are muted. Only the tape return should reach USB.
+        let mut audible = false;
+        capture_master(&buses, engine.half_gain, |frames| {
+            for &[left, right] in frames {
+                assert_eq!(left, right);
+                audible |= left != 0;
+            }
+            frames.len()
+        });
+        assert!(audible);
+        engine.transport.toggle();
+        engine.render(tracks, &mut buses)?;
+        assert!(buses[DRY_BUS].iter().all(|s| s.inner() == 0));
+        assert_eq!(engine.recorder.status.take, Some(take));
+        // A sampler that owns the clipboard cannot dub the take into itself.
+        let sampler = Assignment::new(Part::Sampler);
+        tracks[2] = Track::factory(Channel::Three, sampler);
+        tracks[2].voice.waveform = crate::assets::CLIPBOARD_SLOT;
+        engine.recording_request.press(Channel::Three, sampler);
+        engine.render(tracks, &mut buses)?;
+        assert_eq!(engine.recorder.status.state, State::SelfInput);
+        assert_eq!(engine.recorder.status.take, Some(take));
+        engine.recording_request.clear();
+        engine.render(tracks, &mut buses)?;
+        assert_eq!(engine.recorder.status.take, None);
+        Ok(())
+    })
+}
+
+#[test]
+fn two_bar_tape_waits_for_its_grid_and_preserves_the_take_on_a_render_gap() -> Result<(), Error> {
+    use crate::clipboard::State;
+    let _slot = crate::clipboard::test_slot();
+    with_instrument(2048, |engine| {
+        let assignment = Assignment::new(Part::Mono);
+        let mut tracks = [Track::new(assignment); CHANNELS];
+        tracks[0].voice.gate.note = Some(note(42, 100));
+        engine.sequences = [false; CHANNELS];
+        engine.transport.bpm = 240; // Two bars are 4096 frames.
+        engine.transport.toggle();
+        let mut buses = [[I24::default(); 128]; BUS_COUNT];
+        engine.render(tracks, &mut buses)?;
+        engine.recording_request.options.turn(1, 0);
+        engine.recording_request.options.turn_tape(1, 0, 0);
+        engine.recording_request.press(Channel::One, assignment);
+        for _ in 1..32 {
+            engine.render(tracks, &mut buses)?;
+            assert_eq!(engine.recorder.status.state, State::Armed);
+        }
+        for block in 0..32 {
+            engine.render(tracks, &mut buses)?;
+            if block < 31 {
+                assert_eq!(engine.recorder.status.state, State::Recording);
+            }
+        }
+        let take = engine.recorder.status.take.expect("two-bar loop");
+        assert_eq!((take.beats, take.frames), (8, 4096));
+        engine.recording_request.press(Channel::One, assignment);
+        engine.render(tracks, &mut buses)?;
+        assert_eq!(engine.recorder.status.state, State::Dubbing);
+        engine.skip_frames(384, |_, _, _| {})?;
+        engine.render(tracks, &mut buses)?;
+        assert_eq!(engine.recorder.status.state, State::Interrupted);
+        assert!(!engine.recorder.status.monitoring);
+        assert_eq!(engine.recorder.status.take, Some(take));
+        Ok(())
+    })
+}
+
+#[test]
+fn tape_mix_prints_the_effect_returns_and_excludes_its_own_playback() -> Result<(), Error> {
+    use crate::clipboard::{PCM, State};
+    use core::sync::atomic::Ordering;
+    let _slot = crate::clipboard::test_slot();
+    with_instrument(8192, |engine| {
+        let assignment = Assignment::new(Part::Mono);
+        let mut tracks = [Track::new(assignment); CHANNELS];
+        tracks[0].voice.gate.note = Some(note(45, 80));
+        tracks[1].voice.gate.note = Some(note(52, 90));
+        engine.sequences = [false; CHANNELS];
+        engine.set_mixer(Mixer::INITIAL);
+        let mut fx = Fx::INITIAL;
+        fx.clocked_delay = false;
+        fx.time_ms = 20;
+        fx.feedback = 0;
+        engine.set_fx(fx);
+        engine.transport.bpm = 120;
+        engine.transport.toggle();
+        engine.recording_request.options.turn(-1, 0);
+        engine.recording_request.options.turn_tape(1, 0, 1);
+        engine.recording_request.press(Channel::One, assignment);
+        let mut buses = [[I24::default(); 128]; BUS_COUNT];
+        let mut expected = [0i16; 4096];
+        let mut echo = false;
+        let mut reverb = false;
+        for chunk in expected.chunks_mut(128) {
+            engine.render(tracks, &mut buses)?;
+            for (i, sample) in chunk.iter_mut().enumerate() {
+                echo |= buses[DELAY_RETURN][i].inner() != 0;
+                reverb |= buses[REVERB_RETURN][i].inner() != 0;
+                let live = (buses[DRY_BUS][i].inner() << DRY_HEADROOM)
+                    + buses[REVERB_RETURN][i].inner()
+                    + buses[DELAY_RETURN][i].inner();
+                *sample = i16::try_from((live >> 8).clamp(i16::MIN.into(), i16::MAX.into()))
+                    .expect("PCM16");
+            }
+        }
+        assert!(echo && reverb);
+        for (actual, &expected) in PCM.iter().zip(&expected) {
+            assert_eq!(actual.load(Ordering::Relaxed), expected);
+        }
+        engine.transport.toggle();
+        let mut muted = Mixer::DRY;
+        for strip in &mut muted.0 {
+            strip.enabled = false;
+        }
+        engine.set_mixer(muted);
+        fx.reverb.enabled = false;
+        fx.delay.enabled = false;
+        engine.set_fx(fx);
+        for _ in 0..32 {
+            engine.render(tracks, &mut buses)?;
+        }
+        // A tape-speed change doubles the loop duration and lowers its pitch.
+        engine.transport.bpm = 60;
+        engine.transport.toggle();
+        engine.recording_request.press(Channel::Two, assignment);
+        for block in 0..64 {
+            engine.render(tracks, &mut buses)?;
+            assert_eq!(engine.recorder.status.state, State::Dubbing);
+            for (i, sample) in buses[DRY_BUS].iter().enumerate() {
+                let frame = block * 128 + i;
+                let index = frame / 2;
+                let a = i32::from(expected[index]);
+                let b = i32::from(expected[(index + 1) % expected.len()]);
+                let pcm = if frame % 2 == 0 { a << 8 } else { (a + b) << 7 };
+                assert_eq!(sample.inner(), pcm >> DRY_HEADROOM, "frame {frame}");
+            }
+        }
+        engine.recording_request.press(Channel::Two, assignment);
+        engine.render(tracks, &mut buses)?;
+        for (actual, expected) in PCM.iter().zip(expected) {
+            assert_eq!(
+                actual.load(Ordering::Relaxed),
+                expected,
+                "tape return fed the record input"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn panel_and_midi_play_the_same_clip_an_octave_apart_on_independent_strips() -> Result<(), Error> {
     with_instrument(44_118, |engine| {
         let mut keys = Keyboard::<4>::new();
@@ -413,6 +630,7 @@ fn lit_pad_identity_survives_octave_transpose_and_seq_rec() {
 
 #[test]
 fn one_clipboard_take_plays_from_two_sampler_strips_at_different_pitches() -> Result<(), Error> {
+    let _slot = crate::clipboard::test_slot();
     use crate::clipboard::State;
     let check_chord = |engine: &mut Instrument<'_>, part| {
         let source = Channel::One;
