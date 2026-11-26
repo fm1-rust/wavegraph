@@ -5250,6 +5250,49 @@ mod tests {
     }
 
     #[test]
+    fn usb_reconnect_during_midi_drain_keeps_the_first_new_note() {
+        use crate::keys::MidiEvent;
+        use core::cell::Cell;
+
+        let mut keyboard = Keyboard::<1>::new();
+        let panel_note = note(48, 80);
+        let usb_note = note(60, 100);
+        keyboard.press(panel_note);
+        let generation = keyboard.tracks[0].assignment.generation;
+        let midi = |epoch, action| MidiEvent {
+            epoch,
+            generation,
+            channel: Channel::One,
+            action,
+        };
+        let epoch = Cell::new(1);
+        let queued = [
+            (1, midi(1, MidiAction::Control(1, 17))),
+            (2, midi(1, MidiAction::Control(1, 99))),
+            (2, midi(2, MidiAction::On(usb_note))),
+        ];
+        let events = queued.into_iter().map(|(session_at_dequeue, event)| {
+            epoch.set(session_at_dequeue);
+            event
+        });
+        keyboard
+            .keys
+            .drain_midi(&mut keyboard.tracks, events, || epoch.get());
+        keyboard.snapshot();
+        assert_eq!(keyboard.tracks[0].voice.gate.note, Some(usb_note));
+        assert_eq!(keyboard.tracks[0].lfo.depth, 17);
+
+        keyboard.tracks[0].bass.slide = true;
+        epoch.set(3);
+        keyboard
+            .keys
+            .drain_midi(&mut keyboard.tracks, core::iter::empty(), || epoch.get());
+        keyboard.snapshot();
+        assert_eq!(keyboard.tracks[0].voice.gate.note, Some(panel_note));
+        assert!(!keyboard.tracks[0].bass.slide);
+    }
+
+    #[test]
     fn midi_note_off_and_disconnect_leave_the_panel_notes_alone() {
         let mut keys = Keyboard::<2>::new();
         keys.press(note(60, 80));

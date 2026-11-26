@@ -285,7 +285,7 @@ mod app {
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
             Part, Programs, RoutedEvents, Track,
         },
-        keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
+        keys::{Keys, MidiAction, MidiEvent, PanelPads, Piano, Press, decode_midi},
         midi_out::OutputQueue,
         mixer::Mixer,
         overload::Overloads,
@@ -335,13 +335,6 @@ mod app {
         nav: Navigation,
         pads: [PanelPads; CHANNELS],
         held: Vec<Press, PIANO_KEYS>,
-    }
-
-    pub struct MidiEvent {
-        epoch: u32,
-        generation: u32,
-        channel: Channel,
-        action: MidiAction,
     }
 
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
@@ -608,7 +601,6 @@ mod app {
                 input: Input {
                     input,
                     midi: midi_in,
-                    midi_epoch: 0,
                     keys: KEYS.take(),
                     held: HELD.take(),
                     edit_wake,
@@ -1075,7 +1067,6 @@ mod app {
     struct Input {
         input: Receiver<'static, PanelFrame, SCANS>,
         midi: Receiver<'static, MidiEvent, MIDI_EVENTS>,
-        midi_epoch: u32,
         keys: &'static mut Keys<PIANO_KEYS>,
         held: &'static mut Vec<Press, PIANO_KEYS>,
         edit_wake: Sender<'static, (), 1>,
@@ -1217,23 +1208,13 @@ mod app {
         }
 
         fn apply_midi(&mut self, first: Option<MidiEvent>) {
-            let epoch = self.shared().midi_epoch.lock(|epoch| *epoch);
-            if epoch != self.midi_epoch {
-                self.keys.clear_midi();
-                for track in &mut self.settings.tracks {
-                    track.bass.slide = false;
-                }
-                self.midi_epoch = epoch;
-            }
-            for event in first
+            let mut shared_epoch = self.shared().midi_epoch;
+            let events = first
                 .into_iter()
-                .chain(core::iter::from_fn(|| self.midi.try_recv().ok()))
-            {
-                let track = &mut self.settings.tracks[event.channel.index()];
-                if event.epoch == epoch && event.generation == track.assignment.generation {
-                    self.keys.midi(event.channel, event.action, track);
-                }
-            }
+                .chain(core::iter::from_fn(|| self.midi.try_recv().ok()));
+            self.keys.drain_midi(&mut self.settings.tracks, events, || {
+                shared_epoch.lock(|epoch| *epoch)
+            });
         }
 
         fn publish(&mut self, old_lamp: bool) {
