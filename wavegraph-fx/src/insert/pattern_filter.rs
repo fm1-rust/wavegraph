@@ -168,8 +168,25 @@ impl PatternFilter {
         }
     }
 
-    pub(super) fn set_enabled(&mut self, enabled: bool) {
+    /// Crossfade to the filtered or dry signal without recalculating the filter coefficients.
+    pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
+    }
+
+    /// Fade to dry, then retire the envelope so the next enable starts at the resting cutoff.
+    /// A fully dry block is left untouched in constant time.
+    pub fn bypass_in_place(&mut self, samples: &mut [I24]) {
+        self.enabled = false;
+        for sample in samples {
+            if self.mix == 0 {
+                break;
+            }
+            *sample = self.tick(*sample);
+        }
+        if self.mix == 0 {
+            self.envelope = 0.0;
+            self.g = self.base;
+        }
     }
 
     /// Process one signed Q23 sample.

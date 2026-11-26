@@ -104,7 +104,7 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
 | FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
 | Knobs 1–4 with CHORUS selected | Set rate, depth, wet-path tone and wet/dry mix. Both taps fold into the mono strip. The initial settings match Fast Hoover. |
-| EDIT from channel FX or GLO’s FX rack | Open Beat FX for the focused instrument, including when an insert or rack device is selected. Knob 1 sets BEATS for every synced effect. Turn SELECT for Echo, Flanger or Slicer and PRESETS for the channel. |
+| EDIT from channel FX or GLO’s FX rack | Open Beat FX for the focused instrument, including when an insert or rack device is selected. Knob 1 sets BEATS for every synced effect. Turn SELECT for Echo, Flanger, Slicer or PCF and PRESETS for the channel. |
 | Knobs 1–4 with FLANGER selected in a channel insert slot | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
 | FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
@@ -882,14 +882,15 @@ On Flanger the light follows the sweep while the keyboard plays the instrument.
 
 ![TR-808 Echo with four groups of colored step keys and TR-909 Slicer with ivory keys, amber lamps and a playhead under the current step](assets/beat-fx-drums.png)
 
-| Effect | What BEATS measures | Knob 2 · Depth | Knob 3 · Feedback | Knob 4 | SEL |
+| Effect | What BEATS measures | Knob 2 | Knob 3 | Knob 4 | SEL |
 | --- | --- | --- | --- | --- | --- |
 | Echo | Spacing between repeats | Focused channel’s send | Repeat feedback | Global return | Open or close the Echo input |
 | Flanger | One whole triangle sweep | Wet/dry mix | Comb feedback | Sweep width | Apply to the focused channel, or bypass there |
 | Slicer | One whole 16-step pattern | Attenuation on unlit steps | — | — | Enable or bypass the focused channel |
+| PCF | One whole 16-step filter rhythm | Resting cutoff | Resonance | Envelope amount | Enable or bypass the focused channel |
 
 The selector runs from 1/16 to 4 quarter-note beats, including triplets and
-dotted values. Changing tempo retimes all three effects. Flanger and Slicer lock
+dotted values. Changing tempo retimes all four effects. Flanger, Slicer and PCF lock
 to song position during playback and keep cycling at the master BPM when stopped.
 One Beat Flanger can be routed to any of the four strips after its insert slots.
 
@@ -915,7 +916,27 @@ passes the first eight steps and cuts the last eight. Try lighting steps
 cursor under the grid follows the gate. Set BEATS to **1** and the same
 pattern fits inside one quarter note. Each channel keeps its own pattern,
 depth and bypass, so all four can run together. Slicing takes place after
-the channel inserts and Beat Flanger, before the fader and sends.
+the channel inserts, Beat Flanger and PCF, before the fader and sends.
+
+#### Play the pattern-controlled filter
+
+Press **PLAY**, then **FX → EDIT**. Turn **SELECT** to **PCF** and **PRESETS**
+to a 303 or drum channel. Set **BEATS** to **4** for a one-bar rhythm.
+Tap the first white key for **QUARTERS**, then the second for **OFFBEAT**.
+Each key enables the filter on that strip and auditions the new rhythm at
+the current playhead. The notes and the other strips keep their place.
+
+| White keys, left to right | F3 | G3 | A3 | B3 | C4 | D4 | E4 | F4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Filter rhythm | Quarters | Offbeat | Eighths | Sixteenths | Backbeat | Tresillo | Gallop | Pickup |
+
+The next two white keys select **low-pass** (G4) and **band-pass** (A4).
+Key positions stay fixed across octave changes. Turn **ALGORITHM** to shorten
+or lengthen the filter envelope (10–2,000 ms). Each lit step opens the filter
+by its programmed accent. A wider lamp marks a stronger accent, and a dark
+step lets the envelope decay. At zero envelope amount, the filter stays at
+the cutoff set by knob 2. **SEL** compares the filtered and dry signal.
+Each strip starts bypassed and retains its own rhythm, mode and tone settings.
 
 ### Hear Saturator Shape on the 303
 

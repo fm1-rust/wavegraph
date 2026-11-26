@@ -12,6 +12,9 @@ use wavegraph_fx::{
 };
 use wavegraph_sample::I24;
 
+mod filter;
+use filter::ClockedFilter;
+
 #[allow(
     clippy::large_enum_variant,
     reason = "Each assignable slot owns its delay storage without a heap."
@@ -69,6 +72,7 @@ pub(super) struct ChannelInserts {
     rate_hz: u32,
     beat_flanger: Flanger,
     slicers: [Slicer; CHANNELS],
+    filters: [ClockedFilter; CHANNELS],
     beat_target: Option<Channel>,
     factory: SidechainDucker,
     flat_eq: ThreeBandEq,
@@ -85,6 +89,7 @@ impl ChannelInserts {
             beat_flanger: Flanger::new(rate_hz).expect("audio sample rate"),
             beat_target: None,
             slicers: [Slicer::new(rate_hz).expect("audio sample rate"); CHANNELS],
+            filters: [ClockedFilter::new(rate_hz); CHANNELS],
             factory,
             flat_eq: ThreeBandEq::new(rate_hz).expect("audio sample rate"),
         }
@@ -152,9 +157,18 @@ impl Process<Message, I24> for ChannelInserts {
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
         let mut beat = None;
+        let mut filter_clock = wavegraph_lfo::Phase::default();
+        let mut restart_filters = false;
         let mut changed = [[false; INSERT_SLOTS]; CHANNELS];
         for event in cx.events {
             match event.message {
+                Message::FilterClock(timing, restart) => {
+                    filter_clock.control(timing);
+                    restart_filters = restart;
+                }
+                Message::BeatFilter(channel, settings) => {
+                    self.filters[channel.index()].configure(settings)
+                }
                 Message::BeatSlicer(channel, controls, pattern, timing) => {
                     let slicer = &mut self.slicers[channel.index()];
                     slicer.set_controls(controls);
@@ -275,7 +289,9 @@ impl Process<Message, I24> for ChannelInserts {
                 *sample = self.beat_flanger.tick(*sample);
             }
         }
-        for (slicer, strip) in self.slicers.iter_mut().zip(strips) {
+        for ((filter, slicer), strip) in self.filters.iter_mut().zip(&mut self.slicers).zip(strips)
+        {
+            filter.process(strip, filter_clock, restart_filters);
             slicer.process_in_place(strip);
         }
     }

@@ -7,7 +7,7 @@ use crate::{
     bass::{Control, Controls, Knob, PresetSelection, presets::PRESETS},
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
-    fx::{Device, Fx, INSERT_SLOTS, Insert, InsertKind},
+    fx::{Device, FilterSettings, Fx, INSERT_SLOTS, Insert, InsertKind},
     keys::HitLog,
     keys::PolyKey,
     lfo::{KnobOffset, Route},
@@ -1172,6 +1172,8 @@ pub(super) enum Message {
     Insert(Channel, Part),
     ChannelInserts(Channel, [Insert; INSERT_SLOTS]),
     BeatFlanger(Channel, FlangerControls, wavegraph_lfo::PhaseControl),
+    BeatFilter(Channel, FilterSettings),
+    FilterClock(wavegraph_lfo::PhaseControl, bool),
     BeatSlicer(
         Channel,
         SlicerControls,
@@ -1834,7 +1836,7 @@ impl Instrument<'_> {
             .map(|n| n.saturating_add_signed(track.key_transpose()).min(127))
     }
 
-    /// Last rendered sixteenth of the shared slicer/flanger cycle, even with transport stopped.
+    /// Last rendered sixteenth of the shared Beat FX cycle, even with transport stopped.
     pub(super) fn beat_step(&self) -> u8 {
         Slicer::step_at(
             self.beat_phase
@@ -1970,8 +1972,8 @@ impl Instrument<'_> {
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
         let downbeat = self.transport.playing() && self.player.transport_changed(self.transport);
-        // Two insert messages and one Slicer per strip, plus the assignable Flanger.
-        let mut inserts = Vec::<_, { 3 * CHANNELS + 1 }>::new();
+        // Assignment, slots, Slicer and filter per strip, plus Flanger and one filter clock.
+        let mut inserts = Vec::<_, { 4 * CHANNELS + 2 }>::new();
         let clock = BeatClock {
             beats: self.fx.beats,
             bpm: self.transport.bpm,
@@ -1989,8 +1991,28 @@ impl Instrument<'_> {
             phase: Some(self.beat_phase.position()),
         };
         self.beat_phase.advance(N);
+        if self.fx.filters.iter().any(|f| f.pick.enabled) {
+            inserts
+                .push(at(Message::FilterClock(
+                    timing,
+                    downbeat || self.gap_events,
+                )))
+                .map_err(|_| Error::Capacity)?;
+        }
         for channel in Channel::ALL {
             let i = channel.index();
+            let filter = self.fx.filters[i];
+            if settings_changed
+                && self
+                    .previous_fx
+                    .as_ref()
+                    .map_or(FilterSettings::INITIAL, |fx| fx.filters[i])
+                    != filter
+            {
+                inserts
+                    .push(at(Message::BeatFilter(channel, filter)))
+                    .map_err(|_| Error::Capacity)?;
+            }
             let controls = self.fx.slicers[i];
             if controls.enabled || self.previous_fx.is_some_and(|fx| fx.slicers[i].enabled) {
                 inserts
@@ -3907,6 +3929,100 @@ mod tests {
     }
 
     #[test]
+    fn filter_auditions_on_the_shared_clock_and_leaves_other_strips_dry() -> Result<(), Error> {
+        use wavegraph_fx::{FILTER_PATTERNS, FilterMode, PatternFilter};
+
+        with_instrument(32_768, |rack| {
+            let mut tracks = [Track::new(Assignment::new(Part::Mono)); CHANNELS];
+            for track in &mut tracks {
+                track.inserts = [Insert::None; INSERT_SLOTS];
+                track.voice.gate.note = Some(note(69, 100));
+            }
+            let mut fx = Fx::INITIAL;
+            fx.beats = wavegraph_fx::BeatDivision::from_ratio(1, 16).expect("sixteenth of a beat");
+            fx.filters[0].pick.press(0);
+            fx.filters[0].pick.press(9);
+            assert_eq!(fx.filters[0].pick.mode, FilterMode::BandPass);
+            rack.sequences = [false; CHANNELS];
+            rack.transport.bpm = 120;
+            let mut reference = PatternFilter::new(32_768).expect("audio sample rate");
+            reference.set_controls(fx.filters[0].controls());
+            let mut buses = [[I24::default(); 37]; BUS_COUNT];
+            let mut phase = 0u32;
+            let mut last_step = None;
+            for block in 0..40 {
+                match block {
+                    1 => {
+                        // PLAY in cell zero must still sound a fresh downbeat.
+                        rack.transport.toggle();
+                        phase = 0;
+                        last_step = None;
+                    }
+                    9 => {
+                        // A different rhythm auditions immediately, partway through cell four.
+                        fx.filters[0].pick.press(3);
+                        last_step = None;
+                    }
+                    16 => rack.transport.toggle(),
+                    20 => rack.transport.bpm = 60,
+                    28 => {
+                        rack.skip_frames(384, |_, _, _| {})?;
+                        phase = phase.wrapping_add(384 << 21);
+                        last_step = None;
+                    }
+                    _ => (),
+                }
+                rack.set_fx(fx);
+                rack.render(tracks, &mut buses)?;
+                let expected = buses[0].map(|sample| {
+                    let step = (phase >> 28) as usize;
+                    if last_step != Some(step) {
+                        let rhythm = usize::from(fx.filters[0].pick.rhythm);
+                        reference.trigger(FILTER_PATTERNS[rhythm].accents[step]);
+                        last_step = Some(step);
+                    }
+                    phase = phase.wrapping_add(if block < 20 { 1 << 22 } else { 1 << 21 });
+                    reference.tick(sample)
+                });
+                assert_eq!(buses[STRIP_BUS], expected, "block {block}");
+                assert_eq!(Some(usize::from(rack.beat_step())), last_step);
+                for channel in [Channel::Two, Channel::Three, Channel::Four] {
+                    assert_eq!(
+                        buses[STRIP_BUS + channel.index()],
+                        buses[channel.source_bus()]
+                    );
+                }
+            }
+            // Disabling at a short block boundary must finish the 64-frame fade.
+            fx.filters[0].pick.enabled = false;
+            rack.set_fx(fx);
+            rack.render(tracks, &mut buses)?;
+            rack.render(tracks, &mut buses)?;
+            assert_eq!(&buses[STRIP_BUS][27..], &buses[0][27..]);
+            // Assignment, both inserts and every Beat FX change in the same block.
+            fx.flanger_target = Some(Channel::Four);
+            fx.beat_flanger.mix = 0;
+            for (i, track) in tracks.iter_mut().enumerate() {
+                track.assignment.generation += 1;
+                fx.filters[i]
+                    .pick
+                    .press(u8::try_from(i).expect("one rhythm per strip"));
+                fx.slicers[i].enabled = true;
+                fx.slicers[i].depth = 0;
+            }
+            rack.set_fx(fx);
+            rack.render(tracks, &mut buses)?;
+            for channel in Channel::ALL {
+                assert_ne!(
+                    buses[STRIP_BUS + channel.index()],
+                    buses[channel.source_bus()]
+                );
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
     fn slicer_uses_the_displayed_cell_on_all_strips_and_restarts_on_play() -> Result<(), Error> {
         with_instrument(32_768, |rack| {
             let mut tracks = [Track::new(Assignment::new(Part::Mono)); CHANNELS];
@@ -4034,7 +4150,7 @@ mod tests {
             let captured = buses[DELAY_SEND].map(|s| s.inner() / 256);
             assert!(captured.iter().any(|&sample| sample != 0));
 
-            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             rack.set_fx(fx);
             rack.transport.toggle();
             rack.render(tracks, &mut buses)?;
@@ -4045,7 +4161,7 @@ mod tests {
                 captured.map(|s| s << 8)
             );
 
-            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             rack.set_fx(fx);
             rack.render(tracks, &mut buses)?;
             assert_eq!(buses[DELAY_SEND], buses[STRIP_BUS]);
@@ -4055,7 +4171,7 @@ mod tests {
             );
 
             // The FREE rack bypass still mutes the return independently of the Beat FX send.
-            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             fx.edit(Device::Delay, [0, 0, 0, -1], true);
             rack.set_fx(fx);
             rack.render(tracks, &mut buses)?;

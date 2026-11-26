@@ -4,8 +4,9 @@ use crate::instrument::{Message, Part, at};
 use heapless::Vec;
 use wavegraph_dsp::Event;
 use wavegraph_fx::{
-    BeatClock, BeatDivision, ChorusControls, Delay, Dynamics, EqControls, FlangerControls,
-    MasterControls, Message as FxMessage, PhaserControls, SaturatorControls, SlicerControls,
+    BeatClock, BeatDivision, ChorusControls, Delay, Dynamics, EqControls, FilterMode,
+    FlangerControls, MasterControls, Message as FxMessage, PatternFilterControls, PhaserControls,
+    SaturatorControls, SlicerControls,
 };
 
 // Upper limit for the free-time rack control.
@@ -16,17 +17,98 @@ pub(super) enum BeatEffect {
     Echo,
     Flanger,
     Slicer,
+    Filter,
 }
 
 impl BeatEffect {
     pub(super) fn turn(self, detents: i8) -> Self {
-        [Self::Echo, Self::Flanger, Self::Slicer]
-            [usize::from((self as u8).saturating_add_signed(detents).min(2))]
+        [Self::Echo, Self::Flanger, Self::Slicer, Self::Filter]
+            [usize::from((self as u8).saturating_add_signed(detents).min(3))]
     }
 }
 
 /// Physical white keys from F3 to G5, independent of the keyboard octave.
 pub(super) const STEP_KEYS: [u8; 16] = [0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26];
+
+/// Retained by the panel scanner so a rhythm press survives a dropped scan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FilterPick {
+    pub(super) rhythm: u8,
+    pub(super) mode: FilterMode,
+    pub(super) enabled: bool,
+}
+
+impl FilterPick {
+    pub(super) const INITIAL: Self = Self {
+        rhythm: 0,
+        mode: FilterMode::LowPass,
+        enabled: false,
+    };
+
+    pub(super) fn press(&mut self, key: u8) {
+        match key {
+            0..=7 => {
+                self.rhythm = key;
+                self.enabled = true;
+            }
+            8 => self.mode = FilterMode::LowPass,
+            9 => self.mode = FilterMode::BandPass,
+            _ => (),
+        }
+    }
+
+    #[cfg(target_os = "none")]
+    pub(super) fn lit(self, key: u8) -> bool {
+        match key {
+            8 => self.mode == FilterMode::LowPass,
+            9 => self.mode == FilterMode::BandPass,
+            _ => key == self.rhythm,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct FilterSettings {
+    pub(super) pick: FilterPick,
+    cutoff: u8,
+    pub(super) resonance: u8,
+    pub(super) amount: u8,
+    pub(super) decay_ms: u16,
+}
+
+impl FilterSettings {
+    pub(super) const INITIAL: Self = Self {
+        pick: FilterPick::INITIAL,
+        cutoff: 30, // 313 Hz on the panel's two-semitone cutoff scale.
+        resonance: PatternFilterControls::INITIAL.resonance,
+        amount: PatternFilterControls::INITIAL.amount,
+        decay_ms: PatternFilterControls::INITIAL.decay_ms,
+    };
+
+    pub(super) fn controls(self) -> PatternFilterControls {
+        PatternFilterControls {
+            mode: self.pick.mode,
+            cutoff_hz: crate::instrument::CUTOFF_HZ[usize::from(self.cutoff)],
+            resonance: self.resonance,
+            amount: self.amount,
+            decay_ms: self.decay_ms,
+            enabled: self.pick.enabled,
+        }
+    }
+
+    fn edit(&mut self, knobs: [i8; 4], algorithm: i8) {
+        self.cutoff = self
+            .cutoff
+            .saturating_add_signed(knobs[1])
+            .min(crate::instrument::MAX_CUTOFF_STEP);
+        self.resonance = self.resonance.saturating_add_signed(knobs[2]).min(128);
+        self.amount = self.amount.saturating_add_signed(knobs[3]).min(128);
+        self.decay_ms = self
+            .decay_ms
+            .saturating_add_signed(i16::from(algorithm).saturating_mul(10))
+            .clamp(10, 2000);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Device {
@@ -304,6 +386,7 @@ pub(super) struct Fx {
     pub(super) flanger_target: Option<crate::panel::Channel>,
     pub(super) beat_flanger: FlangerControls,
     pub(super) slicers: [SlicerControls; crate::panel::CHANNELS],
+    pub(super) filters: [FilterSettings; crate::panel::CHANNELS],
     pub(super) feedback: u8,
     pub(super) eq: [i8; 3],
     pub(super) eq_enabled: bool,
@@ -328,6 +411,7 @@ impl Fx {
         flanger_target: None,
         beat_flanger: FlangerControls::INITIAL,
         slicers: [SlicerControls::INITIAL; crate::panel::CHANNELS],
+        filters: [FilterSettings::INITIAL; crate::panel::CHANNELS],
         time_ms: 369, // Dotted eighth at the factory 122 BPM.
         feedback: 43,
         eq: [0; 3],
@@ -341,11 +425,13 @@ impl Fx {
         channel: crate::panel::Channel,
         effect: BeatEffect,
         knobs: [i8; 4],
+        algorithm: i8,
         sel: bool,
     ) {
         let [beats, depth, feedback, color] = knobs;
         self.beats = self.beats.turn(beats);
         match effect {
+            BeatEffect::Filter => self.filters[channel.index()].edit(knobs, algorithm),
             BeatEffect::Echo => {
                 self.clocked_delay = true;
                 // Depth is the focused strip's existing post-fader send.
@@ -508,6 +594,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn filter_rhythm_keys_enable_only_the_selected_strip_and_keep_its_tone() {
+        use crate::panel::{Channel, Navigation};
+        let mut nav = Navigation::INITIAL;
+        let mut fx = Fx::INITIAL;
+        for rhythm in 0..8 {
+            nav.filter_picks[2].press(rhythm);
+            assert_eq!(nav.filter_picks[2].rhythm, rhythm);
+            assert!(nav.filter_picks[2].enabled);
+        }
+        nav.filter_picks[2].press(9);
+        nav.filter_picks[2].enabled = false;
+        nav.filter_picks[2].press(8);
+        assert!(!nav.filter_picks[2].enabled);
+        nav.filter_picks[2].press(7);
+        fx.filters[2].pick = nav.filter_picks[2];
+        fx.edit_beat(Channel::Three, BeatEffect::Filter, [1, 2, -8, 10], 3, false);
+        let controls = fx.filters[2].controls();
+        assert_eq!(fx.beats, BeatDivision::ONE);
+        assert_eq!(controls.mode, FilterMode::LowPass);
+        assert_eq!(
+            (
+                controls.cutoff_hz,
+                controls.resonance,
+                controls.amount,
+                controls.decay_ms
+            ),
+            (394, 64, 106, 270)
+        );
+        assert_eq!(fx.filters[0], FilterSettings::INITIAL);
+        assert_eq!(nav.beat_steps, Navigation::INITIAL.beat_steps);
+        assert_eq!(nav.slicer_steps, Navigation::INITIAL.slicer_steps);
+    }
+
+    #[test]
     fn factory_bass_saturates_before_kick_sidechain() {
         let [first, second] = Insert::factory(Part::Bass);
         assert_eq!(first, InsertKind::Saturator.initial(Part::Bass));
@@ -519,11 +639,11 @@ mod tests {
     fn one_beat_value_follows_the_editor_and_only_a_tempo_change_retimes_echo() {
         use crate::panel::Channel;
         let mut fx = Fx::INITIAL;
-        fx.edit_beat(Channel::Three, BeatEffect::Echo, [1, 0, 0, 0], false);
+        fx.edit_beat(Channel::Three, BeatEffect::Echo, [1, 0, 0, 0], 0, false);
         assert_eq!(fx.beats, BeatDivision::ONE);
-        fx.edit_beat(Channel::Three, BeatEffect::Flanger, [0; 4], true);
+        fx.edit_beat(Channel::Three, BeatEffect::Flanger, [0; 4], 0, true);
         assert_eq!(fx.flanger_target, Some(Channel::Three));
-        fx.edit_beat(Channel::One, BeatEffect::Flanger, [-1, 0, 0, 0], false);
+        fx.edit_beat(Channel::One, BeatEffect::Flanger, [-1, 0, 0, 0], 0, false);
         assert_eq!(fx.beats, BeatDivision::DOTTED_EIGHTH);
         let events = fx.return_events(Some(fx), Device::Delay, 100, 122);
         assert_eq!(
@@ -556,9 +676,9 @@ mod tests {
             fx.echo_input_open = open;
             fx.edit(Device::Delay, [0; 4], true);
             assert!(!fx.delay.enabled);
-            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             assert!(fx.echo_input_open && fx.delay.enabled);
-            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], true);
+            fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             assert!(!fx.echo_input_open && fx.delay.enabled);
         }
     }
