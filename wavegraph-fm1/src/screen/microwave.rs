@@ -11,7 +11,7 @@ use fm1_graphics::embedded_graphics::{
     text::{Alignment, Baseline, Text},
 };
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Display, Error},
+    bsp::display::{Display, Error},
     time::Clock,
 };
 use wavegraph_wavetable::Mode;
@@ -34,7 +34,7 @@ pub(super) struct Panel {
 impl Panel {
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: &Labels,
@@ -47,8 +47,7 @@ impl Panel {
         if entering || self.bank != Some(bank) {
             let mut top = Band::new(pixels, 4, 0, 112, 16, ink(FACE));
             wordmark(&mut top, ink(PRINT));
-            lcd.write_rect_buffered(4, 0, 112, 16, top.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(4, 0, 112, 16, top.pixels).await?;
             let mut sub = Band::new(pixels, 4, 16, 112, 16, ink(FACE));
             sub.label(
                 ["RESONANT SAW", "VOCAL FORMANTS"][usize::from(bank)],
@@ -56,8 +55,7 @@ impl Panel {
                 Left,
                 ink(PRINT),
             );
-            lcd.write_rect_buffered(4, 16, 112, 16, sub.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(4, 16, 112, 16, sub.pixels).await?;
             self.bank = Some(bank);
         }
         if entering || self.frame != Some(frame) {
@@ -78,8 +76,7 @@ impl Panel {
                 Center,
                 ink(INK),
             );
-            lcd.write_rect_buffered(119, 2, 68, 27, readout.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(119, 2, 68, 27, readout.pixels).await?;
             self.frame = Some(frame);
         }
         let status = (labels.channel, labels.voice_tap);
@@ -103,8 +100,7 @@ impl Panel {
                 Center,
                 ink(PRINT),
             );
-            lcd.write_rect_buffered(188, 2, 42, 27, side.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(188, 2, 42, 27, side.pixels).await?;
             self.status = Some(status);
         }
 
@@ -186,8 +182,7 @@ impl Panel {
                         Center,
                         ink(if enabled { INK } else { PRINT }),
                     );
-                    lcd.write_rect_buffered(x, y, 60, 20, band.pixels.as_flattened())
-                        .await?;
+                    lcd.write_rect(x, y, 60, 20, band.pixels).await?;
                 }
             }
             self.controls = Some(labels.wave);

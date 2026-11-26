@@ -17,7 +17,7 @@ use core::{
     pin::{Pin, pin},
     task::{Context, Poll},
 };
-use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, RgbColor, raw::ToBytes};
+use fm1_graphics::embedded_graphics::pixelcolor::{IntoStorage, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle, palette};
 use fm1_rticx::{
     bsp::{
@@ -53,6 +53,8 @@ mod style;
 use style::InstrumentStyle;
 mod tb303;
 mod tr808;
+mod viewport;
+use viewport::{PanelDisplay, Viewport};
 
 use envelope_plot::Plot;
 use selector::{Menu, Selector};
@@ -61,8 +63,6 @@ const TOP: u16 = (SIZE - HEIGHT as u16) / 2;
 // The timing monitor uses the original green CRT.
 const STYLE: WaveformStyle = style::MONO.scope;
 const MENU_TICKS: u32 = 100;
-// Foreground and background for the global channel badge.
-const GLO_OVERLAY: [Rgb565; 2] = [Rgb565::WHITE, Rgb565::BLACK];
 const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
@@ -133,7 +133,7 @@ pub(super) struct Screen {
     sequence: sequencer::Grid,
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
-    badge: Option<Channel>,
+    badge: Option<badge::Mode>,
     dot: Option<Severity>,
     dot_background: Rgb565,
     page: Option<Page>,
@@ -192,25 +192,6 @@ impl Screen {
         labels: Labels,
         motion: &Motion,
     ) -> Result<(), Error> {
-        if let View::BeatFx(effect) = labels.view {
-            let state = beat_fx::Panel::new(effect, &labels, motion);
-            let previous = match self.page {
-                Some(Page::BeatFx(old)) => Some(old),
-                _ => None,
-            };
-            if previous != Some(state) {
-                if previous.is_none() {
-                    self.change_view(WaveformStyle {
-                        background: mixer::BACKGROUND,
-                        ..STYLE
-                    });
-                }
-                let mut draw = pin!(state.paint(lcd, clock, self.strip, previous));
-                poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
-                self.page = Some(Page::BeatFx(state));
-            }
-            return Ok(());
-        }
         if labels.view == View::Clipboard {
             let page = Page::Clipboard(
                 labels.channel,
@@ -600,6 +581,7 @@ impl Screen {
         t: Timing,
     ) -> Result<(), Error> {
         if self.page.replace(Page::Timing) != Some(Page::Timing) {
+            self.badge = None;
             self.selector.select(None, None);
             self.change_view(STYLE);
             lcd.as_async(clock)?
@@ -690,9 +672,7 @@ impl Screen {
     ) -> Result<(), Error> {
         let labels = &frame.labels;
         let theme = match labels.view {
-            View::Mixer | View::Channel | View::Clipboard | View::MasterFx(_) | View::BeatFx(_) => {
-                None
-            }
+            View::Mixer | View::Channel | View::Clipboard | View::MasterFx(_) => None,
             View::Scope
             | View::SampleEdit
             | View::VoiceMode
@@ -700,23 +680,51 @@ impl Screen {
             | View::Arp
             | View::Lfo
             | View::Fx
+            | View::BeatFx(_)
             | View::Sequencer => Some(InstrumentStyle::for_part(labels.focus)),
         };
         let feedback = labels
             .preset_since
             .and_then(|since| preset_age(since, ticks()));
-        let channel = feedback
-            .filter(|_| labels.view.presets(labels.insert_slot) == PresetRole::Channel)
-            .map(|_| labels.channel);
-        if self.badge.is_some() && channel.is_none() {
-            self.page = None; // Restore the covered header from its current instrument state.
+        let badge = match labels.preset_role {
+            PresetRole::Audition(selected) => Some(badge::Mode::InstrumentSwap(badge::Swap {
+                channel: labels.channel,
+                live: labels.focus,
+                selected,
+            })),
+            PresetRole::Channel
+                if feedback.is_some() && !matches!(labels.view, View::BeatFx(_)) =>
+            {
+                Some(badge::Mode::Channel)
+            }
+            _ => None,
+        };
+        let was_swap = matches!(self.badge, Some(badge::Mode::InstrumentSwap(_)));
+        let swap = matches!(badge, Some(badge::Mode::InstrumentSwap(_)));
+        let changed = self.badge != badge;
+        let picker_was_visible = self.selector.visible();
+        let previous_dot = self.dot;
+        if changed && self.badge.is_some() && !(was_swap && swap) {
+            self.page = None; // Restore the instrument artwork under the old overlay.
         }
-        self.badge = channel;
+        self.badge = badge;
         self.paint_page(lcd, clock, frame, motion, theme, feedback)
             .await?;
-        if let Some(channel) = channel {
-            let colors = theme.map_or(GLO_OVERLAY, |t| [t.face, t.ink]);
-            badge::paint(lcd, clock, self.strip, channel, colors).await?;
+        match badge {
+            Some(badge::Mode::InstrumentSwap(state)) => {
+                self.dot_background = InstrumentStyle::for_part(state.live).face;
+                if changed || picker_was_visible != self.selector.visible() {
+                    badge::swap(lcd, clock, self.strip, state, self.selector, !was_swap).await?;
+                    self.dot = None;
+                } else {
+                    // Instrument redraws leave the overload lamp in the reserved header intact.
+                    self.dot = previous_dot;
+                }
+            }
+            Some(badge::Mode::Channel) => {
+                badge::paint(lcd, clock, self.strip, labels.channel).await?
+            }
+            None => (),
         }
         if severity != self.dot {
             let color = match severity {
@@ -745,6 +753,16 @@ impl Screen {
         Ok(())
     }
 
+    fn viewport(&self) -> Viewport {
+        match self.badge {
+            Some(badge::Mode::InstrumentSwap(_)) if self.selector.visible() => {
+                Viewport::SwapWithPicker
+            }
+            Some(badge::Mode::InstrumentSwap(_)) => Viewport::Swap,
+            _ => Viewport::Full,
+        }
+    }
+
     async fn paint_page(
         &mut self,
         lcd: &mut Display,
@@ -756,12 +774,13 @@ impl Screen {
     ) -> Result<(), Error> {
         let labels = frame.labels;
         let menu = if elapsed.is_some_and(|age| age < MENU_TICKS) {
-            match labels.view.presets(labels.insert_slot) {
+            match labels.preset_role {
                 PresetRole::Channel if labels.view == View::Scope => Some(Menu::Channels {
                     parts: labels.assignments,
                     focus: labels.channel,
                 }),
                 PresetRole::Instrument => Some(Menu::Instruments(labels.focus)),
+                PresetRole::Audition(selected) => Some(Menu::Instruments(selected)),
                 PresetRole::Insert(slot) => {
                     Some(Menu::Effects(labels.inserts[usize::from(slot)].kind()))
                 }
@@ -770,13 +789,45 @@ impl Screen {
         } else {
             None
         };
-        if self.selector.select(menu, theme) {
-            self.page = None;
+        let audition = matches!(labels.preset_role, PresetRole::Audition(_));
+        let previous = self.selector.instrument();
+        if self
+            .selector
+            .select(menu, if audition { None } else { theme })
+        {
+            if let Some(Menu::Instruments(selected)) = menu
+                && audition
+            {
+                self.selector
+                    .paint_instruments(lcd, clock, self.strip, previous, selected)
+                    .await?;
+                if previous.is_none() {
+                    self.page = None;
+                }
+            } else {
+                self.page = None;
+            }
         }
         let Some(theme) = theme else {
             let mut page = pin!(self.paint_global(lcd, clock, labels, &motion));
             return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
         };
+        if let View::BeatFx(effect) = labels.view {
+            let state = beat_fx::Panel::new(effect, &labels, &motion);
+            let previous = match self.page {
+                Some(Page::BeatFx(old)) if old.part == labels.focus => Some(old),
+                _ => None,
+            };
+            if previous != Some(state) {
+                if previous.is_none() {
+                    self.change_view(theme.panel());
+                }
+                let mut draw = pin!(state.paint(lcd, clock, self.strip, theme, previous));
+                poll_fn(|cx| poll_page(draw.as_mut(), cx)).await?;
+                self.page = Some(Page::BeatFx(state));
+            }
+            return Ok(());
+        }
         if let Some(page) = labels.seq.page {
             return self
                 .paint_sequencer(
@@ -956,6 +1007,7 @@ impl Screen {
         theme: &InstrumentStyle,
     ) -> Result<(), Error> {
         let labels = frame.labels;
+        let viewport = self.viewport();
         let bass = labels.focus == Part::Bass;
         let organ = labels.focus == Part::Organ;
         let drums = labels.focus.is_kit();
@@ -1012,7 +1064,7 @@ impl Screen {
         };
         if changed_page {
             self.dot_background = self.selector.shade(theme.face);
-            let mut lcd = lcd.as_async(clock)?;
+            let mut lcd = PanelDisplay::new(lcd, clock, viewport)?;
             for (y, height) in [(0, header), (SIZE - footer, footer)] {
                 if height > 0 {
                     lcd.fill_rect(0, y, SIZE, height, self.dot_background.into_storage())
@@ -1034,16 +1086,16 @@ impl Screen {
         };
         self.paint_scope(lcd, clock, sweep, theme, (header..SIZE - footer, center))
             .await?;
+        let mut display = PanelDisplay::new(lcd, clock, viewport)?;
         if bass {
             let automation = motion
                 .bass_automation
                 .filter(|(channel, _)| *channel == labels.channel)
                 .map(|(_, values)| values);
-            let mut lcd = lcd.as_async(clock)?;
             return self
                 .bass
                 .paint(
-                    &mut lcd,
+                    &mut display,
                     self.strip,
                     self.selector,
                     &labels,
@@ -1054,7 +1106,6 @@ impl Screen {
         }
         if hoover {
             if changed_page {
-                let mut display = lcd.as_async(clock)?;
                 hoover::header(&mut display, self.strip, self.selector, &labels).await?;
             }
             self.text.text(0, 13, b"CUT  BEND PWM  CHOR", muted);
@@ -1062,21 +1113,21 @@ impl Screen {
             for (x, v) in [p.cutoff, p.sweep, p.pwm, p.chorus].into_iter().enumerate() {
                 self.text.number(x * 5, 14, 3, u32::from(v), bright);
             }
-            return self.text.paint_async(lcd, clock).await;
+            return self.text.paint_panel(&mut display).await;
         }
         if fm {
-            let mut lcd = lcd.as_async(clock)?;
-            let mut page =
-                pin!(
-                    self.fm
-                        .paint(&mut lcd, self.strip, self.selector, &labels, changed_page)
-                );
+            let mut page = pin!(self.fm.paint(
+                &mut display,
+                self.strip,
+                self.selector,
+                &labels,
+                changed_page
+            ));
             return poll_fn(|cx| poll_page(page.as_mut(), cx)).await;
         }
         if sampler {
             let mut draw = pin!(self.sampler.paint(
-                lcd,
-                clock,
+                &mut display,
                 self.strip,
                 self.selector,
                 &labels,
@@ -1085,11 +1136,10 @@ impl Screen {
             return poll_fn(|cx| poll_page(draw.as_mut(), cx)).await;
         }
         if wave {
-            let mut lcd = lcd.as_async(clock)?;
             return self
                 .wave
                 .paint(
-                    &mut lcd,
+                    &mut display,
                     self.strip,
                     self.selector,
                     &labels,
@@ -1101,11 +1151,16 @@ impl Screen {
         if saw {
             return self
                 .jp
-                .paint(lcd, clock, self.strip, self.selector, labels, changed_page)
+                .paint(
+                    &mut display,
+                    self.strip,
+                    self.selector,
+                    labels,
+                    changed_page,
+                )
                 .await;
         }
         if drums {
-            let mut display = lcd.as_async(clock)?;
             self.drums
                 .paint(
                     &mut display,
@@ -1148,8 +1203,7 @@ impl Screen {
                 self.text.text(15, 2, status.as_bytes(), ink);
             }
             display.flush().await?;
-            drop(display);
-            return self.text.paint_async(lcd, clock).await;
+            return self.text.paint_panel(&mut display).await;
         }
         let part = labels.focus;
         let voice = labels.voice;
@@ -1164,9 +1218,7 @@ impl Screen {
                     fm1_graphics::embedded_graphics::text::Alignment::Center,
                     ink,
                 );
-                let mut lcd = lcd.as_async(clock)?;
-                lcd.write_rect_buffered(144, 224, 48, 16, band.pixels.as_flattened())
-                    .await?;
+                display.write_rect(144, 224, 48, 16, band.pixels).await?;
             }
             let voices = labels
                 .poly_keys
@@ -1212,7 +1264,7 @@ impl Screen {
         self.text.text(16, 14, b"V", muted);
         let velocity = voice.gate.note.map_or(0, |note| u32::from(note.velocity));
         self.text.number(17, 14, 3, velocity, ink);
-        self.text.paint_async(lcd, clock).await
+        self.text.paint_panel(&mut display).await
     }
 }
 
@@ -1258,6 +1310,7 @@ impl Screen {
         if self.sweep.as_ref() == Some(&sweep) {
             return Ok(());
         }
+        let viewport = self.viewport();
         let list = &mut *self.selector;
         let palette = self.scope_palette.get_or_insert_with(|| {
             let style = list.style(theme.scope);
@@ -1283,7 +1336,7 @@ impl Screen {
             )
         };
         let mut lcd = lcd.as_async(clock)?;
-        for window in damage.windows() {
+        for window in damage.windows().flat_map(|window| viewport.windows(window)) {
             for w in window.strips(self.strip.len()) {
                 let pixels = &mut self.strip[..w.width * w.height];
                 sweep.render(w, palette, usize::from(center), pixels);

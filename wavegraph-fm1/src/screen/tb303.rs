@@ -16,10 +16,7 @@ use fm1_graphics::embedded_graphics::{
     primitives::{Circle, Line, PrimitiveStyle, Rectangle},
     text::Alignment,
 };
-use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error},
-    time::Clock,
-};
+use fm1_rticx::bsp::display::Error;
 use heapless::String;
 
 const KNOB_ROW: u16 = 32;
@@ -249,7 +246,7 @@ pub(super) struct Panel {
 impl Panel {
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: &Labels,
@@ -277,8 +274,7 @@ impl Panel {
         if entering {
             let mut logo = Band::new(pixels, 0, 0, 78, 20, paper).with_panel_type(true);
             wordmark(&mut logo, selector);
-            lcd.write_rect_buffered(0, 0, 78, 20, logo.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(0, 0, 78, 20, logo.pixels).await?;
         }
         if old.is_none_or(|s| {
             s.controls != state.controls
@@ -289,8 +285,7 @@ impl Panel {
             let mut display =
                 Band::new(pixels, 0, 0, 80, 20, selector.shade(GRAPHITE)).with_panel_type(true);
             readout(&mut display, state, selector);
-            lcd.write_rect_buffered(78, 0, 80, 20, display.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(78, 0, 80, 20, display.pixels).await?;
         }
         let switch = state.wave_switch();
         if old.is_none_or(|s| s.wave_switch() != switch) {
@@ -301,14 +296,12 @@ impl Panel {
             };
             let mut band = Band::new(pixels, 0, 0, 78, 11, fill).with_panel_type(true);
             switch.draw(&mut band, selector);
-            lcd.write_rect_buffered(0, 21, 78, 11, band.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(0, 21, 78, 11, band.pixels).await?;
         }
         if old.is_none_or(|s| s.status != state.status) {
             let mut status = Band::new(pixels, 0, 0, 80, 10, paper).with_panel_type(true);
             state.status.draw(&mut status, selector.shade(GRAPHITE));
-            lcd.write_rect_buffered(78, 21, 80, 10, status.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(78, 21, 80, 10, status.pixels).await?;
         }
         for (i, knob) in Knob::PANEL.into_iter().enumerate() {
             let dial = state.dial(knob);
@@ -351,8 +344,7 @@ impl Panel {
             };
             let mut cell = Band::new(pixels, dx, dy, w, h, fill).with_panel_type(true);
             dial.draw(&mut cell, selector, knob, center);
-            lcd.write_rect_buffered(x + dx, y + dy, w, h, cell.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(x + dx, y + dy, w, h, cell.pixels).await?;
         }
         lcd.flush().await?;
         self.previous = Some(state);

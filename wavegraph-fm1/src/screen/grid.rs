@@ -147,7 +147,14 @@ impl TextGrid {
         if self.dirty == [0; ROWS] {
             return Ok(());
         }
-        let mut lcd = lcd.as_async(delay)?;
+        let mut lcd = super::PanelDisplay::new(lcd, delay, super::Viewport::Full)?;
+        self.paint_panel(&mut lcd).await
+    }
+
+    pub(super) async fn paint_panel(
+        &mut self,
+        lcd: &mut super::PanelDisplay<'_>,
+    ) -> Result<(), Error> {
         for (x, y, ch, colors) in self.dirty_cells() {
             let mask = super::lettering::GRID.glyph(ch);
             let mut pixels: CellPixels =
@@ -157,8 +164,8 @@ impl TextGrid {
                     super::lettering::blend(pixel, colors.ink, mask.coverage(col, row));
                 }
             }
-            let bytes = pixels.as_flattened().as_flattened();
-            lcd.write_rect_buffered(x, y, CELL_W, CELL_H, bytes).await?;
+            lcd.write_rect(x, y, CELL_W, CELL_H, pixels.as_flattened_mut())
+                .await?;
         }
         lcd.flush().await?;
         self.dirty.fill(0);

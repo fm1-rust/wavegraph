@@ -12,6 +12,7 @@ pub(super) const MAX_LEVEL: u8 = 255;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Strip {
+    pub(super) enabled: bool,
     pub(super) level: u8,
     pub(super) reverb: u8,
     pub(super) delay: u8,
@@ -19,10 +20,15 @@ pub(super) struct Strip {
 
 impl Strip {
     const UNITY: Self = Self {
+        enabled: true,
         level: UNITY,
         reverb: 0,
         delay: 0,
     };
+
+    fn output_level(self) -> u8 {
+        if self.enabled { self.level } else { 0 }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,16 +39,19 @@ impl Mixer {
     pub(super) const DRY: Self = Self([Strip::UNITY; CHANNELS]);
     pub(super) const INITIAL: Self = Self([
         Strip {
+            enabled: true,
             level: 108,
             reverb: 80,
             delay: 104,
         },
         Strip {
+            enabled: true,
             level: 120,
             reverb: 96,
             delay: 112,
         },
         Strip {
+            enabled: true,
             level: 88,
             reverb: 12,
             delay: 0,
@@ -74,10 +83,10 @@ impl Mixer {
             let old = previous.map(|mixer| mixer.0[channel.index()]);
             for (changed, message) in [
                 (
-                    old.is_none_or(|old| old.level != strip.level),
+                    old.is_none_or(|old| old.output_level() != strip.output_level()),
                     MixerMessage::Level {
                         track,
-                        level: strip.level,
+                        level: strip.output_level(),
                     },
                 ),
                 (
@@ -151,7 +160,7 @@ impl Meter {
                 .map(|sample| sample.inner().unsigned_abs())
                 .max()
                 .unwrap_or(0);
-            let level = mixer.0[i].level;
+            let level = mixer.0[i].output_level();
             let peak = input.saturating_mul(u32::from(level)) >> 7;
             if level == 0 {
                 self.peak[i] = 0;
@@ -193,6 +202,7 @@ mod tests {
         assert_eq!(
             mixer.0[1],
             Strip {
+                enabled: true,
                 level: MAX_LEVEL,
                 reverb: 100,
                 delay: 120
@@ -207,11 +217,44 @@ mod tests {
         assert_eq!(
             mixer.0[1],
             Strip {
+                enabled: true,
                 level: 0,
                 reverb: 0,
                 delay: 0
             }
         );
+    }
+
+    #[test]
+    fn muted_fader_edits_are_recalled_on_enable_and_clear_the_post_fader_meter() {
+        let mut mixer = Mixer::INITIAL;
+        let original = mixer;
+        let ch = Channel::Two;
+        let mut meter = Meter::default();
+        let loud = [[I24::new_unchecked(1 << 22)]; CHANNELS];
+        let peaks = meter.update(mixer, &loud);
+        mixer.0[ch.index()].enabled = false;
+        assert_eq!(
+            mixer.events(Some(original)).as_slice(),
+            &[at(MixerMessage::Level { track: 1, level: 0 })]
+        );
+        assert_eq!(
+            meter.update(mixer, &loud),
+            [peaks[0], 0, peaks[2], peaks[3]]
+        );
+        let muted = mixer;
+        mixer.turn_knobs(ch, [3, 0, 0, 0]);
+        assert!(mixer.events(Some(muted)).is_empty());
+        let edited = mixer;
+        mixer.0[ch.index()].enabled = true;
+        assert_eq!(
+            mixer.events(Some(edited)).as_slice(),
+            &[at(MixerMessage::Level {
+                track: 1,
+                level: 132
+            })]
+        );
+        assert!(meter.update(mixer, &loud)[ch.index()] > 0);
     }
 
     #[test]

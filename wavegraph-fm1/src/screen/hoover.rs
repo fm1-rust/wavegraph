@@ -77,7 +77,7 @@ impl Screen {
 }
 
 pub(super) async fn header(
-    lcd: &mut fm1_rticx::bsp::display::AsyncDisplay<'_, Clock>,
+    lcd: &mut PanelDisplay<'_>,
     pixels: &mut [[u8; 2]],
     selector: &mut Selector,
     labels: &Labels,
@@ -120,8 +120,7 @@ pub(super) async fn header(
             [style::HOOVER.ink; 2],
         );
         band.compose(selector);
-        lcd.write_rect_buffered(0, y, 228, BAND as u16, band.pixels.as_flattened())
-            .await?;
+        lcd.write_rect(0, y, 228, BAND as u16, band.pixels).await?;
     }
     lcd.flush().await
 }

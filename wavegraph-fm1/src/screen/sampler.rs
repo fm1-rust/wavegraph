@@ -49,8 +49,7 @@ pub(super) struct Panel {
 impl Panel {
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut Display,
-        clock: &mut Clock,
+        display: &mut super::PanelDisplay<'_>,
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: &Labels,
@@ -82,7 +81,6 @@ impl Panel {
         if !top && !bottom {
             return Ok(());
         }
-        let mut display = lcd.as_async(clock)?;
         if top {
             let index = usize::from(header.slot);
             let root = header.root.map_or(*b"--  ", Voice::pitch_name);
@@ -143,7 +141,7 @@ impl Panel {
                 band.label(&second, Point::new(15, 36), Alignment::Left, INK);
                 band.compose(selector);
                 display
-                    .write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+                    .write_rect(0, y, SIZE, BAND as u16, band.pixels)
                     .await?;
             }
             self.header = Some(header);
@@ -184,7 +182,7 @@ impl Panel {
                 }
                 band.compose(selector);
                 display
-                    .write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+                    .write_rect(0, y, SIZE, BAND as u16, band.pixels)
                     .await?;
             }
             self.controls = Some(controls);

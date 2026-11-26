@@ -13,10 +13,7 @@ use fm1_graphics::{
         text::Alignment,
     },
 };
-use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error},
-    time::Clock,
-};
+use fm1_rticx::bsp::display::Error;
 use heapless::String;
 use wavegraph_fm::{Patch, VoiceMode};
 
@@ -38,7 +35,7 @@ pub(super) struct Panel {
 impl Panel {
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: &Labels,
@@ -87,14 +84,8 @@ impl Panel {
                     PRINT,
                 );
                 band.compose(selector);
-                lcd.write_rect_buffered(
-                    0,
-                    y,
-                    HEADER_WIDTH,
-                    BAND as u16,
-                    band.pixels.as_flattened(),
-                )
-                .await?;
+                lcd.write_rect(0, y, HEADER_WIDTH, BAND as u16, band.pixels)
+                    .await?;
             }
             self.header = Some(header);
         }
@@ -128,8 +119,7 @@ impl Panel {
                 band.label(name, Point::new(left + 30, 207), Center, GREEN);
                 band.label(&value, Point::new(left + 30, 220), Center, PRINT);
                 band.compose(selector);
-                lcd.write_rect_buffered(x, 202, 60, 32, band.pixels.as_flattened())
-                    .await?;
+                lcd.write_rect(x, 202, 60, 32, band.pixels).await?;
             }
             self.patch = Some(patch);
         }

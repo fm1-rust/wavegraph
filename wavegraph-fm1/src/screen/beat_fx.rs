@@ -1,22 +1,17 @@
 //! One BEATS display and control layout for every beat effect.
-use super::{
-    BAND, WIDTH,
-    lettering::GRID as FACE,
-    mixer::{BACKGROUND, Band, LABEL, OUTLINE, POINTER, STRIP},
-};
+use super::{BAND, InstrumentStyle, WIDTH, drums, lettering::GRID as FACE, mixer::Band};
 use crate::{
     firmware::{Labels, Motion},
     fx::BeatEffect,
+    instrument::Part,
     panel::Channel,
 };
 use fm1_graphics::{
     Rgb565,
     embedded_graphics::{
-        pixelcolor::RgbColor,
         prelude::{Point, Size},
         text::Alignment,
     },
-    palette,
 };
 use fm1_rticx::{
     bsp::display::{Display, Error, SIZE},
@@ -28,6 +23,7 @@ use wavegraph_fx::{BeatDivision, StepPattern};
 pub(super) struct Panel {
     effect: BeatEffect,
     channel: Channel,
+    pub(super) part: Part,
     beats: BeatDivision,
     bpm: u16,
     return_enabled: bool,
@@ -61,6 +57,7 @@ impl Panel {
         Self {
             effect,
             channel: labels.channel,
+            part: labels.focus,
             beats: fx.beats,
             bpm: labels.seq.transport.bpm,
             return_enabled: fx.delay.enabled,
@@ -71,8 +68,7 @@ impl Panel {
             steps: labels.beat_steps,
             playhead: match effect {
                 BeatEffect::Echo => motion.position.map(|p| p.step & 15),
-                BeatEffect::Slicer => Some(motion.slicer_step),
-                BeatEffect::Flanger => None,
+                BeatEffect::Flanger | BeatEffect::Slicer => Some(motion.beat_step),
             },
         }
     }
@@ -82,20 +78,18 @@ impl Panel {
         lcd: &mut Display,
         clock: &mut Clock,
         pixels: &mut [[u8; 2]; BAND * WIDTH],
+        theme: &InstrumentStyle,
         previous: Option<Self>,
     ) -> Result<(), Error> {
         let mut lcd = lcd.as_async(clock)?;
         for y in (0..SIZE).step_by(BAND) {
             if previous.is_some_and(|old| match y {
-                0..24 => (old.effect, old.channel) == (self.effect, self.channel),
-                24..80 => old.beats == self.beats,
+                0..32 => (old.effect, old.channel) == (self.effect, self.channel),
+                32..80 => old.beats == self.beats,
                 80..104 => old.bpm == self.bpm,
                 104..152 => old.effect == self.effect && old.values == self.values,
-                152..208 => {
-                    old.effect == self.effect
-                        && old.steps == self.steps
-                        && old.playhead == self.playhead
-                }
+                152..176 => old.effect == self.effect,
+                176..208 => true,
                 _ => {
                     old.effect == self.effect
                         && old.return_enabled == self.return_enabled
@@ -107,47 +101,60 @@ impl Panel {
             }) {
                 continue;
             }
-            let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, BACKGROUND);
+            // Preserve the overload lamp on partial header updates.
+            let width = if previous.is_some() && y < 16 {
+                SIZE - 12
+            } else {
+                SIZE
+            };
+            let mut band = Band::new(pixels, 0, y, width, BAND as u16, theme.face)
+                .with_panel_type(super::lettering::panel_type(self.part));
             match y {
-                0..24 => {
+                0..32 => {
+                    super::badge::draw(&mut band, self.channel, Point::zero());
                     band.title(
                         match self.effect {
                             BeatEffect::Slicer => "BEAT FX / SLICER",
                             BeatEffect::Echo => "BEAT FX / ECHO",
                             BeatEffect::Flanger => "BEAT FX / FLANGER",
                         },
-                        Point::new(8, 5),
-                        Rgb565::WHITE,
+                        Point::new(32, 9),
+                        theme.ink,
                     );
                     band.label(
-                        self.channel.label(),
-                        Point::new(219, 7),
+                        self.part.name(),
+                        Point::new(226, 11),
                         Alignment::Right,
-                        POINTER,
+                        theme.accent,
                     );
                 }
-                24..80 => {
-                    band.rect(Point::new(7, 24), Size::new(226, 56), STRIP);
+                32..80 => {
+                    band.rect(Point::new(7, 32), Size::new(226, 48), theme.surface);
                     band.label(
                         "KNOB 1 / BEATS",
-                        Point::new(120, 28),
+                        Point::new(120, 33),
                         Alignment::Center,
-                        palette::CYAN,
+                        theme.ink,
                     );
-                    beat_value(&mut band, y, self.beats);
+                    beat_value(&mut band, y, self.beats, theme.ink);
                 }
                 80..104 => {
                     let bpm = heapless::format!(18; "MASTER  {} BPM", self.bpm).expect("tempo");
-                    band.label(&bpm, Point::new(120, 86), Alignment::Center, Rgb565::WHITE);
+                    band.label(&bpm, Point::new(120, 86), Alignment::Center, theme.ink);
                 }
                 104..152 => {
                     if self.effect == BeatEffect::Slicer {
-                        band.label("PER CYCLE", Point::new(155, 109), Alignment::Center, LABEL);
+                        band.label(
+                            "PER CYCLE",
+                            Point::new(155, 109),
+                            Alignment::Center,
+                            theme.ink,
+                        );
                         band.label(
                             "16 STEPS",
                             Point::new(155, 128),
                             Alignment::Center,
-                            Rgb565::WHITE,
+                            theme.ink,
                         );
                     }
                     let last = if self.effect == BeatEffect::Echo {
@@ -164,49 +171,22 @@ impl Panel {
                             3
                         })
                     {
-                        band.label(label, Point::new(x, 109), Alignment::Center, LABEL);
+                        band.label(label, Point::new(x, 109), Alignment::Center, theme.ink);
                         let readout = heapless::format!(4; "{}%", value).expect("percentage");
-                        band.label(
-                            &readout,
-                            Point::new(x, 128),
-                            Alignment::Center,
-                            Rgb565::WHITE,
-                        );
+                        band.label(&readout, Point::new(x, 128), Alignment::Center, theme.ink);
                     }
                 }
-                152..208 if self.effect != BeatEffect::Flanger => {
-                    band.label(
-                        if self.effect == BeatEffect::Slicer {
-                            "WHITE KEYS / PASS STEPS"
-                        } else {
-                            "WHITE KEYS / ECHO SEND STEPS"
-                        },
-                        Point::new(120, 155),
-                        Alignment::Center,
-                        LABEL,
-                    );
-                    for step in 0..16u8 {
-                        let x = 10 + 13 * i32::from(step) + 4 * i32::from(step / 4);
-                        band.rect(
-                            Point::new(x, 176),
-                            Size::new(11, 13),
-                            if self.steps.active(step) {
-                                palette::CYAN
-                            } else {
-                                OUTLINE
-                            },
-                        );
-                        if self.playhead == Some(step) {
-                            band.rect(Point::new(x, 192), Size::new(11, 3), Rgb565::WHITE);
-                        }
-                    }
-                }
-                152..208 => band.label(
-                    "ONE LFO SWEEP PER CYCLE",
-                    Point::new(120, 174),
+                152..176 => band.label(
+                    match self.effect {
+                        BeatEffect::Echo => "WHITE KEYS / ECHO SEND STEPS",
+                        BeatEffect::Slicer => "WHITE KEYS / PASS STEPS",
+                        BeatEffect::Flanger => "LFO SWEEP / ONE CYCLE",
+                    },
+                    Point::new(120, 155),
                     Alignment::Center,
-                    POINTER,
+                    theme.ink,
                 ),
+                176..208 => (),
                 _ => {
                     let routed;
                     let status = match self.effect {
@@ -228,24 +208,82 @@ impl Panel {
                             None => "SEL APPLY TO THIS CHANNEL",
                         },
                     };
-                    band.label(
-                        status,
-                        Point::new(120, 209),
-                        Alignment::Center,
-                        Rgb565::WHITE,
-                    );
+                    band.label(status, Point::new(120, 209), Alignment::Center, theme.ink);
                     band.label(
                         "SELECT FX   PRESETS CH   HOME BACK",
                         Point::new(120, 226),
                         Alignment::Center,
-                        LABEL,
+                        theme.ink,
                     );
                 }
             }
-            lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+            lcd.write_rect_buffered(0, y, width, BAND as u16, band.pixels.as_flattened())
+                .await?;
+        }
+        // A moving playhead updates only the old and new keys (220 pixels each).
+        for step in 0..16 {
+            let state = self.key_state(step);
+            if previous.is_some_and(|old| old.key_state(step) == state) {
+                continue;
+            }
+            let x = 10 + 13 * u16::from(step) + 4 * u16::from(step / 4);
+            let mut key = Band::new(pixels, 0, 0, 11, 20, theme.face);
+            self.step_key(&mut key, theme, step, state);
+            lcd.write_rect_buffered(x, 176, 11, 20, key.pixels.as_flattened())
                 .await?;
         }
         lcd.flush().await
+    }
+
+    fn key_state(&self, step: u8) -> (bool, bool) {
+        let current = self.playhead == Some(step);
+        let active = if self.effect == BeatEffect::Flanger {
+            current
+        } else {
+            self.steps.active(step)
+        };
+        (active, current)
+    }
+
+    fn step_key(
+        &self,
+        band: &mut Band<'_>,
+        theme: &InstrumentStyle,
+        step: u8,
+        (active, current): (bool, bool),
+    ) {
+        let cap = match self.part {
+            Part::Tr808 => drums::STEP_COLORS_808[usize::from(step / 4)],
+            Part::Tr909 => drums::KEY_FACE_909,
+            _ if active => theme.selected.fill,
+            _ => theme.surface,
+        };
+        let rim = if self.part.is_kit() {
+            theme.ink
+        } else {
+            theme.muted
+        };
+        let lamp = match self.part {
+            Part::Tr808 | Part::Tr909 if active => drums::LIT_LENS,
+            Part::Tr808 | Part::Tr909 => drums::DARK_LENS,
+            _ if active => theme.selected.ink,
+            _ => theme.face,
+        };
+        band.rect(Point::zero(), Size::new(11, 14), rim);
+        band.rect(Point::new(1, 1), Size::new(9, 12), cap);
+        band.rect(
+            Point::new(2, 4),
+            Size::new(7, 5),
+            if self.part.is_kit() {
+                drums::GRAPHITE
+            } else {
+                rim
+            },
+        );
+        band.rect(Point::new(3, 5), Size::new(5, 3), lamp);
+        if current {
+            band.rect(Point::new(0, 17), Size::new(11, 3), theme.selected.fill);
+        }
     }
 }
 
@@ -254,7 +292,7 @@ impl Panel {
     clippy::arithmetic_side_effects,
     reason = "The longest fraction is four 24-pixel glyphs centered on the 240-pixel LCD"
 )]
-fn beat_value(band: &mut Band<'_>, y: u16, beats: BeatDivision) {
+fn beat_value(band: &mut Band<'_>, y: u16, beats: BeatDivision, ink: Rgb565) {
     let label = beats.label();
     let left = (WIDTH - label.len() * 24) / 2;
     for (i, c) in label.bytes().enumerate() {
@@ -266,7 +304,7 @@ fn beat_value(band: &mut Band<'_>, y: u16, beats: BeatDivision) {
             for x in 0..24 {
                 super::lettering::blend(
                     &mut pixels[left + i * 24 + x],
-                    Rgb565::WHITE,
+                    ink,
                     glyph.coverage(x / 2, dy / 2),
                 );
             }

@@ -13,7 +13,7 @@ use fm1_graphics::embedded_graphics::{
     draw_target::DrawTarget,
     geometry::OriginDimensions,
     mono_font::MonoTextStyle,
-    pixelcolor::raw::ToBytes,
+    pixelcolor::{RgbColor, raw::ToBytes},
     prelude::{Point, Primitive, Size},
     primitives::{Circle, Line, PrimitiveStyle, PrimitiveStyleBuilder, Rectangle},
     text::{Alignment, Baseline, Text, TextStyleBuilder},
@@ -99,7 +99,7 @@ const CENTERS: [i32; 2] = [178, 210];
 struct ChannelStrip {
     part: crate::instrument::Part,
     controls: Strip,
-    active: bool,
+    focused: bool,
     selected: bool,
 }
 
@@ -146,7 +146,7 @@ impl Surface {
         let strips = core::array::from_fn(|i| ChannelStrip {
             part: labels.assignments[i],
             controls: labels.mixer.0[i],
-            active: labels.channel.index() == i,
+            focused: labels.channel.index() == i,
             selected: editing && labels.channel.index() == i,
         });
         for (i, strip) in strips.into_iter().enumerate() {
@@ -185,17 +185,19 @@ impl Surface {
             for y in (footer..SIZE).step_by(BAND) {
                 let mut band =
                     Band::new(pixels, 0, y, SIZE, (SIZE - y).min(BAND as u16), BACKGROUND);
-                let hint = if editing {
-                    "PRESETS ASSIGN   EDIT PCM   HOME BACK"
+                let (top, bottom) = if editing {
+                    ("PRESETS ASSIGN   EDIT PCM", "SEL ON/OFF   HOME BACK")
                 } else {
-                    "K1-4 FADERS   SELECT EDIT   FX RACK"
+                    ("K1-4 FADERS   SELECT EDIT", "SEL ON/OFF   FX RACK")
                 };
-                band.label(
-                    hint,
-                    Point::new(i32::from(SIZE / 2), 223),
-                    Alignment::Center,
-                    LABEL,
-                );
+                for (hint, at) in [(top, 216), (bottom, 228)] {
+                    band.label(
+                        hint,
+                        Point::new(i32::from(SIZE / 2), at),
+                        Alignment::Center,
+                        LABEL,
+                    );
+                }
                 band.compose(selector);
                 lcd.write_rect_buffered(0, y, SIZE, band.height, band.pixels.as_flattened())
                     .await?;
@@ -300,20 +302,32 @@ impl<'a> Band<'a> {
         let colors = RackColors::GLOBAL;
         let y = i32::from(y);
         self.rect(Point::new(5, y), Size::new(230, 45), strip.background());
-        if strip.selected {
+        if strip.focused {
             self.rect(Point::new(5, y), Size::new(2, 45), colors.accent);
         }
-        let active = if strip.active {
+        let number = if strip.focused {
             colors.accent
         } else {
             colors.label
         };
-        self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), active);
+        self.title(["1", "2", "3", "4"][index], Point::new(11, y + 3), number);
+        let (state, fill, ink) = if strip.controls.enabled {
+            ("ON", AMBER, Rgb565::BLACK)
+        } else {
+            ("OFF", MOTION_OFF, palette::WHITE)
+        };
+        self.rect(Point::new(93, y + 2), Size::new(26, 14), colors.rim);
+        self.rect(Point::new(94, y + 3), Size::new(24, 12), fill);
+        self.label(state, Point::new(106, y + 4), Alignment::Center, ink);
         self.panel_text(
             strip.part.name(),
             Point::new(25, y + 3),
             Alignment::Left,
-            colors.ink,
+            if strip.controls.enabled {
+                colors.ink
+            } else {
+                colors.label
+            },
             super::lettering::HEADING,
         );
         self.meter(y as u16, peak);
@@ -321,6 +335,7 @@ impl<'a> Band<'a> {
             level,
             reverb,
             delay,
+            ..
         } = strip.controls;
         let ink = if strip.selected {
             colors.accent

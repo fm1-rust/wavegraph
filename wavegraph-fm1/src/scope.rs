@@ -68,6 +68,23 @@ pub(super) struct Window {
 }
 
 impl Window {
+    pub(super) const fn new(x: usize, y: usize, width: usize, height: usize) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    pub(super) fn intersection(self, other: Self) -> Option<Self> {
+        let x = self.x.max(other.x);
+        let y = self.y.max(other.y);
+        let right = (self.x + self.width).min(other.x + other.width);
+        let bottom = (self.y + self.height).min(other.y + other.height);
+        (x < right && y < bottom).then(|| Self::new(x, y, right - x, bottom - y))
+    }
+
     /// Split only windows too large for one DMA staging strip.
     pub(super) fn strips(self, capacity: usize) -> impl Iterator<Item = Self> {
         let rows = capacity / self.width;
@@ -345,6 +362,32 @@ mod tests {
                     assert_eq!(*pixel, expected, "x={x}, y={y}, head={head:?}");
                 }
                 previous = Some(sweep);
+            }
+        }
+    }
+
+    #[test]
+    fn a_dirty_window_only_paints_pixels_inside_the_viewport() {
+        let area = Window::new(2, 32, 236, 206);
+        for src in [
+            Window::new(0, 0, 240, 240),
+            Window::new(0, 20, 40, 32),
+            Window::new(230, 232, 10, 8),
+            Window::new(48, 40, 144, 16),
+            Window::new(0, 0, 24, 32),
+            Window::new(238, 32, 2, 206),
+        ] {
+            let clipped = src.intersection(area);
+            let inside = |r: Window, x, y| {
+                (r.x..r.x + r.width).contains(&x) && (r.y..r.y + r.height).contains(&y)
+            };
+            for y in 0..WIDTH {
+                for x in 0..WIDTH {
+                    assert_eq!(
+                        clipped.is_some_and(|r| inside(r, x, y)),
+                        inside(src, x, y) && inside(area, x, y)
+                    );
+                }
             }
         }
     }

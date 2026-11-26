@@ -10,6 +10,10 @@ use crate::{
 use core::ops::Range;
 use fm1_graphics::embedded_graphics::pixelcolor::{RgbColor, raw::ToBytes};
 use fm1_graphics::{Rgb565, WaveformStyle};
+use fm1_rticx::{
+    bsp::display::{Display, Error},
+    time::Clock,
+};
 
 // Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the selection arrow.
 const WIDTH: usize = 144;
@@ -102,6 +106,45 @@ impl Selector {
 
     pub(super) fn visible(&self) -> bool {
         self.menu.is_some()
+    }
+
+    pub(super) fn instrument(&self) -> Option<Part> {
+        match self.menu {
+            Some(Menu::Instruments(selected)) => Some(selected),
+            _ => None,
+        }
+    }
+
+    /// The live instrument draws around this opaque picker. A detent only
+    /// changes the previously selected row and the new one.
+    pub(super) async fn paint_instruments(
+        &self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        strip: &mut [[u8; 2]],
+        previous: Option<Part>,
+        selected: Part,
+    ) -> Result<(), Error> {
+        let mut lcd = lcd.as_async(clock)?;
+        for (i, part) in Part::ALL.into_iter().enumerate() {
+            if previous.is_some_and(|old| part != old && part != selected) {
+                continue;
+            }
+            let row = Window::new(LEFT, TOP + i * ROW_HEIGHT, WIDTH, ROW_HEIGHT);
+            for w in row.strips(strip.len()) {
+                let pixels = &mut strip[..w.width * w.height];
+                self.overlay(w, pixels);
+                lcd.write_rect_buffered(
+                    w.x as u16,
+                    w.y as u16,
+                    w.width as u16,
+                    w.height as u16,
+                    pixels.as_flattened(),
+                )
+                .await?;
+            }
+        }
+        lcd.flush().await
     }
 
     pub(super) fn shade(&self, color: Rgb565) -> Rgb565 {
