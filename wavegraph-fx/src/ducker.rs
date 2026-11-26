@@ -84,11 +84,6 @@ impl<const INPUTS: usize> SidechainDucker<INPUTS> {
         }
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        clippy::cast_possible_truncation,
-        reason = "The bounded detector and byte gains limit the Q15 products and mixed Q23 result."
-    )]
     fn render(&mut self, program: &[I24], key: &[I24], out: &mut [I24]) {
         let target_blend = if self.enabled { 128 } else { 0 };
         if self.low == 0
@@ -100,25 +95,68 @@ impl<const INPUTS: usize> SidechainDucker<INPUTS> {
             return;
         }
         for ((out, sample), key) in out.iter_mut().zip(program).zip(key) {
-            let x = sample.inner();
-            let target = (key.inner().abs() - (1 << 18)).clamp(0, 1 << KEY_BITS);
-            self.envelope += (target - self.envelope).clamp(-self.release_step, self.attack_step);
-            // Truncate the residual toward zero so exact silence drains the filter.
-            self.low =
-                x + ((i64::from(self.low - x) * i64::from(self.pole)) / i64::from(UNITY)) as i32;
-            let cut = (self.reduction * self.envelope) >> (KEY_BITS - 8);
-            let high_cut = cut >> 1;
-            let high_gain = (i32::from(self.idle_gain) << 8) - high_cut;
-            let wet = ((i64::from(x) * i64::from(high_gain)
-                - i64::from(self.low) * i64::from(cut - high_cut))
-                >> 15) as i32;
-            // Crossfade bypass over 64 samples while the detector keeps tracking.
-            self.blend += (target_blend - self.blend).clamp(-2, 2);
-            *out = match self.blend {
-                0 => *sample,
-                128 => pcm(wet),
-                mix => pcm(x + ((i64::from(wet - x) * i64::from(mix)) >> 7) as i32),
-            };
+            *out = self.sample(*sample, *key, target_blend);
+        }
+    }
+
+    /// Process a serial insert without copying its input to a scratch buffer.
+    /// `None` keys from each original program sample; `Some` supplies an external
+    /// key and must have the same length as `program`. Existing controls and the
+    /// bypass crossfade apply exactly as they do through [`Process`].
+    ///
+    /// # Panics
+    /// Panics if an external key has a different length from `program`.
+    pub fn process_in_place(&mut self, program: &mut [I24], key: Option<&[I24]>) {
+        if let Some(key) = key {
+            assert_eq!(program.len(), key.len(), "sidechain key span");
+        }
+        let target_blend = if self.enabled { 128 } else { 0 };
+        if self.low == 0
+            && self.envelope == 0
+            && self.blend == target_blend
+            && program.iter().all(|s| s.inner() == 0)
+            && key.is_none_or(|key| key.iter().all(|s| s.inner() == 0))
+        {
+            return;
+        }
+        match key {
+            Some(key) => {
+                for (sample, key) in program.iter_mut().zip(key) {
+                    *sample = self.sample(*sample, *key, target_blend);
+                }
+            }
+            None => {
+                for sample in program {
+                    *sample = self.sample(*sample, *sample, target_blend);
+                }
+            }
+        }
+    }
+
+    #[inline(always)]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        reason = "The bounded detector and byte gains limit the Q15 products and mixed Q23 result."
+    )]
+    fn sample(&mut self, sample: I24, key: I24, target_blend: i32) -> I24 {
+        let x = sample.inner();
+        let target = (key.inner().abs() - (1 << 18)).clamp(0, 1 << KEY_BITS);
+        self.envelope += (target - self.envelope).clamp(-self.release_step, self.attack_step);
+        // Truncate the residual toward zero so exact silence drains the filter.
+        self.low = x + ((i64::from(self.low - x) * i64::from(self.pole)) / i64::from(UNITY)) as i32;
+        let cut = (self.reduction * self.envelope) >> (KEY_BITS - 8);
+        let high_cut = cut >> 1;
+        let high_gain = (i32::from(self.idle_gain) << 8) - high_cut;
+        let wet = ((i64::from(x) * i64::from(high_gain)
+            - i64::from(self.low) * i64::from(cut - high_cut))
+            >> 15) as i32;
+        // Crossfade bypass over 64 samples while the detector keeps tracking.
+        self.blend += (target_blend - self.blend).clamp(-2, 2);
+        match self.blend {
+            0 => sample,
+            128 => pcm(wet),
+            mix => pcm(x + ((i64::from(wet - x) * i64::from(mix)) >> 7) as i32),
         }
     }
 }

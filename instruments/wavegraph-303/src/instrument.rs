@@ -31,13 +31,15 @@ pub enum Destination {
     Accent,
     /// Drive into the ladder filter.
     Overdrive,
+    /// Post-VCA pedal drive, independent of the oscillator's filter input gain.
+    PedalDrive,
 }
 
 impl Destination {
     // Called at control boundaries. Keep destination mapping out of the
     // FM-1 SRAM section reserved for the sample renderer.
     #[inline(never)]
-    fn apply(self, p: &mut VoiceParams, amount: f32) {
+    fn apply(self, p: &mut VoiceParams, pedal: &mut f32, amount: f32) {
         match self {
             Self::Pitch => p.tuning_st += 2.0 * amount,
             Self::Cutoff => {
@@ -50,6 +52,7 @@ impl Destination {
             Self::Attack => p.attack_s = (p.attack_s + 0.060 * amount).clamp(0.0, 0.060),
             Self::Accent => p.accent = (p.accent + amount).clamp(0.0, 1.0),
             Self::Overdrive => p.overdrive_db = (p.overdrive_db + 36.0 * amount).clamp(0.0, 36.0),
+            Self::PedalDrive => *pedal = (*pedal + amount).clamp(0.0, 1.0),
         }
     }
 }
@@ -81,6 +84,10 @@ pub enum Message {
     AttackSeconds(f32),
     /// Set the oscillator overdrive into the resonant filter, in dB (0..=36).
     OverdriveDb(f32),
+    /// Set the compact post-VCA overdrive amount in 0..=1.
+    /// Zero returns to exact dry bypass after a short crossfade. This is an
+    /// approximation, independent of [`Self::OverdriveDb`]'s filter input gain.
+    PedalDrive(f32),
     /// Set the accent amount in 0..=1.
     Accent(f32),
     /// Set the tuning offset in semitones (finite).
@@ -107,6 +114,8 @@ pub struct Tb303 {
     last_cycle_start: Option<usize>,
     suspend_idle: bool,
     output_gain: f32,
+    pedal_drive: f32,
+    pedal: crate::pedal::Pedal,
 }
 
 impl Tb303 {
@@ -121,6 +130,8 @@ impl Tb303 {
             last_cycle_start: None,
             suspend_idle: false,
             output_gain: 1.0,
+            pedal_drive: 0.0,
+            pedal: crate::pedal::Pedal::new(sample_rate),
         }
     }
 
@@ -150,6 +161,9 @@ impl Tb303 {
                 self.params.attack_s = seconds
             }
             Message::OverdriveDb(db) if (0.0..=36.0).contains(&db) => self.params.overdrive_db = db,
+            Message::PedalDrive(amount) if (0.0..=1.0).contains(&amount) => {
+                self.pedal_drive = amount;
+            }
             Message::Accent(value) if (0.0..=1.0).contains(&value) => self.params.accent = value,
             Message::TuningSemitones(semitones) if semitones.is_finite() => {
                 self.params.tuning_st = semitones
@@ -160,6 +174,7 @@ impl Tb303 {
             Message::Waveform(shape) => self.params.square = shape == Waveform::Square,
             Message::Reset => {
                 self.voice.reset();
+                self.pedal.reset();
                 self.held_note = None;
             }
             _ => {}
@@ -174,11 +189,11 @@ impl Tb303 {
         self
     }
 
-    /// Attenuate the voice after its filter and overdrive, before output conversion.
+    /// Attenuate the voice after its filter and optional pedal, before output conversion.
     ///
     /// The default gain is `1.0`. A smaller gain reserves mixing headroom and
     /// avoids clipping a hot resonant voice at the [`I24`] rails; it leaves the
-    /// filter's drive and internal signal unchanged. The same gain applies to
+    /// filter and pedal drive unchanged. The same gain applies to
     /// native `f32` output. A gain of `0.0` mutes the output while the voice runs.
     ///
     /// # Panics
@@ -191,6 +206,12 @@ impl Tb303 {
         );
         self.output_gain = gain;
         self
+    }
+
+    /// Stored post-VCA pedal amount, before any modulation offset.
+    #[must_use]
+    pub fn pedal_drive(&self) -> f32 {
+        self.pedal_drive
     }
 
     /// Zero-based frame of the last oscillator wrap in the most recent process block,
@@ -207,31 +228,48 @@ impl Tb303 {
         allow(unsafe_code),
         unsafe(link_section = ".data.wavegraph_audio")
     )]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "The span offset never exceeds the valid output slice length."
+    )]
     fn render<S: OutputSample>(&mut self, output: &mut [S], start: usize) {
         if output.is_empty() {
             return;
         }
         let mut effective;
+        let mut pedal_amount = self.pedal_drive;
         let (target, amount) = self.modulation;
         let params = if amount == 0.0 {
             &self.params
         } else {
             effective = self.params;
-            target.apply(&mut effective, amount);
+            target.apply(&mut effective, &mut pedal_amount, amount);
             &effective
         };
-        if self.suspend_idle && self.voice.skip_silence(params, output.len()) {
-            for sample in output {
-                S::write(sample, 0.0);
-            }
-        } else {
-            let gain = self.output_gain;
-            let cycle = self.voice.render_with(params, output, |sample, value| {
-                S::write(sample, value * gain);
-            });
-            if let Some(frame) = cycle {
-                self.last_cycle_start = start.checked_add(frame);
-            }
+        self.pedal.set_amount(pedal_amount);
+        let gain = self.output_gain;
+        let voice_sleeping = self.suspend_idle && self.voice.skip_silence(params, output.len());
+        if voice_sleeping {
+            self.render_silence(output);
+        } else if let Some(frame) = self.voice.render_with(params, output, |dst, x| {
+            S::write(dst, self.pedal.sample(x) * gain);
+        }) {
+            self.last_cycle_start = start.checked_add(frame);
+        }
+    }
+
+    // Keep the released overdrive's tail loop in cached flash. Duplicating its
+    // inlined sample operation here must not consume the active renderer's SRAM.
+    #[inline(never)]
+    fn render_silence<S: OutputSample>(&mut self, output: &mut [S]) {
+        let sleeping = self.pedal.skip_silence(output.len());
+        for sample in output {
+            let value = if sleeping {
+                0.0
+            } else {
+                self.pedal.sample(0.0)
+            };
+            S::write(sample, value * self.output_gain);
         }
     }
 }
@@ -263,12 +301,14 @@ trait OutputSample {
 }
 
 impl OutputSample for f32 {
+    #[inline(always)]
     fn write(&mut self, sample: f32) {
         *self = sample;
     }
 }
 
 impl OutputSample for I24 {
+    #[inline(always)]
     fn write(&mut self, sample: f32) {
         // +1.0 is one count beyond the positive Q23 rail.
         *self = sample.clamp(-1.0, i24::MAX.to_sample::<f32>()).to_sample();

@@ -82,3 +82,61 @@ fn low_band_ducks_deeper_and_bypass_returns_sample_exact_program() {
     );
     assert_eq!(straight[1023], 81_920);
 }
+
+#[test]
+fn serial_in_place_matches_graph_routing_across_keys_bypass_and_block_boundaries() {
+    let mut graph = SidechainDucker::<3>::new(44_118, 32, 176).expect("valid gains");
+    let mut serial = graph;
+    for round in 0..18 {
+        let self_key = round % 2 == 0;
+        let controls = [
+            event(0, Message::SidechainKey(if self_key { 0 } else { 2 })),
+            event(0, Message::Enabled(round % 3 != 0)),
+            event(
+                0,
+                Message::SidechainDepth(if round % 4 == 0 { 0 } else { 75 }),
+            ),
+            event(
+                0,
+                Message::SidechainHz(if round % 5 == 0 { 1000 } else { 180 }),
+            ),
+        ];
+        let program = core::array::from_fn::<_, 257, _>(|i| {
+            if round >= 12 {
+                0
+            } else {
+                [
+                    0,
+                    (1 << 23) - 1,
+                    -(1 << 23),
+                    65_536,
+                    -65_536,
+                    123_457,
+                    -832_003,
+                ][i % 7]
+            }
+        });
+        let keys = if round >= 12 {
+            [0; 2]
+        } else {
+            [1 << 22, -(1 << 21)]
+        };
+        let expected = render(&mut graph, program, keys, &controls);
+        render(&mut serial, [], [0; 2], &controls);
+        let mut actual = program.map(I24::new_unchecked);
+        let external = [I24::new_unchecked(keys[1]); 257];
+        // Include empty spans, the former 32-frame scratch boundary, and a
+        // bypass ramp ending inside a span. Self-keying must read the dry sample.
+        for (start, end) in [(0, 0), (0, 1), (1, 32), (32, 64), (64, 129), (129, 257)] {
+            serial.process_in_place(
+                &mut actual[start..end],
+                if self_key {
+                    None
+                } else {
+                    Some(&external[start..end])
+                },
+            );
+        }
+        assert_eq!(actual.map(I24::inner), expected, "round {round}");
+    }
+}

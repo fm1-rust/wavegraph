@@ -1742,7 +1742,7 @@ mod tests {
                 matches!(parameter(71), Some(BassMessage::Resonance(v)) if (v-res).abs() < 0.004)
             );
             assert!(
-                matches!(parameter(17), Some(BassMessage::OverdriveDb(v)) if (v-drive).abs() < 0.15)
+                matches!(parameter(17), Some(BassMessage::PedalDrive(v)) if (v-drive / 36.0).abs() < 0.005)
             );
         }
     }

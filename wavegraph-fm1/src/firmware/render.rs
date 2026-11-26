@@ -75,6 +75,7 @@ pub(super) struct Renderer {
     release: wavegraph_dsp::mailbox::Receiver<'static, ()>,
     measured: Option<u32>,
     next_frame: u64,
+    applied_revision: Option<u32>,
     meter: Meter,
     assignments: [Assignment; CHANNELS],
 }
@@ -89,6 +90,7 @@ impl Renderer {
             measured: None,
             instrument,
             next_frame: 0,
+            applied_revision: None,
             meter: Meter::default(),
             assignments: Navigation::INITIAL.assignments,
         }
@@ -98,7 +100,7 @@ impl Renderer {
     #[inline(never)]
     fn render_graph(&mut self, first_frame: u64, block: &mut RenderBlock) {
         let settings = &block.settings;
-        let nav = settings.nav;
+        let nav = &settings.nav;
         let graph = &mut *self.instrument;
         let skipped = first_frame.wrapping_sub(self.next_frame);
         if skipped != 0 {
@@ -118,22 +120,12 @@ impl Renderer {
                 .set_half_gain(block.half_gain)
                 .expect("routes checked at boot");
         }
-        for channel in Channel::ALL {
-            let i = channel.index();
-            graph.sync_chord(channel, &settings.tracks[i], &block.chords[i]);
+        if self.applied_revision != Some(block.settings_revision) {
+            // A snapshot revision covers the retained settings and arp chords.
+            // Recovery advances the player but does not modify these controls.
+            Self::apply_settings(graph, block);
+            self.applied_revision = Some(block.settings_revision);
         }
-        graph.set_mixer(settings.mixer);
-        graph.set_fx(settings.fx);
-        graph.beat_steps = nav.beat_steps;
-        graph.slicer_steps = nav.slicer_steps;
-        graph.transport = settings.seq.transport;
-        graph.recording_request = nav.clip_request;
-        graph.sequences = settings.seq.enabled;
-        graph.select_patterns(Channel::ALL.map(|c| {
-            settings
-                .seq
-                .slot(c, settings.tracks[c.index()].assignment.part)
-        }));
         graph.cue = block.cue;
         if let Some(session) = block.usb_session {
             block.midi.begin(session);
@@ -177,6 +169,30 @@ impl Renderer {
             wave_frames: graph.wave_frames,
             arp_notes: Channel::ALL.map(|c| graph.arp_note(c)),
         };
+    }
+
+    // Keep unchanged blocks out of the control copies and pattern selection.
+    // A separate call also keeps their temporaries out of the hot render frame.
+    #[inline(never)]
+    fn apply_settings(graph: &mut Instrument<'_>, block: &RenderBlock) {
+        let settings = &block.settings;
+        let nav = &settings.nav;
+        for channel in Channel::ALL {
+            let i = channel.index();
+            graph.sync_chord(channel, &settings.tracks[i], &block.chords[i]);
+        }
+        graph.set_mixer(settings.mixer);
+        graph.set_fx(settings.fx);
+        graph.beat_steps = nav.beat_steps;
+        graph.slicer_steps = nav.slicer_steps;
+        graph.transport = settings.seq.transport;
+        graph.recording_request = nav.clip_request;
+        graph.sequences = settings.seq.enabled;
+        graph.select_patterns(Channel::ALL.map(|c| {
+            settings
+                .seq
+                .slot(c, settings.tracks[c.index()].assignment.part)
+        }));
     }
 }
 

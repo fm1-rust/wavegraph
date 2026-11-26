@@ -4,6 +4,54 @@ use crate::instrument::{EventBatch, Voice, at};
 use wavegraph_303::{Message, VoiceParams, Waveform};
 
 pub(super) mod envelope;
+pub(super) mod presets;
+
+/// A selected faceplate control. The waveform switch is separate from the dials.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Control {
+    Knob(Knob),
+    Waveform,
+}
+
+impl Control {
+    pub(super) const PANEL: [Self; 9] = [
+        Self::Knob(Knob::Tuning),
+        Self::Knob(Knob::Cutoff),
+        Self::Knob(Knob::Resonance),
+        Self::Knob(Knob::EnvMod),
+        Self::Knob(Knob::Decay),
+        Self::Knob(Knob::Accent),
+        Self::Knob(Knob::Attack),
+        Self::Knob(Knob::Overdrive),
+        Self::Waveform,
+    ];
+}
+
+/// A recall request retained in panel snapshots, including when a scan is dropped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PresetSelection {
+    pub(super) index: u8,
+    revision: u32,
+}
+
+impl PresetSelection {
+    pub(super) const FIRST: Self = Self {
+        index: 0,
+        revision: 0,
+    };
+    pub(super) const SECOND: Self = Self {
+        index: 1,
+        revision: 0,
+    };
+
+    pub(super) fn turn(&mut self, detents: i8) {
+        if detents != 0 {
+            self.index = presets::turn(self.index, detents);
+            // A whole bank turn must still recall the sound after live edits.
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+}
 
 pub(super) const CC_SLIDE: u8 = 102;
 pub(super) const CC_WAVE: u8 = 70;
@@ -94,13 +142,13 @@ impl Knob {
             Message::TuningSemitones(_) => 104,
             Message::AttackSeconds(_) => 73,
             Message::Accent(_) => 16,
-            Message::OverdriveDb(_) => 17,
+            Message::PedalDrive(_) => 17,
             Message::Waveform(_) => CC_WAVE,
             _ => return None,
         })
     }
 
-    fn message(self, params: VoiceParams) -> Message {
+    fn message(self, params: VoiceParams, pedal_drive: f32) -> Message {
         match self {
             Self::Cutoff => Message::CutoffHz(params.cutoff_hz),
             Self::Resonance => Message::Resonance(params.resonance),
@@ -109,7 +157,7 @@ impl Knob {
             Self::Tuning => Message::TuningSemitones(params.tuning_st),
             Self::Attack => Message::AttackSeconds(params.attack_s),
             Self::Accent => Message::Accent(params.accent),
-            Self::Overdrive => Message::OverdriveDb(params.overdrive_db),
+            Self::Overdrive => Message::PedalDrive(pedal_drive),
         }
     }
 
@@ -122,7 +170,7 @@ impl Knob {
             Self::Tuning => b"TUNING   ",
             Self::Attack => b"ATTACK   ",
             Self::Accent => b"ACCENT   ",
-            Self::Overdrive => b"OVERDRIVE",
+            Self::Overdrive => b"OD       ",
         }
     }
 }
@@ -168,7 +216,7 @@ pub(super) struct Controls {
 
 impl Controls {
     pub(super) const INITIAL: Self = Self {
-        // 500 Hz, 50% resonance, 24 semitones, 600 ms, concert pitch, 1.5 ms, 50% accent, 0 dB.
+        // 500 Hz, 50% resonance, 24 semitones, 600 ms, concert pitch, 1.5 ms, 50% accent, OD off.
         values: [18, 50, 24, 60, 120, 5, 50, 0],
         midi: [None; 8],
         slide: false,
@@ -177,7 +225,7 @@ impl Controls {
 
     /// The factory sequence's resonant, driven voice, also available to live keys.
     pub(super) const DEEP_HOUSE: Self = Self {
-        // 315 Hz, 82% resonance, 36 semitones, 330 ms, 1.5 ms, 85% accent, 18 dB.
+        // 315 Hz, 82% resonance, 36 semitones, 330 ms, 1.5 ms, 85% accent, 50% OD.
         values: [14, 82, 36, 33, 120, 5, 85, 18],
         ..Self::INITIAL
     };
@@ -195,8 +243,15 @@ impl Controls {
         [
             Message::CutoffHz(params.cutoff_hz),
             Message::Resonance(params.resonance),
-            Message::OverdriveDb(params.overdrive_db),
+            Message::PedalDrive(self.pedal_amount()),
         ]
+    }
+
+    fn pedal_amount(self) -> f32 {
+        self.midi[Knob::Overdrive as usize].map_or_else(
+            || f32::from(self.detent(Knob::Overdrive)) / 36.0,
+            |value| f32::from(value) / 127.0,
+        )
     }
 
     #[allow(
@@ -267,7 +322,7 @@ impl Controls {
                 Waveform::Square
             }));
         }
-        Some(Knob::from_cc(cc)?.message(self.voice_params()))
+        Some(Knob::from_cc(cc)?.message(self.voice_params(), self.pedal_amount()))
     }
 
     pub(super) fn detent(self, knob: Knob) -> u8 {
@@ -320,7 +375,7 @@ impl Controls {
                     (i32::from(us), b"US   ")
                 }
             }
-            Knob::Overdrive => (value, b"DB   "),
+            Knob::Overdrive => (value.saturating_mul(100).saturating_add(18) / 36, b"PCT  "),
         };
         (knob.name(), number, units)
     }
@@ -335,7 +390,6 @@ impl Controls {
             tuning_st: f32::from(self.tuning_cents()) / 100.0,
             attack_s: f32::from(self.attack_us()) / 1_000_000.0,
             accent: value(Knob::Accent) / 100.0,
-            overdrive_db: value(Knob::Overdrive),
             ..VoiceParams::default()
         };
         for (cc, value) in CONTROLLERS.into_iter().zip(self.midi) {
@@ -348,7 +402,6 @@ impl Controls {
                     Some(Message::TuningSemitones(v)) => params.tuning_st = v,
                     Some(Message::AttackSeconds(v)) => params.attack_s = v,
                     Some(Message::Accent(v)) => params.accent = v,
-                    Some(Message::OverdriveDb(v)) => params.overdrive_db = v,
                     _ => (),
                 }
             }
@@ -365,7 +418,7 @@ impl Controls {
                 if self.values[i] == previous.values[i] && self.midi[i] == previous.midi[i] {
                     continue;
                 }
-                let message = knob.message(params);
+                let message = knob.message(params, self.pedal_amount());
                 batch.push(at(message)).expect("eight panel controls");
             }
         }
@@ -411,7 +464,7 @@ pub(super) fn midi_parameter(cc: u8, value: u8) -> Option<Message> {
         ),
         73 => Message::AttackSeconds(unit * 0.060),
         16 => Message::Accent(unit),
-        17 => Message::OverdriveDb(unit * 36.0),
+        17 => Message::PedalDrive(unit),
         CC_WAVE => Message::Waveform(if value < 64 {
             Waveform::Sawtooth
         } else {

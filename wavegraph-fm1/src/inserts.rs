@@ -134,16 +134,6 @@ fn configure_compressor(fx: &mut SidechainDucker, settings: BassFx) {
     });
 }
 
-fn compress(fx: &mut SidechainDucker, input: &[I24], key: &[I24], output: &mut [I24]) {
-    fx.process(&mut ProcessContext {
-        frames: input.len(),
-        inputs: &[input, key],
-        outputs: &mut [output],
-        events: &[],
-        emit: &mut Err,
-    });
-}
-
 impl Process<Message, I24> for ChannelInserts {
     fn inlets(&self) -> &[Port] {
         &[Port::Signal; 2 * CHANNELS]
@@ -153,10 +143,6 @@ impl Process<Message, I24> for ChannelInserts {
         &[Port::Signal; CHANNELS + 1]
     }
 
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "Scratch ranges partition a valid block"
-    )]
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
         let mut beat = None;
@@ -190,9 +176,6 @@ impl Process<Message, I24> for ChannelInserts {
         }
         let (strips, detector) = cx.outputs.split_at_mut(CHANNELS);
         let mut last_key = None;
-        // Only the second compressor needs a copy of the preceding slot's
-        // output. A small reusable scratch span avoids a new graph bus.
-        let mut scratch = [I24::default(); 32];
         for channel in Channel::ALL {
             let i = channel.index();
             let source = cx.inputs[channel.source_bus()];
@@ -224,25 +207,13 @@ impl Process<Message, I24> for ChannelInserts {
                         if changed[i][slot] {
                             configure_compressor(fx, settings);
                         }
-                        if slot == 0 {
-                            compress(fx, source, key.unwrap_or(source), strip);
-                        } else {
-                            for (chunk, out) in strip.chunks_mut(scratch.len()).enumerate() {
-                                let start = chunk * scratch.len();
-                                let input = &mut scratch[..out.len()];
-                                input.copy_from_slice(out);
-                                let key = key.map_or(&*input, |key| &key[start..start + out.len()]);
-                                compress(fx, input, key, out);
-                            }
-                        }
+                        fx.process_in_place(strip, key);
                     }
                     (Processor::Saturator(fx), Insert::Saturator(settings)) => {
                         if changed[i][slot] {
                             fx.set_controls(settings);
                         }
-                        for sample in &mut *strip {
-                            *sample = fx.tick(*sample);
-                        }
+                        fx.process_in_place(strip);
                     }
                     (Processor::Phaser(fx), Insert::Phaser(settings)) => {
                         if changed[i][slot] {

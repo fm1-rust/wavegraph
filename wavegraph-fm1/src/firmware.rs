@@ -7,7 +7,7 @@
 mod render;
 
 use crate::{
-    bass::{Controls, Knob},
+    bass::{Control, Controls},
     capture::Trace,
     envelope::{EnvelopeControls, EnvelopeTarget},
     fx::{Fx, INSERT_SLOTS, Insert},
@@ -69,7 +69,8 @@ impl Settings {
             arp: track.arp,
             focus: track.assignment.part,
             bass: track.bass,
-            bass_knob: self.nav.bass_knob(),
+            bass_control: self.nav.bass_control(),
+            bass_preset: track.bass_preset.index,
             mode: track.polyphony.mode,
             organ: track.organ,
             fm: track.fm,
@@ -153,7 +154,8 @@ pub(super) struct Labels {
     pub(super) arp: crate::arp::Controls,
     pub(super) focus: Part,
     pub(super) bass: Controls,
-    pub(super) bass_knob: Option<Knob>,
+    pub(super) bass_control: Option<Control>,
+    pub(super) bass_preset: u8,
     pub(super) mode: wavegraph_organ::VoiceMode,
     pub(super) organ: OrganControls,
     pub(super) hoover_page: crate::instrument::HooverPage,
@@ -332,12 +334,11 @@ mod app {
 
     static TUNING: Tuning = Tuning::new(FRAME_RATE.0, FRAME_RATE.1).expect("FM-1 sample clock");
     const RATE_HZ: u32 = (FRAME_RATE.0 + FRAME_RATE.1 / 2) / FRAME_RATE.1;
-    // Keep the original PCM16 allocation budget. Two progressively slower
-    // companded taps extend it beyond four beats at the minimum 30 BPM.
-    const DELAY_SAMPLES: usize = (RATE_HZ as usize * crate::fx::MAX_DELAY_MS as usize + 500) / 1000;
-
+    // Keep the native-rate dotted-eighth tap. Size the two companded rings
+    // for the maximum supported delay (four beats at 30 BPM), rather than
+    // retaining unused history at the expense of the CPU0 stack margin.
     const SHORT_ECHO: usize = RATE_HZ as usize * 3 / 8;
-    const LONG_ECHO: usize = DELAY_SAMPLES - SHORT_ECHO;
+    const LONG_ECHO: usize = (RATE_HZ as usize * 8).div_ceil(16) + 1;
     const _: () = assert!((LONG_ECHO - 1) * 16 >= RATE_HZ as usize * 8);
 
     pub struct ScopeBlock {
@@ -681,6 +682,8 @@ mod app {
             if !home && (select != 0 || presets != 0) {
                 self.nav.turn(select, presets);
             }
+            self.nav
+                .turn_algorithm(scan.encoder_delta(Encoder::Algorithm));
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
             let show_picker = self.nav.view.presets(self.nav.insert_slot()) != PresetRole::Channel;
@@ -779,7 +782,7 @@ mod app {
                     self.nav.view,
                     View::Channel | View::MasterFx(Some(_)) | View::BeatFx(_)
                 ) || self.nav.insert_slot().is_some()
-                    || self.nav.bass_knob().is_some()
+                    || self.nav.bass_control().is_some()
                     || matches!(
                         self.seq.page,
                         Some(SeqPage::Tempo | SeqPage::Record | SeqPage::Step)
@@ -1008,16 +1011,16 @@ mod app {
                 let assignment = nav.assignments[i];
                 if tracks[i].assignment != assignment {
                     self.keys.clear(channel);
-                    let inserts = tracks[i].inserts;
-                    tracks[i] = Track::factory(channel, assignment);
-                    tracks[i].inserts = inserts;
+                    tracks[i].reassign(channel, assignment);
                 }
-                // Type choices are channel-owned and survive instrument swaps.
-                for (insert, kind) in tracks[i].inserts.iter_mut().zip(nav.insert_kinds[i]) {
-                    if insert.kind() != kind {
-                        *insert = kind.initial(assignment.part);
-                    }
+                // Recall channel-owned Beat FX controls exactly once, even after dropped scans.
+                if tracks[i].bass_preset != nav.bass_presets[i] {
+                    let sound =
+                        crate::bass::presets::PRESETS[usize::from(nav.bass_presets[i].index)];
+                    sound.apply_beat_fx(channel, &mut self.settings.fx, &mut self.settings.mixer);
                 }
+                // Recalls survive dropped scans; later explicit type choices still win.
+                tracks[i].sync_panel(nav.bass_presets[i], nav.insert_kinds[i]);
                 pads[i].apply(&mut tracks[i]);
             }
             if *self.held != held {
@@ -1074,7 +1077,7 @@ mod app {
                 }
                 View::Scope | View::SampleEdit | View::Envelope => {
                     let track = &mut self.settings.tracks[channel.index()];
-                    track.turn_algorithm(view, nav.bass_knob(), algorithm);
+                    track.turn_algorithm(view, nav.bass_control(), algorithm);
                     track.edit_panel(view, select, knobs, sel);
                 }
                 View::MasterFx(None) | View::Sequencer => (),

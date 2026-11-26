@@ -2,8 +2,10 @@
 
 use wavegraph_organ::{Chord, VoiceMode};
 
+#[cfg(test)]
+use crate::bass::Knob;
 use crate::{
-    bass::Knob,
+    bass::{Control, PresetSelection, presets::PRESETS},
     fx::{BeatEffect, Device, INSERT_SLOTS, InsertKind},
     instrument::Part,
 };
@@ -209,6 +211,7 @@ pub(super) struct Navigation {
     pub(super) slicer_steps: [wavegraph_fx::StepPattern; CHANNELS],
     insert_slot: Option<u8>,
     pub(super) insert_kinds: [[InsertKind; INSERT_SLOTS]; CHANNELS],
+    pub(super) bass_presets: [PresetSelection; CHANNELS],
     pub(super) assignments: [Assignment; CHANNELS],
 }
 
@@ -230,6 +233,12 @@ impl Navigation {
             InsertKind::factory(Part::Tr808),
             InsertKind::factory(Part::Tr909),
         ],
+        bass_presets: [
+            PresetSelection::FIRST,
+            PresetSelection::SECOND,
+            PresetSelection::FIRST,
+            PresetSelection::FIRST,
+        ],
         assignments: [
             Assignment::new(Part::Bass),
             Assignment::new(Part::Bass),
@@ -240,6 +249,7 @@ impl Navigation {
 
     #[cfg(test)]
     pub(super) const SYNTH_RACK: Self = Self {
+        bass_presets: [PresetSelection::FIRST; CHANNELS],
         insert_kinds: [
             InsertKind::factory(Part::Mono),
             InsertKind::factory(Part::Organ),
@@ -343,8 +353,33 @@ impl Navigation {
         self.insert_slot.filter(|_| self.view == View::Fx)
     }
 
+    #[cfg(test)]
     pub(super) fn bass_knob(self) -> Option<Knob> {
-        self.bass_slot.map(|i| Knob::PANEL[usize::from(i)])
+        match self.bass_control()? {
+            Control::Knob(knob) => Some(knob),
+            Control::Waveform => None,
+        }
+    }
+
+    pub(super) fn bass_control(self) -> Option<Control> {
+        self.bass_slot.map(|i| Control::PANEL[usize::from(i)])
+    }
+
+    /// Preset requests and their insert types travel in the same retained snapshot.
+    pub(super) fn turn_algorithm(&mut self, detents: i8) {
+        if detents == 0
+            || self.part() != Part::Bass
+            || !matches!(self.view, View::Scope | View::Envelope)
+            || self.bass_control().is_some()
+        {
+            return;
+        }
+        let i = self.focus.index();
+        self.bass_presets[i].turn(detents);
+        let sound = PRESETS[usize::from(self.bass_presets[i].index)];
+        self.insert_kinds[i] = sound.inserts.map(|insert| insert.kind());
+        self.beat_steps[i] = sound.echo_steps;
+        self.slicer_steps[i] = sound.slicer_steps;
     }
 
     #[cfg_attr(target_os = "none", inline(never))]
@@ -353,12 +388,12 @@ impl Navigation {
             && matches!(self.view, View::Scope | View::Envelope)
             && self.part() == Part::Bass
         {
-            // Enter at Attack clockwise or Drive counterclockwise, counting every detent.
-            const ATTACK_SLOT: i16 = 6; // Index in Knob::PANEL.
+            // Enter at Attack clockwise or the waveform switch counterclockwise.
+            const ATTACK_SLOT: i16 = 6; // Index in Control::PANEL.
             let start = self
                 .bass_slot
                 .map_or(if select > 0 { ATTACK_SLOT - 1 } else { 0 }, i16::from);
-            let count = i16::try_from(Knob::PANEL.len()).expect("eight knobs");
+            let count = i16::try_from(Control::PANEL.len()).expect("nine controls");
             let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
             self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
         }
@@ -482,21 +517,21 @@ mod tests {
         nav.turn(0, 0);
         assert_eq!(nav.bass_knob(), None);
         nav.turn(-1, 0);
-        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        assert_eq!(nav.bass_control(), Some(Control::Waveform));
         nav.turn(i8::MIN, 0);
-        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
-        nav.turn(i8::MAX, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Attack));
+        nav.turn(i8::MAX, 0);
+        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
         nav.turn(2, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
 
         nav.turn(0, 1);
         assert_eq!((nav.part(), nav.bass_knob()), (Part::Bass, None));
-        nav.turn(3, 0);
+        nav.turn(4, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
         nav.press(PageButton::Env);
         assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
-        nav.turn(-3, 0);
+        nav.turn(-4, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Accent));
         nav.press(PageButton::Home);
         assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
@@ -620,14 +655,14 @@ mod tests {
         assert_eq!(nav.insert_slot(), Some(0));
         assert_eq!(
             nav.insert_kinds[0],
-            [InsertKind::Saturator, InsertKind::None]
+            [InsertKind::Saturator, InsertKind::Compressor]
         );
         nav.turn(0, -1);
         assert_eq!(
             nav.insert_kinds[0],
-            [InsertKind::Compressor, InsertKind::None]
+            [InsertKind::Compressor, InsertKind::Compressor]
         );
-        nav.turn(1, -1);
+        nav.turn(1, -2);
         assert_eq!(nav.insert_slot(), Some(1));
         assert_eq!(
             nav.insert_kinds[0],

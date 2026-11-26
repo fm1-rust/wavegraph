@@ -36,10 +36,41 @@ playback, messages such as `Message::CutoffHz` and `Message::Resonance` change
 individual controls. `AttackSeconds` sets the VCA attack time constant (1.5 ms
 by default). `OverdriveDb` ranges from stock level (0 dB) to +36 dB. It drives
 the oscillator signal into the resonant filter as in the [Devil Fish manual].
+This legacy filter-input drive remains independent of `Message::PedalDrive`.
 Floating-point output preserves its headroom and PCM output saturates at the
 signed 24-bit limits.
 
 [Devil Fish manual]: https://www.firstpr.com.au/rwi/dfish/Devil-Fish-Manual.pdf
+
+## Integrated post-VCA overdrive
+
+`Message::PedalDrive(amount)` controls the mono overdrive immediately after the VCA,
+with an amount in `0.0..=1.0`. It defaults to zero. Zero returns to exact dry
+bypass; enabling, disabling, and changing the amount slew over 64 samples.
+`Tb303::pedal_drive()` returns the retained amount. A bipolar
+`Message::Modulate(Destination::PedalDrive, offset)` temporarily offsets that
+amount without changing it or the filter-input drive.
+
+The compact model has a 330 Hz pre-drive high-pass, one symmetric bounded
+polynomial clip, a 1.8 kHz tone low-pass, and 110 Hz output coupling that removes
+DC. Its quadratic gain range was calibrated against dry 303 phrases and the
+earlier two-stage pedal, retaining bass tightening and strong midrange drive
+with three filter states. It does not create sound when enabled on silence.
+The sample operation is inlined into the voice's output, without a second audio
+pass or temporary sample buffer.
+
+This is an original musical model, not an emulation of individual transistors,
+a measured pedal, or Roland's TB-03 firmware. The fixed gain, frequency response,
+and level calibration are our choices. Processing runs at the native sample
+rate; the tone filter reduces bright clipping products but does not eliminate aliasing.
+The existing CHOMPI `Drive` API below is unchanged and remains a separate model.
+
+The pedal uses a fixed reference level for the native voice's internal headroom.
+`with_output_gain` still attenuates **after** the pedal, so reserving mixing
+headroom does not change its distortion. `Message::Reset` clears both voice and
+pedal history while retaining their controls. Idle suspension lets audible pedal
+filter tails decay before sleeping. Settled bypass returns the original voice
+samples without running the overdrive filters or clipping curve.
 
 ## Standalone voice and effects
 

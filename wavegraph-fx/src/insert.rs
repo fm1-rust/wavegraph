@@ -162,6 +162,90 @@ impl Saturator {
         let wet = mul_q7(shaped, i32::from(c.level.min(128)));
         pcm(x + mul_q7(wet - x, mix))
     }
+
+    /// Process a span in place, with the same samples and control-ramp timing
+    /// as repeated calls to [`Self::tick`]. Steady spans select one clipping
+    /// curve and prepare their gains once, outside the sample loop.
+    #[inline(never)]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        reason = "Byte controls bound Q7 gains; the private 0..=128 ramp states need at most 64 samples."
+    )]
+    pub fn process_in_place(&mut self, samples: &mut [I24]) {
+        let c = self.controls;
+        let mix = if c.enabled {
+            i32::from(c.mix.min(128))
+        } else {
+            0
+        };
+        let shape = i32::from(c.shape.min(128));
+        let ramp = self
+            .blend
+            .abs_diff(mix)
+            .max(self.shape.abs_diff(shape))
+            .div_ceil(2);
+        let ramp = (ramp as usize).min(samples.len());
+        let (changing, steady) = samples.split_at_mut(ramp);
+        for sample in changing {
+            *sample = self.tick(*sample);
+        }
+        if steady.is_empty() || mix == 0 {
+            return;
+        }
+        let drive = 128 + 7 * i32::from(c.drive.min(128));
+        let level = i32::from(c.level.min(128));
+        // The constant parameters remove unused clipping and blend arithmetic
+        // from each kernel, including its inner loop's branches.
+        match (shape, mix) {
+            (0, 128) => saturator_span::<0, true>(steady, drive, level, shape, mix),
+            (128, 128) => saturator_span::<1, true>(steady, drive, level, shape, mix),
+            (_, 128) => saturator_span::<2, true>(steady, drive, level, shape, mix),
+            (0, _) => saturator_span::<0, false>(steady, drive, level, shape, mix),
+            (128, _) => saturator_span::<1, false>(steady, drive, level, shape, mix),
+            _ => saturator_span::<2, false>(steady, drive, level, shape, mix),
+        }
+    }
+}
+
+// CURVE selects soft (0), hard (1), or their existing interpolation (2).
+// Keep the small steady kernels separate from the insert rack's dispatch code.
+#[inline(never)]
+#[allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    reason = "The same bounded Q23 products and signed rounding as Saturator::tick."
+)]
+fn saturator_span<const CURVE: u8, const FULL_WET: bool>(
+    samples: &mut [I24],
+    drive: i32,
+    level: i32,
+    shape: i32,
+    mix: i32,
+) {
+    for sample in samples {
+        let x = sample.inner();
+        let driven = clamp_pcm(mul_q7(x, drive));
+        let shaped = if CURVE == 1 {
+            clamp_pcm(3 * driven / 2)
+        } else {
+            let square = ((i64::from(driven) * i64::from(driven)) >> 23) as i32;
+            let cube = ((i64::from(square) * i64::from(driven)) >> 23) as i32;
+            let soft = (3 * driven - cube) / 2;
+            if CURVE == 0 {
+                soft
+            } else {
+                let hard = clamp_pcm(3 * driven / 2);
+                soft + mul_q7(hard - soft, shape)
+            }
+        };
+        let wet = mul_q7(shaped, level);
+        *sample = if FULL_WET {
+            pcm(wet)
+        } else {
+            pcm(x + mul_q7(wet - x, mix))
+        };
+    }
 }
 
 /// Four first-order all-pass stages, a triangle LFO and bounded feedback.

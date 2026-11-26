@@ -32,6 +32,40 @@ pub struct Envelopes {
     pub(super) gate: bool,
     attacking: bool,
     accent: bool,
+    filter_decay_coefficient: CachedCoefficient,
+    attack_coefficient: CachedCoefficient,
+    accent_drain_coefficient: CachedCoefficient,
+}
+
+/// One control-rate coefficient. Keys are the raw scalar inputs, so callers
+/// editing public `VoiceParams` directly get the same invalidation as messages.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CachedCoefficient {
+    key: f32,
+    value: f32,
+}
+
+impl CachedCoefficient {
+    pub(super) const EMPTY: Self = Self {
+        key: f32::NAN,
+        value: 0.0,
+    };
+
+    #[inline]
+    pub(super) fn get(&mut self, key: f32, calculate: impl FnOnce() -> f32) -> f32 {
+        if self.key != key {
+            self.update(key, calculate);
+        }
+        self.value
+    }
+
+    // Parameter changes stay outside the FM-1's SRAM sample renderer. The
+    // cache hit only compares the key and reads the existing coefficient.
+    #[inline(never)]
+    fn update(&mut self, key: f32, calculate: impl FnOnce() -> f32) {
+        self.value = calculate();
+        self.key = key;
+    }
 }
 
 pub(super) struct Coefficients {
@@ -58,6 +92,9 @@ impl Envelopes {
             gate: false,
             attacking: false,
             accent: false,
+            filter_decay_coefficient: CachedCoefficient::EMPTY,
+            attack_coefficient: CachedCoefficient::EMPTY,
+            accent_drain_coefficient: CachedCoefficient::EMPTY,
         }
     }
 
@@ -119,19 +156,33 @@ impl Envelopes {
         self.gate || self.amplitude > 0.0001
     }
 
-    pub(super) fn coefficients(&self, p: &VoiceParams) -> Coefficients {
+    pub(super) fn coefficients(&mut self, p: &VoiceParams) -> Coefficients {
         let decay = if self.accent { 0.2 } else { p.decay_s };
+        let sample_rate = self.sample_rate;
         Coefficients {
-            filter_decay: tau_to_coef(decay / 4.6, self.sample_rate),
-            attack: tau_to_coef(p.attack_s, self.sample_rate),
+            filter_decay: self
+                .filter_decay_coefficient
+                .get(decay, || tau_to_coef(decay / 4.6, sample_rate)),
+            attack: self
+                .attack_coefficient
+                .get(p.attack_s, || tau_to_coef(p.attack_s, sample_rate)),
             // Resonance slows the drain of the accent sweep capacitor.
-            accent_drain: tau_to_coef(0.08 + 0.35 * p.resonance, self.sample_rate),
+            accent_drain: self.accent_drain_coefficient.get(p.resonance, || {
+                tau_to_coef(0.08 + 0.35 * p.resonance, sample_rate)
+            }),
             accent_gain: if self.accent {
                 1.0 + 0.9 * p.accent
             } else {
                 1.0
             },
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn invalidate_coefficients(&mut self) {
+        self.filter_decay_coefficient = CachedCoefficient::EMPTY;
+        self.attack_coefficient = CachedCoefficient::EMPTY;
+        self.accent_drain_coefficient = CachedCoefficient::EMPTY;
     }
 
     #[inline]

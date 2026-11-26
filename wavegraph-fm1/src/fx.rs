@@ -8,7 +8,7 @@ use wavegraph_fx::{
     MasterControls, Message as FxMessage, PhaserControls, SaturatorControls, SlicerControls,
 };
 
-// Original delay-storage budget and upper limit for the free-time rack control.
+// Upper limit for the free-time rack control.
 pub(super) const MAX_DELAY_MS: u16 = 900;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,14 +159,11 @@ impl InsertKind {
     ];
 
     pub(super) const fn factory(part: Part) -> [Self; INSERT_SLOTS] {
-        [
-            if matches!(part, Part::Bass) {
-                Self::Saturator
-            } else {
-                Self::None
-            },
-            Self::None,
-        ]
+        if matches!(part, Part::Bass) {
+            [Self::Saturator, Self::Compressor]
+        } else {
+            [Self::None; INSERT_SLOTS]
+        }
     }
 
     pub(super) fn turn(self, detents: i8) -> Self {
@@ -509,6 +506,14 @@ impl Fx {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn factory_bass_saturates_before_kick_sidechain() {
+        let [first, second] = Insert::factory(Part::Bass);
+        assert_eq!(first, InsertKind::Saturator.initial(Part::Bass));
+        assert_eq!(second, Insert::Compressor(BassFx::INITIAL));
+        assert_eq!(Insert::factory(Part::Mono), [Insert::None; INSERT_SLOTS]);
+    }
 
     #[test]
     fn one_beat_value_follows_the_editor_and_only_a_tempo_change_retimes_echo() {

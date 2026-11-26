@@ -2,7 +2,7 @@
 
 use crate::overload::Severity;
 use crate::{
-    bass::{Controls, Knob, envelope as bass_env},
+    bass::{Control, Controls, Knob, envelope as bass_env, presets::PRESETS},
     capture::{HEIGHT, WIDTH},
     envelope::{EnvelopeControls, EnvelopeTarget},
     firmware::{Frame, Labels, Motion, Timing},
@@ -110,7 +110,7 @@ enum Page {
         wavegraph_hoover::Patch,
         crate::instrument::HooverPage,
     ),
-    BassEnvelope(Channel, Controls, Option<Knob>),
+    BassEnvelope(Channel, Controls, Option<Control>, u8, u8),
     DrumEnvelope(Channel, Part, drums::Envelope),
 }
 
@@ -380,32 +380,46 @@ impl Screen {
         self.text.paint_async(lcd, clock).await
     }
 
-    fn bass_envelope_labels(
-        &mut self,
-        controls: Controls,
-        selected: Option<Knob>,
-        theme: &InstrumentStyle,
-    ) {
+    fn bass_envelope_labels(&mut self, labels: &Labels, theme: &InstrumentStyle) {
+        let (controls, selected) = (labels.bass, labels.bass_control);
         let (ink, muted) = (theme.accent, theme.muted);
         self.text.text(0, 0, b"TB-303", ink);
-        self.text
-            .text(7, 0, if selected.is_some() { b"ALG" } else { b"   " }, ink);
-        let focus = selected.unwrap_or(controls.last);
+        self.text.text(7, 0, b"ALG", ink);
+        let focus = match selected {
+            Some(Control::Knob(knob)) => Some(knob),
+            _ => None,
+        };
         // Auxiliary knobs have no numbered field. Their selection follows the full readout.
         let mut field = (13, 0..TextGrid::COLUMNS);
         for (i, &knob) in Knob::direct().iter().enumerate() {
             let (x, width) = if i % 2 == 0 { (0, 7) } else { (9, 9) };
             let y = 1 + i / 2;
-            if knob == focus {
+            if Some(knob) == focus {
                 field = (y, x..x + 2 + width);
             }
             self.text.text(x, y, [b"1234"[i]], ink);
             self.text.text(x + 2, y, &knob.name()[..width], muted);
         }
         self.text.highlight(field.0, field.1, theme.selected);
+        self.text.text(0, 13, b"                    ", muted);
+        if selected == Some(Control::Waveform) {
+            self.text.text(0, 13, b"WAVEFORM", ink);
+            self.text.text(10, 13, labels.voice.label(Part::Bass), ink);
+            return;
+        }
+        let Some(focus) = focus else {
+            self.text
+                .number(0, 13, 1, u32::from(labels.bass_preset) + 1, ink);
+            self.text.text(
+                2,
+                13,
+                PRESETS[usize::from(labels.bass_preset)].name.as_bytes(),
+                ink,
+            );
+            return;
+        };
         let (name, value, units) = controls.readout(focus);
-        self.text
-            .text(0, 13, name, if selected.is_some() { ink } else { muted });
+        self.text.text(0, 13, name, ink);
         if focus == Knob::Tuning {
             self.text.signed_number(9, 13, 5, value, ink);
         } else {
@@ -421,9 +435,15 @@ impl Screen {
         labels: &Labels,
         theme: &InstrumentStyle,
     ) -> Result<(), Error> {
-        let (controls, selected) = (labels.bass, labels.bass_knob);
+        let (controls, selected) = (labels.bass, labels.bass_control);
         let lanes = style::ACID_LANES;
-        let page = Page::BassEnvelope(labels.channel, controls, selected);
+        let page = Page::BassEnvelope(
+            labels.channel,
+            controls,
+            selected,
+            labels.voice.waveform,
+            labels.bass_preset,
+        );
         let previous = self.page.replace(page);
         if previous != Some(page) {
             let entering =
@@ -448,7 +468,7 @@ impl Screen {
                 self.text.text(0, 14, b"PREVIEW    96 MS/DIV", theme.muted);
             }
             if entering
-                || !matches!(previous, Some(Page::BassEnvelope(_, old, _)) if old == controls)
+                || !matches!(previous, Some(Page::BassEnvelope(_, old, ..)) if old == controls)
             {
                 for (i, (lane, trace)) in self
                     .lanes
@@ -473,7 +493,7 @@ impl Screen {
                     .await?;
                 }
             }
-            self.bass_envelope_labels(controls, selected, theme);
+            self.bass_envelope_labels(labels, theme);
         }
         self.text.paint_async(lcd, clock).await
     }
