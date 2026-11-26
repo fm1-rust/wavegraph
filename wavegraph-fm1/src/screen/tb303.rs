@@ -441,7 +441,7 @@ fn wordmark(band: &mut Band<'_>, selector: &Selector) {
     band.mask(
         Point::zero(),
         super::lettering::BASS,
-        36,
-        [GRAPHITE, TB303.accent].map(|c| selector.shade(c)),
+        0,
+        [selector.shade(GRAPHITE); 2],
     );
 }
