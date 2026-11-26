@@ -29,7 +29,7 @@ uses zero-based channel indices. Ctrl-C stops playback.
 | Mix this application's output with other clients | Submit one WaveGraph master. SDL can mix logical streams bound to a device. CoreAudio handles shared hardware playback with other applications. | Firmware owns the DAC. Sum additional local sources in the staging mix before MASTER. `fm1_audio::mix_stereo` already adds planar I24 sources with i32 headroom. |
 | Final level and device PCM | The adapter clips Q23 to signed 24-bit range and aligns it in an S32 stream. SDL converts the stream to the negotiated device format and rate. System output volume remains under the user's control. | `fm1_audio::Output` applies the panel MASTER ramp and final Q23 clip once before copying to the released DMA half. |
 | Clock and buffering | The graph chooses its rate. SDL buffers and converts between the stream and device. CoreAudio Audio Queue Services handles hardware I/O. | Tune to the exact `24_000_000 / 544` clock. CPU0 services timed refills. CPU1 keeps exclusive ownership of outstanding DSP work. |
-| Device changes | SDL's CoreAudio backend listens for device-list and default-device changes. The application re-scans and reconciles its selection. | The BSP exposes one fixed stereo DAC and no capture endpoint. |
+| Device changes | SDL's CoreAudio backend listens for device-list and default-device changes. The application re-scans and reconciles its selection. | The local adapter exposes one fixed stereo DAC. WaveGraph FM-1 also sends the pre-MASTER stereo mix to a connected computer over USB. |
 
 Apple also ships mixer Audio Units. Substituting one for a WaveGraph track mixer
 would change who implements the patch's gain law, headroom and automation.

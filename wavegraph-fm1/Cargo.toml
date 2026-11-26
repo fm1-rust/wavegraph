@@ -21,7 +21,7 @@ packed-cymbals = []
 packed-samples = []
 # A/B the master compressor detector on the same board and factory patch.
 short-detector-probe = ["wavegraph-fx/short-detector-probe"]
-# Copied USB MIDI on the measured FM-1 silicon revision.
+# USB MIDI and stereo master capture on the measured FM-1 silicon revision.
 qualified-usb = ["dep:fm1"]
 
 [dependencies]
@@ -47,7 +47,7 @@ wavegraph-supersaw = { path = "../instruments/wavegraph-supersaw" }
 wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 
 [target.'cfg(target_os = "none")'.dependencies]
-fm1 = { version = "0.2.0", optional = true, features = ["usb-midi-copy"] }
+fm1 = { version = "0.2.1", optional = true, features = ["usb-audio-capture"] }
 wavegraph-fm1-core = { path = "../wavegraph-fm1-core" }
 wavegraph-fx = { workspace = true, features = ["fm1-ram-code"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }

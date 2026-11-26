@@ -3,7 +3,7 @@ use super::{Block, DeviceHost, Direction, Endpoint, Playback, Submission};
 use core::convert::Infallible;
 use fm1_audio::{MasterLevel, Output, Refill, RefillInterval};
 
-/// Fixed board inventory. The playback DAC is the only PCM endpoint exposed by this BSP.
+/// Fixed local playback endpoint. USB recording is exposed to the connected computer.
 pub const DAC: Endpoint<(), &'static str> = Endpoint {
     id: (),
     name: "FM-1 DAC",

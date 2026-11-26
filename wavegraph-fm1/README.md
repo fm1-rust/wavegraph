@@ -21,10 +21,19 @@ any instrument, including the [monosynth](../instruments/wavegraph-monosynth/),
 [wavetable synth](../instruments/wavegraph-wavetable/) and
 [chromatic sampler](#chromatic-sampler).
 The transport starts stopped. You can play the panel keys immediately.
-The standard image starts USB MIDI on the tested black FM-1. Select
+The standard image provides USB MIDI and stereo recording on the black FM-1
+with WL82 chip ID `0x00006f01`. Select
 **WaveGraph FM-1** in your DAW and enable **Track** in Ableton Live. MIDI
 channels 1–4 play mixer strips 1–4. Run `fm1 log` for a round trip over both
-USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
+MIDI endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
+
+To record in Live, select **WaveGraph FM-1** as the audio input device at
+44.1 kHz, enable stereo input **1/2**, then arm an audio track with that input.
+The FM-1 sends 16-bit stereo PCM after the mixer and master effects. The
+physical MASTER knob controls local listening volume independently of the
+recording level. The Pump Panel echo alternates between left and right.
+USB audio runs from the FM-1 to the computer. If the host falls behind, the
+capture FIFO drops excess frames and local playback continues.
 
 | Monosynth | 303 direct knobs | 303 editing OD |
 | --- | --- | --- |
@@ -762,11 +771,14 @@ change presets. The 303 still discharges its accent capacitor while silent.
 The black FM-1 used for the board tests played a note from Live, answered
 `fm1 log` over SysEx, and reappeared in Live after unplugging and reconnecting.
 The ID probe reported WL82 chip ID `0x00006f01` and loader tag `fm1`.
-WaveGraph targets the FM-1 and selects the copied MIDI driver by the full chip
+WaveGraph targets the FM-1 and selects the composite MIDI and audio driver by the full chip
 ID. Other revisions and emulators reporting zero use the BSP's checked
-startup. In `fm1` 0.2.0 that leaves USB detached and the instrument playable.
+startup. In `fm1` 0.2.1 that leaves USB detached and the instrument playable.
 The application keeps these assumptions in [USB startup](src/usb_midi.rs).
 The MIDI router, mixer and synths consume safe packet values.
+Audio capture additionally assumes EP4 IN reads only its permanent 192-byte
+arena and the copy engine completes transfers of up to 184 bytes before
+staging is reused, including across suspend, reset and loader handoff.
 
 * **USB0 write extent.** A legal 64-byte packet wrote two more CRC bytes. The
   largest observed write reached offset 1023. The hardware write-window probe
@@ -802,7 +814,7 @@ and SSYNC while CPU0 reuses it, or DMA still accessing memory reassigned by
 a warm reset. No such execution has been demonstrated. The driver accepts
 arbitrary initialized packet bytes, including CRC collisions, as input.
 
-[usb-dma]: https://docs.rs/fm1/0.2.0/fm1/usb_midi/struct.UsbPort.html#method.into_midi_with_dma_copy
+[usb-dma]: https://docs.rs/fm1/0.2.1/fm1/usb_midi/struct.UsbPort.html#method.into_midi_with_audio_capture
 [usb-captures]: https://github.com/fm1-rust/fm1-rust/blob/27703c9184488987e3f4119b176394593861054d/docs/usb-dma/copied-midi.md
 
 ## Four-track mixer and effects
@@ -1205,9 +1217,9 @@ WaveGraph workspace root run
 
 Both files are written to `target/pi32v2-none/firmware/`. The build reports
 both file sizes, the asset address, the end of the install and the whole sectors
-available for growth. `Cargo.lock` selects `fm1-audio` 0.2.1 and `fm1`, `fm1-assets`,
-`fm1-controls`, `fm1-graphics` and `fm1-rticx` 0.2.0.
-CI and release builds use the pi32v2 workflow from the `fm1-rticx/v0.2.0` tag.
+available for growth. `Cargo.lock` selects `fm1`, `fm1-audio` and `fm1-rticx`
+0.2.1, and `fm1-assets`, `fm1-controls` and `fm1-graphics` 0.2.0.
+CI and release builds use the pi32v2 workflow from the `fm1-rticx/v0.2.1` tag.
 
 The firmware workflow builds the FM-1's native master mixer in the
 `wavegraph-fm1-native-mixer` artifact. To build it locally, run

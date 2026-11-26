@@ -1,4 +1,4 @@
-//! Hardware assumptions for enabling USB MIDI on the FM-1.
+//! Hardware assumptions for enabling USB MIDI and stereo capture on the FM-1.
 
 use crate::usb_fault::{BYTES, MAGIC, encode, message};
 use core::{fmt::Write as _, panic::PanicInfo};
@@ -6,9 +6,10 @@ use fm1::{
     Board,
     display::SpiClock,
     time::{Timers, cycles},
-    usb_midi::{Identity, MidiDevice, UsbPort},
+    usb_midi::{CaptureBuffer, CaptureWriter, Identity, MidiDevice, UsbPort},
 };
 use fm1_graphics::{TextGrid, palette};
+use static_cell::ConstStaticCell;
 
 const WRITING: u32 = u32::from_le_bytes(*b"WUP1");
 const COMMITTED: u32 = u32::from_le_bytes(MAGIC);
@@ -113,7 +114,7 @@ pub(super) fn recover(mut board: Board, id: Identity) -> Board {
         // SAFETY: same reserved slot and CPU0 ownership as the marker read.
         *word = unsafe { wavegraph_fault_read(offset) }.to_le_bytes();
     }
-    // The checked path on fm1 0.2.0 explicitly detaches a possibly active
+    // The checked path explicitly detaches a possibly active
     // loader connection. Keep all copy/endpoint storage untouched this boot.
     let _ = board
         .take_usb()
@@ -154,22 +155,30 @@ pub(super) fn recover(mut board: Board, id: Identity) -> Board {
 
 /// Board-specific entry point for music tasks. The only input that can move
 /// into the controller is the unique non-Send CPU0 peripheral token.
-pub(super) fn start(port: UsbPort, identity: Identity) -> Option<MidiDevice> {
+pub(super) fn start(
+    port: UsbPort,
+    identity: Identity,
+) -> (Option<MidiDevice>, Option<CaptureWriter>) {
     if !measured_revision() {
-        return port.try_into_midi(identity).ok();
+        return (port.try_into_midi(identity).ok(), None);
     }
 
+    static FIFO: ConstStaticCell<CaptureBuffer> = ConstStaticCell::new(CaptureBuffer::new());
     // SAFETY: WaveGraph runs under a trusted FM-1 loader. On the supported
     // 0x6f01 profile it dedicates the idle WL82 copy engine and IRQ to this
     // BSP for the entire boot. CPU1 runs only the DSP worker; ALNK and SPI
     // use independent engines. USB owns its permanent endpoint storage even
     // when two hardware agents see different bytes of one packet. No host
-    // length or byte chooses an address or enlarges the 68/16-byte copy.
+    // length or byte chooses an address or enlarges a copy. EP4 IN reads only
+    // its permanent 192-byte arena. The engine retires capture copies of up
+    // to 184 bytes, including across suspend, reset and loader handoff.
+    // EP4 RX retains its guarded receive arena.
     // Silicon assumptions: USB0 stays inside its arenas even for rejected
     // packets, reset and reconnect. Fresh copy DONE plus SSYNC retires every
     // descriptor/staging access. The loader must quiesce both masters before
     // a warm boot reuses RAM. The chip ID selects this hardware profile.
     // The watermark, identity and intact guards do not prove those premises.
     // See the firmware README, USB MIDI errata, for witnesses and falsifiers.
-    Some(unsafe { port.into_midi_with_dma_copy(identity) })
+    let (device, writer) = unsafe { port.into_midi_with_audio_capture(identity, FIFO.take()) };
+    (Some(device), Some(writer))
 }

@@ -1628,13 +1628,25 @@ pub(super) const DRY_HEADROOM: u8 = 3;
 const MASTER_BUS: usize = 18;
 pub(super) const BUS_COUNT: usize = MASTER_BUS + 4;
 
-/// The first outlet of the stereo master that rendered this block.
-fn master_bus<const N: usize>(buses: &[[I24; N]; BUS_COUNT], half_gain: bool) -> &[I24; N] {
-    &buses[if half_gain {
-        MASTER_BUS + 2
+fn master_channels<const N: usize>(
+    buses: &[[I24; N]; BUS_COUNT],
+    half_gain: bool,
+) -> [&[I24; N]; 2] {
+    // The graph's final four outlets are the full and trimmed stereo pairs.
+    let [.., left, right, half_left, half_right] = buses;
+    if half_gain {
+        [half_left, half_right]
     } else {
-        MASTER_BUS
-    }]
+        [left, right]
+    }
+}
+
+fn master_frames<const N: usize>(
+    buses: &[[I24; N]; BUS_COUNT],
+    half_gain: bool,
+) -> impl ExactSizeIterator<Item = [i32; 2]> {
+    let [left, right] = master_channels(buses, half_gain);
+    left.iter().zip(right).map(|(l, r)| [l.inner(), r.inner()])
 }
 
 pub(super) fn write_master<const N: usize>(
@@ -1642,14 +1654,37 @@ pub(super) fn write_master<const N: usize>(
     half_gain: bool,
     out: &mut [[i32; 2]; N],
 ) {
-    let [left, right] = if half_gain {
-        [MASTER_BUS + 2, MASTER_BUS + 3]
-    } else {
-        [MASTER_BUS, MASTER_BUS + 1]
-    };
-    // AudioBlock::write receives the cleared DAC staging block and owns both channels.
-    for ((frame, l), r) in out.iter_mut().zip(&buses[left]).zip(&buses[right]) {
-        *frame = [l.inner(), r.inner()];
+    for (dst, frame) in out.iter_mut().zip(master_frames(buses, half_gain)) {
+        *dst = frame;
+    }
+}
+
+/// Offer one real frame first so a closed or full USB FIFO costs no bulk copy.
+#[cfg(any(all(target_os = "none", feature = "qualified-usb"), test))]
+#[inline(never)]
+pub(super) fn capture_master<const N: usize>(
+    buses: &[[I24; N]; BUS_COUNT],
+    half_gain: bool,
+    mut write: impl FnMut(&[[i32; 2]]) -> usize,
+) {
+    let mut pcm = master_frames(buses, half_gain);
+    let Some(first) = pcm.next() else { return };
+    if write(core::slice::from_ref(&first)) == 0 {
+        return;
+    }
+    let mut batch = [[0; 2]; 32];
+    loop {
+        let n = pcm.len().min(batch.len());
+        if n == 0 {
+            break;
+        }
+        let frames = &mut batch[..n];
+        for (dst, frame) in frames.iter_mut().zip(&mut pcm) {
+            *dst = frame;
+        }
+        if write(frames) < n {
+            break;
+        }
     }
 }
 
@@ -2339,7 +2374,7 @@ impl Instrument<'_> {
         self.echo_gates = gates;
         self.previous_bpm = self.transport.bpm;
         self.cue = Cue::EMPTY;
-        Ok(master_bus(buses, self.half_gain))
+        Ok(master_channels(buses, self.half_gain)[0])
     }
 }
 
@@ -3321,6 +3356,41 @@ mod tests {
             );
             Ok(())
         })
+    }
+
+    #[test]
+    fn usb_capture_preserves_stereo_and_stops_at_the_fifo_limit() {
+        const N: usize = fm1_audio::OUTPUT_FRAMES;
+        let mut buses = [[I24::default(); N]; BUS_COUNT];
+        for (plane, start) in buses[MASTER_BUS..]
+            .iter_mut()
+            .zip([1000, -2000, 500, -1000])
+        {
+            for (sample, value) in plane.iter_mut().zip(start..) {
+                *sample = I24::new_unchecked(value);
+            }
+        }
+
+        for (half_gain, first) in [(false, [1000, -2000]), (true, [500, -1000])] {
+            let mut expected = [[0; 2]; N];
+            write_master(&buses, half_gain, &mut expected);
+            assert_eq!(expected[0], first);
+            for room in [0_usize, 1, 17, N - 1, N] {
+                let mut captured = Vec::<[i32; 2], N>::new();
+                let mut short_write = false;
+                capture_master(&buses, half_gain, |batch| {
+                    assert!(!short_write, "a dropped suffix must never be retried");
+                    if room == 0 {
+                        assert_eq!(batch.len(), 1, "probe a closed FIFO with one frame");
+                    }
+                    let n = room.saturating_sub(captured.len()).min(batch.len());
+                    captured.extend_from_slice(&batch[..n]).expect("one half");
+                    short_write = n < batch.len();
+                    n
+                });
+                assert_eq!(captured.as_slice(), &expected[..room]);
+            }
+        }
     }
 
     #[test]

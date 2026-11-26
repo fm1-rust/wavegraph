@@ -271,7 +271,7 @@ pub struct Frame {
     pub(super) labels: Labels,
 }
 
-#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1])]
+#[fm1_rticx::app(dispatchers = [SOFT0, SOFT1, SOFT2])]
 mod app {
     use super::render::{RenderBlock, Renderer};
     use wavegraph_fm1_core::{Driver, OutputHealth, Refilled, peer};
@@ -494,7 +494,7 @@ mod app {
         #[cfg(not(feature = "qualified-usb"))]
         let usb = port.try_into_midi(identity).ok();
         #[cfg(feature = "qualified-usb")]
-        let usb = crate::usb_midi::start(port, identity);
+        let (usb, usb_capture) = crate::usb_midi::start(port, identity);
         let mut timers = board.timers.with_panel_scan_rate();
         // Draw and USB can each have a coarse timeout outstanding. The cold
         // CPU1 handshake is the only high-resolution waiter.
@@ -582,6 +582,8 @@ mod app {
                     half_gain: false,
                     pending_edit: None,
                     gated: false,
+                    #[cfg(feature = "qualified-usb")]
+                    usb_capture,
                     wake_usb: usb.as_ref().map(|_| wake_usb),
                     playback: None,
                     tap,
@@ -1302,6 +1304,8 @@ mod app {
         gated: bool,
         half_gain: bool,
         pending_edit: Option<Revision>,
+        #[cfg(feature = "qualified-usb")]
+        usb_capture: Option<fm1::usb_midi::CaptureWriter>,
         wake_usb: Option<Sender<'static, (), 1>>,
         tap: Sender<'static, ScopeBlock, 2>,
         scope_updates: ScopeUpdates,
@@ -1324,11 +1328,21 @@ mod app {
             });
             let output = &mut *playback.output;
             let Some(driver) = &mut playback.driver else {
-                output.render(master, |_| {});
+                if output.render(master, |_| {}) == Refill::Written {
+                    #[cfg(feature = "qualified-usb")]
+                    super::render::capture_usb(self.usb_capture.as_mut(), None, output.block());
+                }
                 return;
             };
-            let refill = driver.refill(output, master);
-            let refill_ended = cycles();
+            // Timestamp the DAC commit before spending any interrupt time on
+            // USB. CPU0 still owns the pre-MASTER buses until driver.request.
+            let mut committed_at = None;
+            let refill = driver.refill_with_tap(output, master, |_job, _dac| {
+                committed_at = Some(cycles());
+                #[cfg(feature = "qualified-usb")]
+                super::render::capture_usb(self.usb_capture.as_mut(), _job, _dac);
+            });
+            let refill_ended = committed_at.unwrap_or_else(cycles);
             let Refilled {
                 result,
                 current,
@@ -1593,7 +1607,9 @@ mod app {
         }
     }
 
-    #[task(binds = USB0, priority = 1, init = generated)]
+    // Service each 1 ms capture packet above input processing and drawing.
+    // ALNK0 and the panel scan can still preempt USB.
+    #[task(binds = USB0, priority = 3, init = generated)]
     struct UsbInterrupt;
     impl RticTask for UsbInterrupt {
         fn exec(&mut self) {
@@ -1601,7 +1617,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [overloads, settings, midi_epoch, outbox, timing])]
+    #[async_task(priority = 3, shared = [overloads, settings, midi_epoch, outbox, timing])]
     struct Usb {
         device: Option<Cpu0<MidiDevice>>,
         clock: Clock,

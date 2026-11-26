@@ -30,7 +30,7 @@ and these entries in your workspace root manifest for the example.
 ```toml
 [dependencies]
 fm1-audio = "0.2.1"
-fm1-rticx = "0.2.0"
+fm1-rticx = "0.2.1"
 static_cell = "2.1.1"
 wavegraph-dsp = { path = "../wavegraph/wavegraph-dsp" }
 wavegraph-fm1-core = { path = "../wavegraph/wavegraph-fm1-core" }
@@ -76,6 +76,9 @@ build script shows how to package a separate upper-flash asset section.
    `Ok(None)` means no DMA half was due. Rendering can skip frames after a
    missed deadline. Use the supplied `first_frame` to advance sequencers.
    Only current PCM written to the DAC acknowledges a graph edit.
+   Use `refill_with_tap` to read the pre-MASTER job and post-MASTER stereo
+   samples after a confirmed write. A silent fallback passes `None` for the
+   job. A late or unserviced half skips the tap.
 5. A terminal worker fault holds CPU1. Drop the driver to close pending edits.
    The demo keeps serving silence and displays the fault. The tone example
    uses `peer::download()` in its panic handler to return to the bootloader.

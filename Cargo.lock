@@ -173,6 +173,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-hal-nb"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fba4268c14288c828995299e59b12babdbe170f6c6d73731af1b4648142e8605"
+dependencies = [
+ "embedded-hal",
+ "nb",
+]
+
+[[package]]
 name = "errno"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -205,13 +215,14 @@ dependencies = [
 
 [[package]]
 name = "fm1"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c541b404466f0dd1ea5334e1ec72d75287bcc81bd4c5360802b6e9d0c07b071f"
+checksum = "fb14c8c49263cce275dc43ad1eaa410bb7733513072295c488f6c3d44b3bb5df"
 dependencies = [
  "critical-section",
  "embedded-hal",
  "embedded-hal-async",
+ "embedded-hal-nb",
  "heapless",
 ]
 
@@ -256,9 +267,9 @@ dependencies = [
 
 [[package]]
 name = "fm1-rticx"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0bd06fc4327737c95a130d92547fb4319baa4a374fa846c7f675f08ad9d45f8"
+checksum = "01d0e671d607bc85d93cc77aefabe0198edd5948babe91b4eb004ec69f9e4780"
 dependencies = [
  "critical-section",
  "fm1",
@@ -443,6 +454,12 @@ name = "midly"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "207d755f4cb882d20c4da58d707ca9130a0c9bc5061f657a4f299b8e36362b7a"
+
+[[package]]
+name = "nb"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "nu-ansi-term"
