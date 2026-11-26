@@ -115,6 +115,9 @@ impl Settings {
             View::BeatFx(crate::fx::BeatEffect::Slicer) => {
                 self.fx.slicers[self.nav.focus.index()].enabled
             }
+            View::BeatFx(crate::fx::BeatEffect::Filter) => {
+                self.nav.filter_picks[self.nav.focus.index()].enabled
+            }
             View::Lfo => self.tracks[self.nav.focus.index()].lfo.enabled,
             View::Arp => self.tracks[self.nav.focus.index()].arp.enabled,
             View::Fx => self.nav.insert_slot().is_some_and(|slot| {
@@ -218,9 +221,11 @@ impl Motion {
             View::MasterFx(_) => self.reduction != old.reduction,
             View::Arp => self.arp_notes[i] != old.arp_notes[i],
             View::Fx => self.shape_offset(nav.focus) != old.shape_offset(nav.focus),
-            View::BeatFx(crate::fx::BeatEffect::Slicer | crate::fx::BeatEffect::Flanger) => {
-                self.beat_step != old.beat_step
-            }
+            View::BeatFx(
+                crate::fx::BeatEffect::Slicer
+                | crate::fx::BeatEffect::Flanger
+                | crate::fx::BeatEffect::Filter,
+            ) => self.beat_step != old.beat_step,
             View::BeatFx(crate::fx::BeatEffect::Echo) => {
                 self.position.map(|p| p.step) != old.position.map(|p| p.step)
             }
@@ -891,7 +896,13 @@ mod app {
                 self.piano
                     .event(channel, assignment, MidiAction::Off(53 + key.index()));
             }
-            if let Some(pattern) = self.nav.beat_pattern_mut() {
+            if self.nav.view == View::BeatFx(crate::fx::BeatEffect::Filter) {
+                Self::filter_keys(
+                    &mut self.leds,
+                    &scan,
+                    &mut self.nav.filter_picks[channel.index()],
+                );
+            } else if let Some(pattern) = self.nav.beat_pattern_mut() {
                 Self::beat_keys(&mut self.leds, &scan, pattern);
             } else if self.seq.page == Some(SeqPage::Pattern) {
                 let tick = ticks();
@@ -963,6 +974,24 @@ mod app {
     }
 
     impl Panel {
+        #[inline(never)]
+        fn filter_keys(leds: &mut Leds, scan: &Scan, pick: &mut crate::fx::FilterPick) {
+            pick.enabled ^= scan.pressed(Button::Sel);
+            // Update the selection before lighting either bank of keys.
+            let keys = (0u8..)
+                .zip(crate::fx::STEP_KEYS)
+                .take(10)
+                .map(|(i, k)| (i, PianoKey::new(k).expect("physical white key")));
+            for (i, key) in keys.clone() {
+                if scan.pressed(key) {
+                    pick.press(i);
+                }
+            }
+            for (i, key) in keys {
+                leds.set(key, pick.lit(i));
+            }
+        }
+
         #[inline(never)]
         fn beat_keys(leds: &mut Leds, scan: &Scan, pattern: &mut wavegraph_fx::StepPattern) {
             for (step, index) in (0u8..).zip(crate::fx::STEP_KEYS) {
@@ -1068,6 +1097,7 @@ mod app {
             for channel in Channel::ALL {
                 let i = channel.index();
                 self.settings.mixer.0[i].enabled = strip_enabled[i];
+                self.settings.fx.filters[i].pick = nav.filter_picks[i];
                 let assignment = nav.assignments[i];
                 if tracks[i].assignment != assignment {
                     self.keys.clear(channel);
@@ -1119,7 +1149,9 @@ mod app {
                     .arp
                     .edit(select, knobs, sel),
                 View::BeatFx(effect) => {
-                    self.settings.fx.edit_beat(channel, effect, knobs, sel);
+                    self.settings
+                        .fx
+                        .edit_beat(channel, effect, knobs, algorithm, sel);
                     if effect == crate::fx::BeatEffect::Echo {
                         self.settings.mixer.turn_knobs(channel, [0, 0, knobs[1], 0]);
                     }

@@ -6,7 +6,7 @@ use wavegraph_organ::{Chord, VoiceMode};
 use crate::bass::Knob;
 use crate::{
     bass::{Control, PresetSelection, presets::PRESETS},
-    fx::{BeatEffect, Device, INSERT_SLOTS, InsertKind},
+    fx::{BeatEffect, Device, FilterPick, INSERT_SLOTS, InsertKind},
     instrument::Part,
 };
 
@@ -240,6 +240,7 @@ pub(super) struct Navigation {
     beat_parent: View,
     pub(super) beat_steps: [wavegraph_fx::StepPattern; CHANNELS],
     pub(super) slicer_steps: [wavegraph_fx::StepPattern; CHANNELS],
+    pub(super) filter_picks: [FilterPick; CHANNELS],
     insert_slot: Option<u8>,
     pub(super) insert_kinds: [[InsertKind; INSERT_SLOTS]; CHANNELS],
     pub(super) bass_presets: [PresetSelection; CHANNELS],
@@ -258,6 +259,7 @@ impl Navigation {
         beat_parent: View::Fx,
         beat_steps: [wavegraph_fx::StepPattern::ALL; CHANNELS],
         slicer_steps: [wavegraph_fx::StepPattern::FIRST_HALF; CHANNELS],
+        filter_picks: [FilterPick::INITIAL; CHANNELS],
         insert_slot: None,
         insert_kinds: [
             InsertKind::factory(Part::Bass),
@@ -868,12 +870,16 @@ mod tests {
         nav.turn(2, 0);
         assert_eq!(nav.view, View::BeatFx(BeatEffect::Slicer));
         nav.beat_pattern_mut().expect("Slicer grid").toggle(0);
-        nav.turn(1, 1);
+        nav.turn(0, 1);
         assert_eq!(
             (nav.view, nav.focus),
             (View::BeatFx(BeatEffect::Slicer), Channel::Two)
         );
         assert!(nav.slicer_steps[1].active(0));
+        nav.turn(1, 0);
+        assert_eq!(nav.view, View::BeatFx(BeatEffect::Filter));
+        assert!(nav.beat_pattern_mut().is_none());
+        nav.turn(-1, 0);
         nav.turn(-1, -1);
         assert_eq!(
             (nav.view, nav.focus),

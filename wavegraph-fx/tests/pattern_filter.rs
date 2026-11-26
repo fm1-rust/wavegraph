@@ -130,6 +130,22 @@ fn factory_patterns_have_distinct_rhythms_and_usable_accents() {
 }
 
 #[test]
+fn a_bypassed_filter_discards_an_accent_before_reopening() {
+    let mut resting = PatternFilter::new(48_000).expect("valid sample rate");
+    let mut triggered = resting;
+    triggered.trigger(127);
+    let input = TONE.map(I24::new_unchecked);
+    let mut dry = input;
+    triggered.bypass_in_place(&mut dry);
+    assert_eq!(dry, input);
+    triggered.set_enabled(true);
+    assert_eq!(
+        input.map(|v| triggered.tick(v)),
+        input.map(|v| resting.tick(v))
+    );
+}
+
+#[test]
 fn a_hot_resonant_filter_settles_after_an_impulse_at_different_rates() {
     for rate in [8_000, 44_118, 96_000] {
         for mode in [FilterMode::LowPass, FilterMode::BandPass] {
