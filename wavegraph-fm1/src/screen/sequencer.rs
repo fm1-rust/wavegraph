@@ -219,12 +219,7 @@ impl Roll {
             return if head { theme.muted } else { theme.surface };
         }
         let color = if part == Part::Tr808 {
-            [
-                Rgb565::new(30, 9, 3),
-                drums::HOT,
-                Rgb565::new(31, 40, 3),
-                drums::CREAM,
-            ][step / 4]
+            drums::STEP_COLORS_808[step / 4]
         } else if cell.accent {
             theme.accent
         } else {

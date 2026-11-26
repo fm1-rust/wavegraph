@@ -1709,8 +1709,8 @@ impl Instrument<'_> {
             .map(|n| n.saturating_add_signed(track.key_transpose()).min(127))
     }
 
-    /// Last rendered gate cell, including live playing with the sequencer stopped.
-    pub(super) fn slicer_step(&self) -> u8 {
+    /// Last rendered sixteenth of the shared slicer/flanger cycle, even with transport stopped.
+    pub(super) fn beat_step(&self) -> u8 {
         Slicer::step_at(
             self.beat_phase
                 .position()
@@ -3677,7 +3677,7 @@ mod tests {
             // and both slot/assignment messages for every channel on this block.
             for step in 0..18u8 {
                 rack.render(tracks, &mut buses)?;
-                assert_eq!(rack.slicer_step(), step & 15);
+                assert_eq!(rack.beat_step(), step & 15);
                 for channel in Channel::ALL {
                     let i = channel.index();
                     let dry = &buses[channel.source_bus()][17..];
@@ -3692,20 +3692,20 @@ mod tests {
             }
             rack.transport.toggle();
             rack.render(tracks, &mut buses)?;
-            assert_eq!(rack.slicer_step(), 0);
+            assert_eq!(rack.beat_step(), 0);
             assert_eq!(buses[STRIP_BUS][17..], buses[0][17..]);
             rack.render(tracks, &mut buses)?;
-            assert_eq!(rack.slicer_step(), 1);
+            assert_eq!(rack.beat_step(), 1);
             assert!(buses[STRIP_BUS][17..].iter().all(|s| s.inner() == 0));
             rack.transport.bpm = 60;
             rack.render(tracks, &mut buses)?;
-            assert_eq!(rack.slicer_step(), 2);
+            assert_eq!(rack.beat_step(), 2);
             rack.render(tracks, &mut buses)?;
-            assert_eq!(rack.slicer_step(), 2);
+            assert_eq!(rack.beat_step(), 2);
             rack.transport.toggle();
             rack.skip_frames(256, |_, _, _| {})?;
             rack.render(tracks, &mut buses)?;
-            assert_eq!(rack.slicer_step(), 4);
+            assert_eq!(rack.beat_step(), 4);
             fx.slicers[0].enabled = false;
             rack.set_fx(fx);
             rack.render(tracks, &mut buses)?;
@@ -3806,6 +3806,40 @@ mod tests {
             rack.render(tracks, &mut buses)?;
             assert_eq!(buses[DELAY_SEND], buses[STRIP_BUS]);
             assert_eq!(buses[DELAY_RETURN], [I24::default(); 500]);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn strip_activators_gate_live_and_sequenced_audio_and_both_sends() -> Result<(), Error> {
+        with_instrument(32_000, |rack| {
+            let mut tracks = Track::TEST_TRACKS;
+            tracks[0].voice.gate.note = Some(note(69, 100));
+            rack.sequences = [false, false, false, true];
+            let mut mixer = Mixer::DRY;
+            mixer.0[0].reverb = 128;
+            mixer.0[3].delay = 128;
+            let mut buses = [[I24::default(); 128]; BUS_COUNT];
+            rack.transport.toggle();
+            for enabled in [true, false, true] {
+                mixer.0[0].enabled = enabled;
+                mixer.0[3].enabled = enabled;
+                rack.set_mixer(mixer);
+                rack.render(tracks, &mut buses)?;
+                for (channel, send) in [(Channel::One, REVERB_SEND), (Channel::Four, DELAY_SEND)] {
+                    let source = buses[channel.source_bus()];
+                    assert!(source.iter().any(|s| s.inner() != 0));
+                    assert_eq!(
+                        buses[send],
+                        if enabled {
+                            source
+                        } else {
+                            [I24::default(); 128]
+                        }
+                    );
+                }
+                assert_eq!(buses[DRY_BUS].iter().any(|s| s.inner() != 0), enabled);
+            }
             Ok(())
         })
     }

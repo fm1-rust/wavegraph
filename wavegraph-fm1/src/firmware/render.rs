@@ -159,7 +159,7 @@ impl Renderer {
         block.motion = Motion {
             clipboard: graph.recorder.status,
             position: graph.position,
-            slicer_step: graph.slicer_step(),
+            beat_step: graph.beat_step(),
             transport: Some(settings.seq.transport),
             banks: graph.banks(),
             bass_automation: graph.bass_automation(nav.focus),

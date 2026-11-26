@@ -11,7 +11,7 @@ use fm1_graphics::embedded_graphics::{
     text::Alignment,
 };
 use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error, SIZE},
+    bsp::display::{Error, SIZE},
     time::Clock,
 };
 use wavegraph_909::Voice;
@@ -21,6 +21,11 @@ pub(super) const HOT: Rgb565 = super::style::TR808.accent;
 pub(super) const EMBER: Rgb565 = Rgb565::new(17, 13, 4);
 
 pub(super) const CREAM: Rgb565 = super::style::TR808.ink;
+pub(super) const STEP_COLORS_808: [Rgb565; 4] =
+    [Rgb565::new(30, 9, 3), HOT, Rgb565::new(31, 40, 3), CREAM];
+pub(super) const KEY_FACE_909: Rgb565 = Rgb565::new(30, 60, 28);
+pub(super) const DARK_LENS: Rgb565 = Rgb565::new(7, 14, 6);
+pub(super) const LIT_LENS: Rgb565 = Rgb565::new(31, 53, 13);
 
 const KEY_W: usize = 39;
 const KEY_H: usize = 47;
@@ -40,7 +45,7 @@ pub(super) struct Panel {
 
 impl Panel {
     async fn title(
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         part: Part,
@@ -61,8 +66,7 @@ impl Panel {
                 split,
                 [theme.ink, theme.accent].map(|c| selector.shade(c)),
             );
-            lcd.write_rect_buffered(10, y + 1, width, 8, band.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(10, y + 1, width, 8, band.pixels).await?;
         }
         Ok(())
     }
@@ -72,7 +76,7 @@ impl Panel {
         for (x, y, w, h, ink) in [
             (0, 0, 39, 47, GRAPHITE),
             (1, 1, 37, 44, Rgb565::new(23, 46, 21)),
-            (2, 1, 35, 35, Rgb565::new(30, 60, 28)),
+            (2, 1, 35, 35, KEY_FACE_909),
         ] {
             RoundedRectangle::with_equal_corners(
                 Rectangle::new(Point::new(x, y), Size::new(w, h)),
@@ -102,7 +106,7 @@ impl Panel {
 
     pub(super) async fn status808(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         strip: &mut [[u8; 2]],
         selector: &Selector,
         status: (Channel, bool, &'static str),
@@ -117,7 +121,7 @@ impl Panel {
 
     pub(super) async fn controls(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         strip: &mut [[u8; 2]],
         selector: &Selector,
         c: wavegraph_808::Controls,
@@ -134,7 +138,7 @@ impl Panel {
 
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut AsyncDisplay<'_, Clock>,
+        lcd: &mut super::PanelDisplay<'_>,
         strip: &mut [[u8; 2]],
         selector: &mut Selector,
         entering: bool,
@@ -177,28 +181,19 @@ impl Panel {
                 )
                 .with_panel_type(true);
                 Self::key_face(&mut key, voice, i, selector);
-                lcd.write_rect_buffered(
-                    x,
-                    KEY_Y,
-                    KEY_W as u16,
-                    KEY_H as u16,
-                    key.pixels.as_flattened(),
-                )
-                .await?;
+                lcd.write_rect(x, KEY_Y, KEY_W as u16, KEY_H as u16, key.pixels)
+                    .await?;
             } else if self.previous.is_some_and(|old| old[voice as usize] == lamp) {
                 continue;
             }
             let (lens, core) = match lamp {
-                DrumLamp::Off => (Rgb565::new(7, 14, 6), Rgb565::new(10, 19, 8)),
+                DrumLamp::Off => (DARK_LENS, Rgb565::new(10, 19, 8)),
                 DrumLamp::Tail => (EMBER, theme.peak),
-                DrumLamp::Strike => {
-                    let core = Rgb565::new(31, 53, 13);
-                    (super::style::mix(theme.peak, core), core)
-                }
+                DrumLamp::Strike => (super::style::mix(theme.peak, LIT_LENS), LIT_LENS),
             };
             let [rim, lens, core] =
                 [GRAPHITE, lens, core].map(|color| selector.shade(color).to_be_bytes());
-            let pixels: [[_; LENS_W]; LENS_H] = core::array::from_fn(|y| {
+            let mut pixels: [[_; LENS_W]; LENS_H] = core::array::from_fn(|y| {
                 core::array::from_fn(|x| {
                     if y == 0 || y + 1 == LENS_H || x == 0 || x + 1 == LENS_W {
                         rim
@@ -209,12 +204,12 @@ impl Panel {
                     }
                 })
             });
-            lcd.write_rect_buffered(
+            lcd.write_rect(
                 x + LENS_X,
                 KEY_Y + LENS_Y,
                 LENS_W as u16,
                 LENS_H as u16,
-                pixels.as_flattened().as_flattened(),
+                pixels.as_flattened_mut(),
             )
             .await?;
         }

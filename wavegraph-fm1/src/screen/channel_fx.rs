@@ -110,18 +110,23 @@ impl Rack {
                 ),
                 96..112 => {
                     band.title("POST FX", Point::new(8, 97), theme.accent);
-                    band.label("PRE-FADER", Point::new(65, 99), Alignment::Left, theme.ink);
+                    band.label(
+                        if controls.selected.is_some() {
+                            "PRESETS FX"
+                        } else {
+                            "PRE-FADER"
+                        },
+                        Point::new(65, 99),
+                        Alignment::Left,
+                        theme.ink,
+                    );
                     band.rect(
                         Point::new(0, 111),
                         Size::new(u32::from(SIZE), 1),
                         theme.muted,
                     );
                     band.label(
-                        if controls.selected.is_some() {
-                            "PRESETS FX"
-                        } else {
-                            "EDIT BEAT FX"
-                        },
+                        "EDIT BEAT FX",
                         Point::new(231, 99),
                         Alignment::Right,
                         theme.ink,

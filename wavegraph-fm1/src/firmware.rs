@@ -15,7 +15,7 @@ use crate::{
     keys::PolyKey,
     mixer::Mixer,
     organ::Controls as OrganControls,
-    panel::{CHANNELS, Channel, Navigation, View},
+    panel::{CHANNELS, Channel, Navigation, PresetRole, View},
     sequencer::{
         BankPosition, DrumLamp, Position, SeqPage, Sequencer, Transport, pattern::Automation,
     },
@@ -90,6 +90,7 @@ impl Settings {
             envelope_target: track.envelope_target,
             poly_keys: track.poly_keys,
             preset_since: self.nav.preset_since,
+            preset_role: self.nav.preset_role(),
             view: self.nav.view,
             inserts: track.inserts,
             insert_slot: self.nav.insert_slot(),
@@ -104,6 +105,7 @@ impl Settings {
 
     fn sel_lamp(&self) -> bool {
         match self.nav.view {
+            View::Mixer | View::Channel => self.mixer.0[self.nav.focus.index()].enabled,
             View::BeatFx(crate::fx::BeatEffect::Echo) => {
                 self.fx.echo_input_open && self.fx.delay.enabled
             }
@@ -170,6 +172,7 @@ pub(super) struct Labels {
     pub(super) envelope_target: EnvelopeTarget,
     pub(super) poly_keys: [PolyKey; wavegraph_organ::POLYPHONY],
     pub(super) preset_since: Option<u32>,
+    pub(super) preset_role: PresetRole,
     pub(super) view: View,
     pub(super) inserts: [Insert; INSERT_SLOTS],
     pub(super) insert_slot: Option<u8>,
@@ -185,7 +188,7 @@ pub(super) struct Labels {
 pub struct Motion {
     pub(super) clipboard: crate::clipboard::Status,
     pub(super) position: Option<Position>,
-    pub(super) slicer_step: u8,
+    pub(super) beat_step: u8,
     pub(super) transport: Option<Transport>,
     pub(super) bass_automation: Option<(Channel, Automation)>,
     pub(super) banks: [BankPosition; CHANNELS],
@@ -215,7 +218,9 @@ impl Motion {
             View::MasterFx(_) => self.reduction != old.reduction,
             View::Arp => self.arp_notes[i] != old.arp_notes[i],
             View::Fx => self.shape_offset(nav.focus) != old.shape_offset(nav.focus),
-            View::BeatFx(crate::fx::BeatEffect::Slicer) => self.slicer_step != old.slicer_step,
+            View::BeatFx(crate::fx::BeatEffect::Slicer | crate::fx::BeatEffect::Flanger) => {
+                self.beat_step != old.beat_step
+            }
             View::BeatFx(crate::fx::BeatEffect::Echo) => {
                 self.position.map(|p| p.step) != old.position.map(|p| p.step)
             }
@@ -277,10 +282,11 @@ mod app {
         },
         keys::{Keys, MidiAction, PanelPads, Piano, Press, decode_midi},
         midi_out::OutputQueue,
+        mixer::Mixer,
         overload::Overloads,
         panel::{
-            CHANNELS, Channel, Navigation, PageButton, PresetRole, View, pattern_press_lamp,
-            preset_age,
+            CHANNELS, Channel, EditButton, Navigation, PageButton, PresetRole, View,
+            pattern_press_lamp,
         },
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer, edit::EDITS, pattern::Slot},
@@ -318,6 +324,7 @@ mod app {
     const PIANO_KEYS: usize = PianoKey::COUNT as usize;
 
     pub struct PanelFrame {
+        strip_enabled: [bool; CHANNELS],
         scan: Scan,
         seq: Sequencer,
         nav: Navigation,
@@ -563,6 +570,8 @@ mod app {
                     scans,
                     leds,
                     octave_since: None,
+                    edit_button: EditButton::default(),
+                    strip_enabled: Mixer::INITIAL.0.map(|s| s.enabled),
                     pattern_pressed_at: None,
                 },
                 input: Input {
@@ -622,6 +631,8 @@ mod app {
         scans: Sender<'static, PanelFrame, SCANS>,
         leds: Leds,
         octave_since: Option<u32>,
+        edit_button: EditButton,
+        strip_enabled: [bool; CHANNELS],
         pattern_pressed_at: Option<u32>,
     }
 
@@ -659,25 +670,43 @@ mod app {
                 (Button::Lfo, PageButton::Lfo),
                 (Button::Arp, PageButton::Arp),
                 (Button::Seq, PageButton::Seq),
-                (Button::Edit, PageButton::Edit),
             ]
             .into_iter()
-            .find(|(button, _)| scan.pressed(*button));
+            .find(|(button, _)| scan.pressed(*button))
+            .map(|(_, page)| page);
+            let tick = ticks();
+            let wait_for_hold = page.is_none()
+                && self.nav.view == View::Scope
+                && self.nav.instrument_swap.is_none();
+            let edit = self.edit_button.update(
+                wait_for_hold,
+                scan.pressed(Button::Edit),
+                scan.is_down(Button::Edit),
+                tick,
+            );
             let home = scan.pressed(Button::Home);
             let previous_view = self.nav.view;
             let previous_channel = self.nav.focus;
             let previous_insert_slot = self.nav.insert_slot();
+            let mut presets = scan.encoder_delta(Encoder::Presets);
+            if presets != 0
+                && self.nav.instrument_swap.is_some()
+                && (page.is_some() || edit.is_some())
+            {
+                // A final detent in the same scan as EDIT still belongs to the fixed channel.
+                self.nav.turn(0, presets);
+                presets = 0;
+            }
             if !matches!(self.nav.view, View::MasterFx(_))
                 && ((scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
                     || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo)))
             {
                 self.nav.press(PageButton::GlobalFx);
-            } else if let Some((_, button)) = page
+            } else if let Some(button) = page.or(edit)
                 && !(home && self.seq.back())
             {
                 self.nav.press(button);
             }
-            let presets = scan.encoder_delta(Encoder::Presets);
             let select = scan.encoder_delta(Encoder::Select);
             if !home && (select != 0 || presets != 0) {
                 self.nav.turn(select, presets);
@@ -686,19 +715,22 @@ mod app {
                 .turn_algorithm(scan.encoder_delta(Encoder::Algorithm));
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
-            let show_picker = self.nav.view.presets(self.nav.insert_slot()) != PresetRole::Channel;
-            if !home && presets != 0 && (channel_changed || show_picker) {
-                self.nav.preset_since = Some(ticks());
-            } else if home
+            if home
                 || channel_changed
                 || self.nav.view != previous_view
                 || self.nav.insert_slot() != previous_insert_slot
-                || self
-                    .nav
-                    .preset_since
-                    .is_some_and(|since| preset_age(since, ticks()).is_none())
             {
                 self.nav.preset_since = None;
+            }
+            self.nav.poll_presets(
+                tick,
+                !home
+                    && presets != 0
+                    && (channel_changed || self.nav.preset_role() != PresetRole::Channel),
+            );
+            // Retain each activator edge even if this scan cannot be queued.
+            if self.nav.view.is_mixer() && scan.pressed(Button::Sel) {
+                self.strip_enabled[self.nav.focus.index()] ^= true;
             }
             if self.nav.view == View::Clipboard {
                 self.nav.clip_request.options.turn(
@@ -769,7 +801,8 @@ mod app {
             );
             self.leds.set(
                 Button::Edit,
-                self.seq.page == Some(SeqPage::Step)
+                (self.nav.instrument_swap.is_some() && tick & 32 == 0)
+                    || self.seq.page == Some(SeqPage::Step)
                     || matches!(
                         self.nav.view,
                         View::VoiceMode | View::SampleEdit | View::BeatFx(_)
@@ -894,6 +927,7 @@ mod app {
             }
             if !self.scans.is_full() {
                 let _ = self.scans.try_send(PanelFrame {
+                    strip_enabled: self.strip_enabled,
                     scan,
                     seq: self.seq,
                     nav: self.nav,
@@ -995,6 +1029,7 @@ mod app {
     impl Input {
         fn apply_panel(&mut self, frame: PanelFrame) {
             let PanelFrame {
+                strip_enabled,
                 scan,
                 seq,
                 nav,
@@ -1008,6 +1043,7 @@ mod app {
             let tracks = &mut self.settings.tracks;
             for channel in Channel::ALL {
                 let i = channel.index();
+                self.settings.mixer.0[i].enabled = strip_enabled[i];
                 let assignment = nav.assignments[i];
                 if tracks[i].assignment != assignment {
                     self.keys.clear(channel);

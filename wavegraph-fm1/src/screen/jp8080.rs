@@ -32,15 +32,13 @@ pub(super) struct Panel {
 impl Panel {
     pub(super) async fn paint(
         &mut self,
-        lcd: &mut Display,
-        clock: &mut Clock,
+        lcd: &mut super::PanelDisplay<'_>,
         pixels: &mut [[u8; 2]],
         selector: &mut Selector,
         labels: Labels,
         entering: bool,
     ) -> Result<(), Error> {
         let ink = selector.shader();
-        let mut lcd = lcd.as_async(clock)?;
         if entering {
             for y in (0..32).step_by(BAND) {
                 let mut band = Band::new(pixels, 0, y, SIZE, 8, ink(FACE)).with_panel_type(true);
@@ -55,12 +53,10 @@ impl Panel {
                 );
                 band.rect(Point::new(0, 30), Size::new(240, 1), ink(EDGE));
                 band.rect(Point::new(0, 31), Size::new(240, 1), ink(BLACK));
-                lcd.write_rect_buffered(0, y, SIZE, 8, band.pixels.as_flattened())
-                    .await?;
+                lcd.write_rect(0, y, SIZE, 8, band.pixels).await?;
             }
             wordmark(pixels, ink(FACE), ink(AMBER));
-            lcd.write_rect_buffered(7, 2, 100, 16, pixels[..1600].as_flattened())
-                .await?;
+            lcd.write_rect(7, 2, 100, 16, &mut pixels[..1600]).await?;
         }
 
         let mut key = labels.voice.note_name();
@@ -95,8 +91,7 @@ impl Panel {
                 left,
                 ink(BLACK),
             );
-            lcd.write_rect_buffered(122, 7, 102, 18, display.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(122, 7, 102, 18, display.pixels).await?;
             self.status = Some(status);
         }
 
@@ -157,8 +152,7 @@ impl Panel {
                     Alignment::Center,
                     ink(AMBER),
                 );
-                lcd.write_rect_buffered(x, y, 60, 20, band.pixels.as_flattened())
-                    .await?;
+                lcd.write_rect(x, y, 60, 20, band.pixels).await?;
             }
         }
         self.controls = Some(values);

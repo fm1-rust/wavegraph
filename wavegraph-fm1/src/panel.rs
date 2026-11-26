@@ -101,18 +101,11 @@ pub(super) enum View {
 pub(super) enum PresetRole {
     Channel,
     Instrument,
+    Audition(Part),
     Insert(u8),
 }
 
 impl View {
-    pub(super) fn presets(self, slot: Option<u8>) -> PresetRole {
-        match (self, slot) {
-            (Self::Channel, _) => PresetRole::Instrument,
-            (Self::Fx, Some(slot)) => PresetRole::Insert(slot),
-            _ => PresetRole::Channel,
-        }
-    }
-
     fn editor(part: Part) -> Self {
         if part == Part::Sampler {
             Self::SampleEdit
@@ -186,9 +179,11 @@ impl Polyphony {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub(super) enum PageButton {
     Home,
     Edit,
+    HoldEdit,
     Arp,
     Lfo,
     Env,
@@ -198,12 +193,48 @@ pub(super) enum PageButton {
     Seq,
 }
 
+/// A scope tap is resolved on release. All other EDIT actions still use the press edge.
+#[derive(Default)]
+pub(super) struct EditButton {
+    since: Option<u32>,
+}
+
+impl EditButton {
+    pub(super) fn update(
+        &mut self,
+        wait_for_hold: bool,
+        pressed: bool,
+        down: bool,
+        tick: u32,
+    ) -> Option<PageButton> {
+        if !wait_for_hold {
+            self.since = None;
+            return pressed.then_some(PageButton::Edit);
+        }
+        if pressed {
+            self.since = Some(tick);
+        }
+        let held = tick.wrapping_sub(self.since?) >= 60; // 600 ms at 100 Hz
+        if down && !held {
+            return None;
+        }
+        self.since = None;
+        Some(if held {
+            PageButton::HoldEdit
+        } else {
+            PageButton::Edit
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Navigation {
     pub(super) clip_request: crate::clipboard::Request,
     pub(super) view: View,
     pub(super) focus: Channel,
     pub(super) preset_since: Option<u32>,
+    /// Instrument shown in the swap header. The current assignment keeps playing until it settles.
+    pub(super) instrument_swap: Option<Part>,
     bass_slot: Option<u8>,
     fx_parent: View,
     beat_parent: View,
@@ -221,6 +252,7 @@ impl Navigation {
         view: View::Scope,
         focus: Channel::One,
         preset_since: None,
+        instrument_swap: None,
         bass_slot: None,
         fx_parent: View::Mixer,
         beat_parent: View::Fx,
@@ -277,6 +309,15 @@ impl Navigation {
     // Page transitions run only on button edges. Keep them out of the SRAM panel ISR.
     #[cfg_attr(target_os = "none", inline(never))]
     pub(super) fn press(&mut self, button: PageButton) {
+        if let Some(selected) = self.instrument_swap.take() {
+            // Leaving the scope or confirming with EDIT takes the displayed choice immediately.
+            self.assign(selected);
+            self.preset_since = None;
+            self.bass_slot = None;
+            if matches!(button, PageButton::Edit | PageButton::Home) {
+                return;
+            }
+        }
         if matches!(button, PageButton::Home) && self.bass_slot.take().is_some() {
             return;
         }
@@ -284,6 +325,14 @@ impl Navigation {
             return;
         }
         let next = match button {
+            PageButton::HoldEdit => {
+                if self.view == View::Scope {
+                    self.instrument_swap = Some(self.part());
+                    self.preset_since = None;
+                    self.bass_slot = None;
+                }
+                return;
+            }
             PageButton::Edit | PageButton::Home if matches!(self.view, View::BeatFx(_)) => {
                 self.beat_parent
             }
@@ -347,6 +396,47 @@ impl Navigation {
 
     pub(super) fn part(self) -> Part {
         self.assignments[self.focus.index()].part
+    }
+
+    pub(super) fn preset_role(&self) -> PresetRole {
+        match (self.view, self.insert_slot) {
+            (View::Channel, _) => PresetRole::Instrument,
+            (View::Scope, _) => self
+                .instrument_swap
+                .map_or(PresetRole::Channel, PresetRole::Audition),
+            (View::Fx, Some(slot)) => PresetRole::Insert(slot),
+            _ => PresetRole::Channel,
+        }
+    }
+
+    fn assign(&mut self, part: Part) {
+        let assignment = &mut self.assignments[self.focus.index()];
+        if assignment.part != part {
+            assignment.part = part;
+            assignment.generation = assignment.generation.wrapping_add(1);
+            self.bass_slot = None;
+        }
+    }
+
+    /// Settle from the last PRESETS detent, even if the scan carrying it could not be queued.
+    pub(super) fn poll_presets(&mut self, tick: u32, turned: bool) {
+        const SETTLE_TICKS: u32 = 20; // 200 ms at 100 Hz
+        if turned {
+            self.preset_since = Some(tick);
+        }
+        let Some(since) = self.preset_since else {
+            return;
+        };
+        if let Some(selected) = self.instrument_swap
+            && selected != self.part()
+            && tick.wrapping_sub(since) >= SETTLE_TICKS
+        {
+            self.assign(selected);
+        }
+        // Auditioning the sound and dismissing the picker have independent deadlines.
+        if preset_age(since, tick).is_none() {
+            self.preset_since = None;
+        }
     }
 
     pub(super) fn insert_slot(self) -> Option<u8> {
@@ -422,18 +512,19 @@ impl Navigation {
         if presets == 0 {
             return;
         }
-        match self.view.presets(self.insert_slot()) {
+        match self.preset_role() {
             PresetRole::Insert(slot) => {
                 let kind = &mut self.insert_kinds[self.focus.index()][usize::from(slot)];
                 *kind = kind.turn(presets);
             }
             PresetRole::Instrument => {
-                let assignment = &mut self.assignments[self.focus.index()];
-                let old = assignment.part;
-                assignment.part.turn(presets);
-                if assignment.part != old {
-                    assignment.generation = assignment.generation.wrapping_add(1);
-                }
+                let mut part = self.part();
+                part.turn(presets);
+                self.assign(part);
+            }
+            PresetRole::Audition(mut selected) => {
+                selected.turn(presets);
+                self.instrument_swap = Some(selected);
             }
             PresetRole::Channel => {
                 let previous = self.focus;
@@ -452,6 +543,155 @@ impl Navigation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edit_hold_fires_once_and_a_short_scope_press_still_taps() {
+        let mut edit = EditButton::default();
+        let start = u32::MAX - 20;
+        assert_eq!(edit.update(true, true, true, start), None);
+        assert_eq!(edit.update(true, false, true, 38), None); // 59 ticks
+        assert_eq!(edit.update(true, false, false, 38), Some(PageButton::Edit));
+        assert_eq!(edit.update(true, true, true, start), None);
+        assert_eq!(
+            edit.update(true, false, true, 39),
+            Some(PageButton::HoldEdit)
+        );
+        assert_eq!(edit.update(false, false, true, 40), None);
+        assert_eq!(edit.update(false, false, false, 41), None);
+        assert_eq!(edit.update(false, true, true, 42), Some(PageButton::Edit));
+        assert_eq!(edit.update(true, false, false, 45), None);
+
+        // Navigating away during the hold cancels the pending tap and long press.
+        assert_eq!(edit.update(true, true, true, 50), None);
+        assert_eq!(edit.update(false, false, true, 51), None);
+        assert_eq!(edit.update(true, false, true, 115), None);
+        assert_eq!(edit.update(true, false, false, 116), None);
+    }
+
+    #[test]
+    fn scope_swap_uses_the_mixer_order_and_only_reassigns_the_focused_strip() {
+        for ch in Channel::ALL {
+            let mut nav = Navigation::INITIAL;
+            nav.focus = ch;
+            let mut mixer = nav;
+            mixer.press(PageButton::Glo);
+            mixer.turn(1, 0);
+            nav.press(PageButton::HoldEdit);
+            assert_eq!(nav.instrument_swap, Some(nav.part()));
+            for delta in [1, -2, 10, i8::MIN, i8::MAX] {
+                let previous = nav.assignments;
+                nav.turn(0, delta);
+                mixer.turn(0, delta);
+                nav.poll_presets(0, true);
+                assert_eq!(nav.assignments, previous);
+                assert_eq!(nav.instrument_swap, Some(mixer.part()));
+                nav.poll_presets(20, false);
+                assert_eq!(nav.assignments, mixer.assignments);
+                assert_eq!(
+                    (nav.focus, nav.view, nav.preset_role()),
+                    (ch, View::Scope, PresetRole::Audition(mixer.part()))
+                );
+            }
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.instrument_swap, None);
+            assert_eq!(
+                (nav.view, nav.preset_role()),
+                (View::Scope, PresetRole::Channel)
+            );
+            nav.turn(0, 1);
+            assert_ne!(nav.focus, ch);
+            assert_eq!(nav.assignments, mixer.assignments);
+        }
+    }
+
+    #[test]
+    fn audition_settles_only_the_last_detent_and_keeps_browsing() {
+        let mut nav = Navigation::INITIAL;
+        let original = nav.assignments;
+        nav.press(PageButton::HoldEdit);
+        // Overshoot the 808, then back up across the wrapping 100 Hz clock.
+        for (delta, now, name) in [
+            (1, u32::MAX - 12, Part::Tr808),
+            (1, u32::MAX - 4, Part::Tr909),
+            (-1, 5, Part::Tr808),
+        ] {
+            nav.turn(0, delta);
+            nav.poll_presets(now, true);
+            assert_eq!(nav.instrument_swap, Some(name));
+            assert_eq!(nav.assignments, original);
+        }
+        nav.poll_presets(24, false);
+        assert_eq!(nav.assignments, original);
+        nav.poll_presets(25, false);
+        assert_eq!(nav.preset_since, Some(5)); // The picker stays up after the sound changes.
+        let loaded = nav.assignments;
+        assert_eq!(
+            loaded[0],
+            Assignment {
+                part: Part::Tr808,
+                generation: 1
+            }
+        );
+        assert_eq!(loaded[1..], original[1..]);
+        assert_eq!(nav.preset_role(), PresetRole::Audition(Part::Tr808));
+
+        // Reversing back to the live sound leaves its playing voice and settings intact.
+        nav.turn(0, 1);
+        nav.poll_presets(50, true);
+        nav.turn(0, -1);
+        nav.poll_presets(55, true);
+        nav.poll_presets(300, false);
+        assert_eq!(nav.preset_since, None);
+        assert_eq!(nav.assignments, loaded);
+        // EDIT takes the displayed choice even a single tick after the detent.
+        nav.turn(0, -1);
+        nav.poll_presets(310, true);
+        nav.press(PageButton::Edit);
+        assert_eq!(
+            nav.assignments[0],
+            Assignment {
+                part: Part::Bass,
+                generation: 2
+            }
+        );
+        assert_eq!(
+            (nav.view, nav.preset_role()),
+            (View::Scope, PresetRole::Channel)
+        );
+        nav.poll_presets(311, false);
+        nav.turn(0, 1);
+        nav.poll_presets(500, false);
+        assert_eq!(nav.focus, Channel::Two);
+        assert_eq!(nav.assignments[1..], original[1..]);
+    }
+
+    #[test]
+    fn every_instrument_keeps_its_tap_editor_and_can_open_beat_fx() {
+        for part in Part::ALL {
+            let mut nav = Navigation::INITIAL;
+            nav.assignments[0] = Assignment::new(part);
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, View::editor(part));
+            assert_eq!(nav.instrument_swap, None);
+            nav.press(PageButton::Home);
+            nav.press(PageButton::HoldEdit);
+            nav.press(PageButton::Fx);
+            assert_eq!(nav.instrument_swap, None);
+            nav.turn(1, 0);
+            assert!(nav.insert_slot().is_some());
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, View::BeatFx(BeatEffect::Echo));
+            nav.press(PageButton::Home);
+            assert_eq!(nav.view, View::Fx);
+            nav.press(PageButton::Glo);
+            nav.turn(1, 0);
+            let rack = nav.view;
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, View::BeatFx(BeatEffect::Echo));
+            nav.press(PageButton::Edit);
+            assert_eq!(nav.view, rack);
+        }
+    }
 
     #[test]
     fn only_waveform_pages_request_audio_samples() {
@@ -490,7 +730,7 @@ mod tests {
             for channel in [Channel::Two, Channel::Three, Channel::Four, Channel::One] {
                 nav.turn(0, 1);
                 assert_eq!((nav.focus, nav.view), (channel, view));
-                assert_eq!(nav.view.presets(nav.insert_slot()), PresetRole::Channel);
+                assert_eq!(nav.preset_role(), PresetRole::Channel);
             }
             nav.turn(0, -1);
             assert_eq!((nav.focus, nav.view), (Channel::Four, view));

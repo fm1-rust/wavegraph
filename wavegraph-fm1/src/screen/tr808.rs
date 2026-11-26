@@ -12,10 +12,7 @@ use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
 };
-use fm1_rticx::{
-    bsp::display::{AsyncDisplay, Error},
-    time::Clock,
-};
+use fm1_rticx::bsp::display::Error;
 use wavegraph_808::Controls;
 use wavegraph_909::Voice;
 
@@ -24,7 +21,7 @@ const RUBBER: Rgb565 = Rgb565::new(5, 10, 5);
 const PANEL: Rgb565 = super::style::TR808.face;
 
 pub(super) async fn status(
-    lcd: &mut AsyncDisplay<'_, Clock>,
+    lcd: &mut super::PanelDisplay<'_>,
     pixels: &mut [[u8; 2]],
     selector: &Selector,
     (channel, kit_scope, transport): (Channel, bool, &str),
@@ -51,12 +48,11 @@ pub(super) async fn status(
     };
     window.rect(Point::new(58, 6), Size::new(5, 4), selector.shade(lamp));
     window.label(transport, Point::new(69, 3), left, ink);
-    lcd.write_rect_buffered(8, 34, 103, 15, window.pixels.as_flattened())
-        .await
+    lcd.write_rect(8, 34, 103, 15, window.pixels).await
 }
 
 pub(super) async fn controls(
-    lcd: &mut AsyncDisplay<'_, Clock>,
+    lcd: &mut super::PanelDisplay<'_>,
     pixels: &mut [[u8; 2]],
     selector: &Selector,
     c: Controls,
@@ -68,8 +64,7 @@ pub(super) async fn controls(
         for (x, title) in [(114, "BASS DRUM"), (174, "SNARE")] {
             let mut group = Band::new(pixels, 0, 0, 60, 10, paper).with_panel_type(true);
             group.label(title, Point::new(30, 0), Alignment::Center, ink);
-            lcd.write_rect_buffered(x, 0, 60, 10, group.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(x, 0, 60, 10, group.pixels).await?;
         }
     }
     let knobs = |c: Controls| [c.kick_tone, c.kick_decay, c.snare_tone, c.snappy];
@@ -101,7 +96,7 @@ pub(super) async fn controls(
             Alignment::Center,
             selector.shade(HOT),
         );
-        lcd.write_rect_buffered(114 + 30 * i as u16, 10, 30, 41, dial.pixels.as_flattened())
+        lcd.write_rect(114 + 30 * i as u16, 10, 30, 41, dial.pixels)
             .await?;
     }
     Ok(())
@@ -117,7 +112,7 @@ const SWITCHES: [(Voice, &str, Rgb565); 4] = [
 ];
 
 pub(super) async fn switches(
-    lcd: &mut AsyncDisplay<'_, Clock>,
+    lcd: &mut super::PanelDisplay<'_>,
     pixels: &mut [[u8; 2]],
     selector: &Selector,
     lamps: [DrumLamp; 6],
@@ -134,8 +129,7 @@ pub(super) async fn switches(
                 Alignment::Center,
                 selector.shade(CREAM),
             );
-            lcd.write_rect_buffered(x, 189, 54, 12, legend.pixels.as_flattened())
-                .await?;
+            lcd.write_rect(x, 189, 54, 12, legend.pixels).await?;
         }
         let lamp = lamps[voice as usize];
         if previous.is_some_and(|old| old[voice as usize] == lamp) {
@@ -160,8 +154,7 @@ pub(super) async fn switches(
         ] {
             cap.rect(Point::new(left, top), Size::new(w, h), selector.shade(ink));
         }
-        lcd.write_rect_buffered(x, 202, 54, 33, cap.pixels.as_flattened())
-            .await?;
+        lcd.write_rect(x, 202, 54, 33, cap.pixels).await?;
     }
     Ok(())
 }
