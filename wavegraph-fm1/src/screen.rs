@@ -1045,9 +1045,10 @@ impl Screen {
         } else if saw || wave || fm || hoover {
             frame.trace.map(|y| (44 + u16::from(y) * 4 / 5) as u8)
         } else if bass {
+            const SPAN: u16 = SIZE - tb303::SCOPE_TOP - 4;
             frame
                 .trace
-                .map(|y| (tb303::SCOPE_TOP + 2 + u16::from(y) * 9 / 10) as u8)
+                .map(|y| (tb303::SCOPE_TOP + 2 + u16::from(y) * SPAN / (HEIGHT as u16 - 1)) as u8)
         } else if organ {
             frame.trace.map(|y| (36 + u16::from(y) * 7 / 8) as u8)
         } else {
