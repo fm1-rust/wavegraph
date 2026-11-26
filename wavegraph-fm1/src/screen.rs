@@ -67,6 +67,8 @@ const LANE_X: u16 = 42;
 type Lane = Plot<{ bass_env::WIDTH }, { bass_env::HEIGHT as usize }>;
 
 const BAND: usize = 8;
+const DOT_X: u16 = SIZE - 10;
+const DOT_Y: u16 = 4;
 
 // Keep large panel DMA state machines out of paint_page's poll function.
 // The combined function exceeds the pi32v2 conditional branch range.
@@ -134,6 +136,7 @@ pub(super) struct Screen {
     sweep: Option<Sweep>,
     scope_palette: Option<Palette>,
     badge: Option<badge::Mode>,
+    battery_low: bool,
     dot: Option<Severity>,
     dot_background: Rgb565,
     page: Option<Page>,
@@ -167,6 +170,7 @@ impl Screen {
             sequence: sequencer::Grid::new(),
             page: None,
             badge: None,
+            battery_low: false,
             dot: None,
             dot_background: STYLE.background,
             sweep: None,
@@ -183,6 +187,33 @@ impl Screen {
         self.sweep = None;
         self.scope_palette = None;
         self.sequence.invalidate();
+    }
+
+    pub(super) fn set_battery_low(&mut self, low: bool) {
+        if self.battery_low && !low {
+            // Rebuild the current artwork, including the instrument-swap header.
+            self.page = None;
+            self.badge = None;
+        }
+        self.battery_low = low;
+    }
+
+    pub(super) async fn paint_battery(lcd: &mut Display, clock: &mut Clock) -> Result<(), Error> {
+        // Only the red strokes cover the underlying page. Leave three pixels before the dot.
+        let x = DOT_X - 16;
+        let mut lcd = lcd.as_async(clock)?;
+        for (dx, dy, w, h) in [
+            (0, 0, 11, 1),
+            (0, 6, 11, 1),
+            (0, 1, 1, 5),
+            (10, 1, 1, 5),
+            (11, 2, 2, 3),
+            (2, 2, 2, 3),
+        ] {
+            lcd.fill_rect(x + dx, DOT_Y + dy, w, h, palette::RED.into_storage())
+                .await?;
+        }
+        Ok(())
     }
 
     async fn paint_global(
@@ -751,7 +782,7 @@ impl Screen {
                 })
             });
             let mut lcd = lcd.as_async(clock)?;
-            lcd.write_rect_buffered(SIZE - 10, 4, 7, 7, pixels.as_flattened().as_flattened())
+            lcd.write_rect_buffered(DOT_X, DOT_Y, 7, 7, pixels.as_flattened().as_flattened())
                 .await?;
             lcd.flush().await?;
             self.dot = severity;
