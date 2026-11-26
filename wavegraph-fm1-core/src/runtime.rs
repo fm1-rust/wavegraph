@@ -235,6 +235,23 @@ impl<B: AudioBlock, P: Copy> Driver<B, P> {
         output: &mut Output,
         master: MasterLevel,
     ) -> Result<Option<Refilled<'_, B>>, Fault> {
+        self.refill_with_tap(output, master, |_, _| {})
+    }
+
+    /// Service one half and tap it only after the DAC confirms a complete write.
+    /// The tap borrows the current render job (before MASTER) and the committed
+    /// DAC samples (after MASTER). A committed silent fallback has no job.
+    /// Late and spurious interrupts never call the tap.
+    ///
+    /// # Errors
+    /// Reports the same terminal worker faults as [`Self::refill`]. A committed
+    /// silent half is delivered even if this call also detects a worker fault.
+    pub fn refill_with_tap(
+        &mut self,
+        output: &mut Output,
+        master: MasterLevel,
+        tap: impl FnOnce(Option<&B>, &fm1_audio::OutputBlock),
+    ) -> Result<Option<Refilled<'_, B>>, Fault> {
         let started = cycles();
         let healthy = peer::healthy();
         let mut done = None;
@@ -251,15 +268,21 @@ impl<B: AudioBlock, P: Copy> Driver<B, P> {
         if result == Refill::WouldBlock {
             return Ok(None);
         }
-        if done.is_some() {
+        let health = if done.is_some() {
             self.missing_since = None;
+            Ok(())
         } else {
             check(
                 healthy,
                 started.wrapping_sub(*self.missing_since.get_or_insert(started)),
-            )?;
-        }
-        let completed = self.handoff.finish(&mut self.host, result, &mut done);
+            )
+        };
+        let completed = self
+            .handoff
+            .finish(&mut self.host, result, &mut done, |job| {
+                tap(job, output.block());
+            });
+        health?;
         Ok(Some(Refilled {
             result,
             current,

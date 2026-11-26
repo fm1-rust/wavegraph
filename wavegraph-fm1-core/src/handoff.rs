@@ -138,14 +138,17 @@ impl<'a, B: AudioBlock> Handoff<'a, B> {
         host: &mut Host<'_, P>,
         result: Refill,
         done: &mut Option<Job<&'a mut B>>,
+        tap: impl FnOnce(Option<&B>),
     ) -> Option<Job<&B>> {
         if result == Refill::WouldBlock {
             return None;
         }
-        if result == Refill::Written
-            && let Some(job) = done.as_ref().filter(|job| self.current(job))
-        {
-            host.submitted(job.revision, job.first_frame);
+        if result == Refill::Written {
+            let current = done.as_ref().filter(|job| self.current(job));
+            if let Some(job) = current {
+                host.submitted(job.revision, job.first_frame);
+            }
+            tap(current.map(|job| &*job.slot));
         }
         self.frame = self.frame.wrapping_add(OUTPUT_FRAMES as u64);
         let Job {
@@ -198,14 +201,18 @@ mod tests {
             assert!(h.observe(interval));
             assert!(!h.fill(&mut out, done.as_ref()));
             assert_eq!(out, [[0; 2]; OUTPUT_FRAMES]);
-            h.finish(&mut host, Refill::Written, &mut done);
+            h.finish(&mut host, Refill::Written, &mut done, |job| {
+                assert!(job.is_none())
+            });
             assert!(receipt.as_mut().poll(&mut cx).is_pending());
 
             let mut fresh = h.issue(|_| host.begin_block(|_| unreachable!()));
             assert!(!h.observe(RefillInterval::Elapsed(core::num::NonZeroU32::MIN)));
             assert!(h.fill(&mut out, fresh.as_ref()));
             assert_eq!(out, [[7; 2]; OUTPUT_FRAMES]);
-            h.finish(&mut host, Refill::Written, &mut fresh);
+            h.finish(&mut host, Refill::Written, &mut fresh, |job| {
+                assert_eq!(job.expect("current render")[0], 7);
+            });
             assert!(
                 matches!(receipt.as_mut().poll(&mut cx), Poll::Ready(Ok(applied))
                 if applied.first_frame == next_block * OUTPUT_FRAMES as u64)
@@ -240,7 +247,7 @@ mod tests {
                 health.update(start.wrapping_add(n), accepted, 345),
                 (n == 0, n >= 345)
             );
-            handoff.finish(&mut host, Refill::Written, &mut done);
+            handoff.finish(&mut host, Refill::Written, &mut done, |_| {});
             assert!(receipt.as_mut().poll(&mut cx).is_pending());
         }
         assert_eq!(expired, 1000);
@@ -254,7 +261,7 @@ mod tests {
             (false, false)
         );
         assert_eq!(out, [[1; 2]; OUTPUT_FRAMES]);
-        handoff.finish(&mut host, Refill::Written, &mut done);
+        handoff.finish(&mut host, Refill::Written, &mut done, |_| {});
         assert!(
             matches!(receipt.as_mut().poll(&mut cx), Poll::Ready(Ok(applied))
             if applied.first_frame == 2000 * OUTPUT_FRAMES as u64)
@@ -278,17 +285,23 @@ mod tests {
         assert_eq!(job.sequence(), 0);
         job.slot[..64].fill(111); // worker paused partway through its writes
         let mut out = [[0; 2]; OUTPUT_FRAMES];
-        h.finish(&mut host, Refill::WouldBlock, &mut None);
+        h.finish(&mut host, Refill::WouldBlock, &mut None, |_| unreachable!());
         assert!(!h.fill(&mut out, None));
         assert_eq!(out, [[0; 2]; OUTPUT_FRAMES]);
-        h.finish(&mut host, Refill::Written, &mut None);
+        let mut silent_halves = 0_u32;
+        let mut capture_silence = |job: Option<&[i32; OUTPUT_FRAMES]>| {
+            assert!(job.is_none());
+            silent_halves = silent_halves.saturating_add(1);
+        };
+        h.finish(&mut host, Refill::Written, &mut None, &mut capture_silence);
         assert!(h.issue(|_| unreachable!()).is_none());
         assert!(receipt.as_mut().poll(&mut cx).is_pending());
 
         job.slot[64..].fill(222);
         assert!(!h.fill(&mut out, Some(&job)));
         assert_eq!(out, [[0; 2]; OUTPUT_FRAMES]);
-        h.finish(&mut host, Refill::Written, &mut Some(job));
+        h.finish(&mut host, Refill::Written, &mut Some(job), capture_silence);
+        assert_eq!(silent_halves, 2);
         assert!(receipt.as_mut().poll(&mut cx).is_pending());
 
         for result in [Refill::Late, Refill::Written] {
@@ -302,10 +315,19 @@ mod tests {
             assert_eq!(out, [[333; 2]; OUTPUT_FRAMES]);
             let first_frame = job.first_frame();
             let mut completed = Some(job);
-            h.finish(&mut host, Refill::WouldBlock, &mut completed);
+            h.finish(
+                &mut host,
+                Refill::WouldBlock,
+                &mut completed,
+                |_| unreachable!(),
+            );
             assert!(completed.is_some());
             assert!(receipt.as_mut().poll(&mut cx).is_pending());
-            h.finish(&mut host, result, &mut completed);
+            let mut captured = None;
+            h.finish(&mut host, result, &mut completed, |job| {
+                captured = Some(job.expect("current render")[0]);
+            });
+            assert_eq!(captured, (result == Refill::Written).then_some(333));
             assert!(completed.is_none());
             if result == Refill::Late {
                 assert!(receipt.as_mut().poll(&mut cx).is_pending());

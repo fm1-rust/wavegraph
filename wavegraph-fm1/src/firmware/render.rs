@@ -34,6 +34,22 @@ pub(super) struct RenderBlock {
     pub(super) stack_free: Option<u32>,
 }
 
+/// Publish the pre-MASTER job, or the committed DAC silence when the worker
+/// missed its deadline or stopped. CPU0 still owns the render slot here.
+#[cfg(feature = "qualified-usb")]
+pub(super) fn capture_usb(
+    writer: Option<&mut fm1::usb_midi::CaptureWriter>,
+    job: Option<&RenderBlock>,
+    dac: &fm1_audio::OutputBlock,
+) {
+    let Some(writer) = writer else { return };
+    if let Some(job) = job {
+        crate::instrument::capture_master(job.buses, job.half_gain, |pcm| writer.write_q23(pcm));
+    } else {
+        writer.write_q23(dac);
+    }
+}
+
 impl RenderBlock {
     pub(super) fn new(buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT]) -> Self {
         Self {
