@@ -49,6 +49,7 @@ wavegraph-wavetable = { path = "../instruments/wavegraph-wavetable" }
 [target.'cfg(target_os = "none")'.dependencies]
 fm1 = { version = "0.2.0", optional = true, features = ["usb-midi-copy"] }
 wavegraph-fm1-core = { path = "../wavegraph-fm1-core" }
+wavegraph-fx = { workspace = true, features = ["fm1-ram-code"] }
 wavegraph-303 = { path = "../instruments/wavegraph-303", features = ["fm1-ram-code"] }
 futures-util = { version = "0.3", default-features = false }
 fm1-controls = "0.2.0"

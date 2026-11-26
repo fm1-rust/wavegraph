@@ -661,6 +661,8 @@ impl PatternPlayer {
         )
     }
 
+    // Keep the per-tick MIDI decoder out of the worker's per-block control loop.
+    #[inline(never)]
     pub(super) fn render_steps(
         &mut self,
         frames: usize,
@@ -749,11 +751,11 @@ impl PatternPlayer {
                     if lane.waiting && !downbeat {
                         continue;
                     }
-                    let old =
+                    let mut clip =
                         lane.position
                             .slot
                             .factory_clip(part, channel, lane.position.house_m7);
-                    let wrap = lane.tick == old.length();
+                    let wrap = lane.tick == clip.length();
                     let house_m7 = part.uses_house_patterns(tracks[i].voice.waveform);
                     let switch = downbeat
                         && (lane.position.slot != self.requested[i]
@@ -761,7 +763,7 @@ impl PatternPlayer {
                     if wrap || switch || lane.waiting {
                         if wrap {
                             lane.edited = Step::EMPTY;
-                            lane.read(old, enabled[i], &mut route)?;
+                            lane.read(clip, enabled[i], &mut route)?;
                         }
                         if enabled[i] && !lane.waiting {
                             lane.release(&mut route, false)?;
@@ -783,11 +785,11 @@ impl PatternPlayer {
                         };
                         *lane = Lane::start(slot, house_m7);
                         lane.automation = controls;
+                        clip =
+                            lane.position
+                                .slot
+                                .factory_clip(part, channel, lane.position.house_m7);
                     }
-                    let clip =
-                        lane.position
-                            .slot
-                            .factory_clip(part, channel, lane.position.house_m7);
                     lane.position.bar =
                         u8::try_from(lane.tick / BAR).map_err(|_| Error::Capacity)?;
                     let phase = lane.tick % 8;
@@ -938,6 +940,12 @@ impl DrumMachine {
         clippy::arithmetic_side_effects,
         reason = "The weighted sum of six i16 voices fits i32 before clamping to Q23."
     )]
+    // SAFETY: FM-1 startup copies the drum kernel into executable SRAM.
+    #[cfg_attr(
+        target_os = "none",
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     fn render(&mut self, out: &mut [I24], key: &mut [I24]) {
         let kit = match &mut self.kit {
             Kit::Tr808(kit) => return kit.render_mix_kick(out, key),
@@ -948,15 +956,31 @@ impl DrumMachine {
             key.fill(I24::default());
             return;
         }
-        for (sample, key) in out.iter_mut().zip(key) {
-            let [kick, snare, clap, closed, open, ride] = kit.next_voices().map(i32::from);
-            *key = I24::new_unchecked(kick << 8);
-            // Blend a saturated copy into the clean kick. Its early harmonics
-            // carry the downbeat above the 50 Hz body on a small speaker.
-            let kick = kick + kick.clamp(-4096, 4096);
-            // Convert PCM16 to Q23 as we mix (256 is unity), with one final clamp.
-            let sum = kick * 256 + snare * 136 + clap * 176 + closed * 90 + open * 90 + ride * 90;
-            *sample = I24::new_unchecked(sum.clamp(-(1 << 23), (1 << 23) - 1));
+        for (out, key) in out.chunks_mut(64).zip(key.chunks_mut(64)) {
+            let mut sum = [0; 64];
+            let mut stem = [0; 64];
+            key.fill(I24::default());
+            kit.render_active_stems(&mut stem[..out.len()], |voice, samples| {
+                if voice == Voice::Kick {
+                    for ((total, key), &kick) in sum.iter_mut().zip(&mut *key).zip(samples) {
+                        let kick = i32::from(kick);
+                        *key = I24::new_unchecked(kick << 8);
+                        *total += (kick + kick.clamp(-4096, 4096)) * 256;
+                    }
+                } else {
+                    let gain = match voice {
+                        Voice::Snare => 136,
+                        Voice::Clap => 176,
+                        _ => 90,
+                    };
+                    for (total, &sample) in sum.iter_mut().zip(samples) {
+                        *total += i32::from(sample) * gain;
+                    }
+                }
+            });
+            for (out, sample) in out.iter_mut().zip(sum) {
+                *out = I24::new_unchecked(sample.clamp(-(1 << 23), (1 << 23) - 1));
+            }
         }
     }
 }

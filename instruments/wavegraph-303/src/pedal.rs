@@ -18,6 +18,7 @@ pub(crate) struct Pedal {
     coefficients: [f32; 3],
     gain: f32,
     mix: f32,
+    amount: f32,
     target_gain: f32,
     target_mix: f32,
     gain_step: f32,
@@ -45,6 +46,7 @@ impl Pedal {
             coefficients,
             gain: 12.0,
             mix: 0.0,
+            amount: 0.0,
             target_gain: 12.0,
             target_mix: 0.0,
             gain_step: 0.0,
@@ -53,9 +55,17 @@ impl Pedal {
         }
     }
 
-    // Control-boundary work must not be inlined into the FM-1 SRAM voice loop.
-    #[inline(never)]
+    #[inline]
     pub(crate) fn set_amount(&mut self, amount: f32) {
+        if self.amount != amount {
+            self.change_amount(amount);
+        }
+    }
+
+    // Keep the settled voice in SRAM and update the ramp only on a changed control.
+    #[inline(never)]
+    fn change_amount(&mut self, amount: f32) {
+        self.amount = amount;
         let gain = 12.0 + 660.0 * amount * amount;
         let mix = if amount == 0.0 { 0.0 } else { 1.0 };
         if gain != self.target_gain || mix != self.target_mix {
@@ -132,22 +142,36 @@ impl Pedal {
     // no second audio pass or per-sample out-of-line pedal call.
     #[inline(always)]
     pub(crate) fn sample(&mut self, dry: f32) -> f32 {
+        if self.remaining != 0 {
+            return self.transition(dry);
+        }
+        if self.mix == 0.0 { dry } else { self.wet(dry) }
+    }
+
+    // Keep the 64-sample control transition outside the settled voice loop.
+    #[inline(never)]
+    fn transition(&mut self, dry: f32) -> f32 {
         self.advance();
         if self.mix == 0.0 && self.remaining == 0 {
-            return dry; // Exact bypass, including the native voice's overrange samples.
+            return dry;
         }
+        let wet = self.wet(dry);
+        if self.mix == 1.0 {
+            wet
+        } else {
+            dry + self.mix * (wet - dry)
+        }
+    }
+
+    #[inline(always)]
+    fn wet(&mut self, dry: f32) -> f32 {
         let [pre, tone, dc] = self.coefficients;
         let x = (dry * INPUT_REFERENCE).clamp(-8.0, 8.0);
         self.pre += (x - self.pre) * pre;
         let x = rail(self.gain * (x - self.pre));
         self.tone += (x - self.tone) * tone;
         self.dc += (self.tone - self.dc) * dc;
-        let wet = (self.tone - self.dc) * OUTPUT_REFERENCE;
-        if self.mix == 1.0 {
-            wet
-        } else {
-            dry + self.mix * (wet - dry)
-        }
+        (self.tone - self.dc) * OUTPUT_REFERENCE
     }
 }
 

@@ -4,7 +4,11 @@
 //! and a [`Delay`]. Add their wet-only returns to the dry mix. Each processor
 //! keeps its state across graph edits.
 #![no_std]
-#![forbid(unsafe_code)]
+#![cfg_attr(
+    not(all(target_os = "none", feature = "fm1-ram-code")),
+    forbid(unsafe_code)
+)]
+#![deny(unsafe_code)]
 
 mod beat;
 mod delay;
@@ -218,6 +222,13 @@ impl<'a> Reverb<'a> {
         clippy::arithmetic_side_effects,
         clippy::cast_possible_truncation,
         reason = "Four Q23 taps fit in i32. The Q23 × Q15 feedback fits Q23 after shifting."
+    )]
+    // SAFETY: the FM-1 linker and startup place this DSP loop in executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
     )]
     fn render(&mut self, input: &[I24], output: &mut [I24]) {
         // Four Q23 taps need a wider accumulator until their sum is divided by four.

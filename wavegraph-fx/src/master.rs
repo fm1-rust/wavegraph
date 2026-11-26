@@ -58,6 +58,7 @@ fn gain(db: i8) -> f32 {
 #[derive(Clone, Copy, Debug)]
 pub struct MasterBus {
     bands: Bands,
+    side_bands: Bands,
     gains: GainRamp<4>,
     dynamics: bool,
     inv_threshold: f32,
@@ -93,6 +94,7 @@ impl MasterBus {
         let ms = |t: f32| -libm::expm1f(-1000.0 / (t * rate));
         Some(Self {
             bands: Bands::new(rate),
+            side_bands: Bands::new(rate),
             gains: GainRamp::UNITY,
             dynamics: false,
             inv_threshold: 1.0 / FULL,
@@ -160,6 +162,13 @@ impl MasterBus {
             }
     }
 
+    // SAFETY: the FM-1 linker and startup place this DSP loop in executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     fn compress(&mut self, x: f32) -> f32 {
         // Samples come from a bounded integer mix and finite EQ gains.
         let magnitude = x.abs();
@@ -198,6 +207,37 @@ impl MasterBus {
     #[must_use]
     pub fn dynamics_gain(&self) -> f32 {
         self.comp_gain * self.limit_gain
+    }
+
+    /// Add stereo returns to a wide, centered Q23 bus. The EQ filters mid and
+    /// side independently. Both speakers share the louder peak's dynamics gain.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    // SAFETY: FM-1 startup copies this hot audio path into executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
+    pub fn process_stereo(&mut self, center: i32, left_return: i32, right_return: i32) -> [I24; 2] {
+        self.gains.advance();
+        let [lo, mid, hi, makeup] = self.gains.current;
+        let left = left_return as f32;
+        let right = right_return as f32;
+        let sum = self
+            .bands
+            .tick(center as f32 + (left + right) * 0.5, [lo, mid, hi]);
+        let side = self.side_bands.tick((left - right) * 0.5, [lo, mid, hi]);
+        let mut stereo = [sum + side, sum - side];
+        if self.dynamics {
+            let _ = self.compress(sum.abs() + side.abs());
+            for sample in &mut stereo {
+                *sample = (*sample * self.comp_gain * makeup * self.limit_gain)
+                    .clamp(-self.ceiling, self.ceiling);
+            }
+        }
+        stereo.map(|sample| pcm(sample as i32))
     }
 
     /// Process a signed sample in Q23 units. An i32 accumulator leaves headroom

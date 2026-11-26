@@ -221,6 +221,37 @@ impl<'a> Tr909<'a> {
         }
     }
 
+    /// Advance every voice by one span, visiting the dry stems that were active
+    /// at its start. The callback can mix each stem before the scratch is reused.
+    /// An empty span preserves same-frame hi-hat choke ordering.
+    #[inline(never)]
+    pub fn render_active_stems(&mut self, scratch: &mut [i16], mut mix: impl FnMut(Voice, &[i16])) {
+        fn fill(scratch: &mut [i16], mut next: impl FnMut() -> i16) {
+            for sample in scratch {
+                *sample = next();
+            }
+        }
+
+        if scratch.is_empty() {
+            return;
+        }
+        self.opened_this_frame = false;
+        for voice in Voice::ALL {
+            if !self.voice_active(voice) {
+                continue;
+            }
+            match voice {
+                Voice::Kick => fill(scratch, || self.kick.next_frame()),
+                Voice::Snare => fill(scratch, || self.snare.next_frame()),
+                Voice::Clap => fill(scratch, || self.clap.next_frame()),
+                Voice::ClosedHat => fill(scratch, || self.closed_hat.next_frame()),
+                Voice::OpenHat => fill(scratch, || self.open_hat.next_frame()),
+                Voice::Ride => fill(scratch, || self.ride.next_frame()),
+            }
+            mix(voice, scratch);
+        }
+    }
+
     /// Advance all six voices one frame and return dry PCM in [`Voice::ALL`] order.
     #[inline]
     pub fn next_voices(&mut self) -> [i16; 6] {

@@ -26,7 +26,7 @@ impl Strip {
         delay: 0,
     };
 
-    fn output_level(self) -> u8 {
+    pub(super) fn output_level(self) -> u8 {
         if self.enabled { self.level } else { 0 }
     }
 }

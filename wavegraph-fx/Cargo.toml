@@ -10,6 +10,8 @@ edition = "2024"
 rust-version.workspace = true
 
 [features]
+# Link the real-time mixer and return loops into FM-1 executable SRAM.
+fm1-ram-code = []
 short-detector-probe = []
 
 [dependencies]

@@ -18,8 +18,10 @@ const TANK: [[f32; 4]; 2] = [
 pub struct Reverb<'a> {
     rate: f32,
     scale: f32,
-    tap_scale: f32,
+    output_taps: [[usize; 7]; 2],
+    increments: [f32; 2],
     size: f32,
+    max_size: f32,
     decay: f32,
     damp: f32,
     bandwidth: f32,
@@ -41,23 +43,32 @@ impl<'a> Reverb<'a> {
     /// Size of the original reverb's mono scratch buffer, in samples.
     pub const FRAMES: usize = 65_536;
 
-    /// Initialize the original fixed-size tank. Returns `None` for an invalid
-    /// rate, short storage, or a sample rate whose delay lengths exceed the tank.
+    /// Initialize the tank for this sample rate. Lower rates can supply a shorter
+    /// buffer. Returns `None` if the lines exceed the storage or the original
+    /// maximum of 65,536 samples.
     pub fn new(rate: f32, storage: &'a mut [f32]) -> Option<Self> {
-        if !rate.is_finite() || rate <= 0.0 {
+        Self::with_max_size(rate, storage, 1.0)
+    }
+
+    /// Reserve only the delay lengths needed up to `max_size` (0..=1).
+    /// The layout and taps at a supported size sound identical to the full tank.
+    /// Subsequent size edits are clamped to this limit.
+    pub fn with_max_size(rate: f32, storage: &'a mut [f32], max_size: f32) -> Option<Self> {
+        if !rate.is_finite() || rate <= 0.0 || !(0.0..=1.0).contains(&max_size) {
             return None;
         }
-        let mut rest = storage.get_mut(..Self::FRAMES)?;
         let scale = rate / RATE;
         let pre_base = 0.04 * RATE / 1.25 + 1.0;
-        let line_size = |base: f32| ((base * scale * 1.25) as usize).saturating_add(64);
+        let max_scale = 0.75 + 0.5 * max_size;
+        let line_size = |base: f32| ((base * scale * max_scale) as usize).saturating_add(64);
         let used = core::iter::once(pre_base)
             .chain(INPUT)
             .chain(TANK.into_iter().flatten())
             .try_fold(0usize, |used, base| used.checked_add(line_size(base)))?;
-        if used > rest.len() {
+        if used > Self::FRAMES {
             return None;
         }
+        let mut rest = storage.get_mut(..used)?;
         rest.fill(0.0);
         let mut take = |base| {
             let (buf, tail) = mem::take(&mut rest).split_at_mut(line_size(base));
@@ -84,8 +95,10 @@ impl<'a> Reverb<'a> {
         let mut rv = Self {
             rate,
             scale,
-            tap_scale: scale,
+            output_taps: [[0; 7]; 2],
+            increments: [0.6 / rate, 0.83 / rate],
             size: -1.0,
+            max_size,
             decay: 0.5,
             damp: 0.5,
             bandwidth: 0.5,
@@ -102,7 +115,7 @@ impl<'a> Reverb<'a> {
 
     /// Set the room size from zero to one. Small changes below 0.0001 are ignored.
     pub fn set_size(&mut self, size: f32) {
-        let size = size.clamp(0.0, 1.0);
+        let size = size.clamp(0.0, self.max_size);
         if (size - self.size).abs() < 1e-4 {
             return;
         }
@@ -126,13 +139,25 @@ impl<'a> Reverb<'a> {
         self.pre.len = ((0.01 + 0.03 * size) * self.rate) as usize;
         self.damp = tau_to_coef(1.0 / (2.0 * PI * (6000.0 - 3500.0 * size)), self.rate);
         self.bandwidth = tau_to_coef(1.0 / (2.0 * PI * (8000.0 - 3000.0 * size)), self.rate);
-        self.tap_scale = self.scale * sc;
+        let k = self.scale * sc;
+        self.output_taps = [
+            [266.0, 2974.0, 1913.0, 1996.0, 1990.0, 187.0, 1066.0],
+            [353.0, 3627.0, 1228.0, 2673.0, 2111.0, 335.0, 121.0],
+        ]
+        .map(|row| row.map(|tap| (tap * k) as usize));
     }
 
     /// Add the wet return to an existing stereo block.
     ///
     /// # Errors
     /// Returns [`LengthMismatch`] before processing if the block lengths differ.
+    // SAFETY: the FM-1 startup copies this hot loop into executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     pub fn process_add(
         &mut self,
         input: &[f32],
@@ -141,7 +166,6 @@ impl<'a> Reverb<'a> {
         if input.len() != output.len() {
             return Err(LengthMismatch);
         }
-        let increments = [0.6 / self.rate, 0.83 / self.rate];
         for (&sample, out) in input.iter().zip(output) {
             let delayed = self.pre.read(self.pre.len);
             self.pre.write(sample);
@@ -155,7 +179,7 @@ impl<'a> Reverb<'a> {
             // Read both tank ends before advancing either feedback path.
             let [a, b] = &self.tank;
             let ends = [b.d2.read(b.d2.len), a.d2.read(a.d2.len)];
-            for ((t, end), inc) in self.tank.iter_mut().zip(ends).zip(increments) {
+            for ((t, end), inc) in self.tank.iter_mut().zip(ends).zip(self.increments) {
                 t.phase += inc;
                 if t.phase >= 1.0 {
                     t.phase -= 1.0;
@@ -170,17 +194,15 @@ impl<'a> Reverb<'a> {
             }
 
             let [a, b] = &self.tank;
-            let k = self.tap_scale;
-            let l = b.d1.tap(266.0 * k) + b.d1.tap(2974.0 * k) - b.ap.tap(1913.0 * k)
-                + b.d2.tap(1996.0 * k)
-                - a.d1.tap(1990.0 * k)
-                - a.ap.tap(187.0 * k)
-                - a.d2.tap(1066.0 * k);
-            let r = a.d1.tap(353.0 * k) + a.d1.tap(3627.0 * k) - a.ap.tap(1228.0 * k)
-                + a.d2.tap(2673.0 * k)
-                - b.d1.tap(2111.0 * k)
-                - b.ap.tap(335.0 * k)
-                - b.d2.tap(121.0 * k);
+            let [l, r] = self.output_taps;
+            let l = b.d1.read(l[0]) + b.d1.read(l[1]) - b.ap.read(l[2]) + b.d2.read(l[3])
+                - a.d1.read(l[4])
+                - a.ap.read(l[5])
+                - a.d2.read(l[6]);
+            let r = a.d1.read(r[0]) + a.d1.read(r[1]) - a.ap.read(r[2]) + a.d2.read(r[3])
+                - b.d1.read(r[4])
+                - b.ap.read(r[5])
+                - b.d2.read(r[6]);
             out.left += 0.5 * l;
             out.right += 0.5 * r;
         }
@@ -221,9 +243,6 @@ impl Line<'_> {
             size - (delay - self.pos)
         };
         self.buf[index]
-    }
-    fn tap(&self, delay: f32) -> f32 {
-        self.read(delay as usize)
     }
     fn read_frac(&self, delay: f32) -> f32 {
         let whole = delay as usize;

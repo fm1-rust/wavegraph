@@ -152,6 +152,13 @@ impl<const TRACKS: usize, const OUTPUTS: usize> Process<MixerMessage, I24>
     reason = "Q23 samples, byte gains and sums of up to four tracks fit i32"
 )]
 impl<const TRACKS: usize, const OUTPUTS: usize> ChannelMixer<TRACKS, OUTPUTS> {
+    // SAFETY: the FM-1 linker and startup place this DSP loop in executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     fn render(
         &self,
         inputs: &[&[I24]],

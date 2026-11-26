@@ -69,6 +69,9 @@ impl Default for VoiceParams {
 #[derive(Debug)]
 struct DiodeLadder {
     rate: f32,
+    radians_per_hz: f32,
+    cutoff_hz: f32,
+    compact: bool,
     state: [f32; 4],
     coeff: [f32; 4],
     sigma_weights: [f32; 4],
@@ -96,6 +99,32 @@ pub struct Voice {
     sliding: bool,
     glide_coefficient: CachedCoefficient,
     post_hp_coefficient: CachedCoefficient,
+    cutoff_octaves: CachedCoefficient,
+    tuned_increment: CachedCoefficient,
+    oscillator_drive: CachedCoefficient,
+}
+
+// Fit the composition tanh_approx(0.75*tanh_approx(x))/0.75 to a rational
+// curve in x² over the original rails. Unity small-signal gain and odd symmetry
+// are exact. The error against the two original curves is below 0.00003.
+#[inline(always)]
+fn stock_input(x: f32) -> f32 {
+    if x.abs() >= 3.0 {
+        return (49.0_f32 / 57.0).copysign(x);
+    }
+    let z = x * x;
+    x * (1.0 + z * (0.377_580_77 + 0.011_424_99 * z)) / (1.0 + z * (0.840_034_1 + 0.123_675_29 * z))
+}
+
+// On the bounded part of an integrator's output a seventh-degree odd fit
+// replaces a division. Use the original curve for excursions beyond that fit.
+#[inline(always)]
+fn stock_stage(x: f32) -> f32 {
+    if x.abs() > 1.0 {
+        return fast_tanh(0.75 * x) * (1.0 / 0.75);
+    }
+    let z = x * x;
+    x * (1.0 + z * (-0.166_506_17 + z * (0.030_318_24 - 0.004_172_8 * z)))
 }
 
 impl Voice {
@@ -110,6 +139,9 @@ impl Voice {
             target: 36.0,
             ladder: DiodeLadder {
                 rate: 2.0 * sample_rate,
+                radians_per_hz: core::f32::consts::PI / (2.0 * sample_rate),
+                cutoff_hz: f32::NAN,
+                compact: false,
                 state: [0.0; 4],
                 coeff: [0.5; 4],
                 sigma_weights: [0.0; 4],
@@ -130,6 +162,9 @@ impl Voice {
             sliding: false,
             glide_coefficient: CachedCoefficient::EMPTY,
             post_hp_coefficient: CachedCoefficient::EMPTY,
+            cutoff_octaves: CachedCoefficient::EMPTY,
+            tuned_increment: CachedCoefficient::EMPTY,
+            oscillator_drive: CachedCoefficient::EMPTY,
         }
     }
 }
@@ -145,15 +180,29 @@ impl DiodeLadder {
     }
 
     fn set_drive(&mut self, drive: f32) {
+        if drive == self.stage_drive {
+            return;
+        }
         self.stage_drive = drive;
         self.stage_recip = if drive > 0.0 { 1.0 / drive } else { 0.0 };
     }
 
+    // SAFETY: The FM-1 startup copies this section into executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     fn set_cutoff(&mut self, wc_hz: f32, k: f32) {
+        if self.cutoff_hz == wc_hz {
+            self.set_feedback(k);
+            return;
+        }
+        self.cutoff_hz = wc_hz;
         for (coeff, pole) in self.coeff.iter_mut().zip(STAGE_POLES) {
             let f = clamp(wc_hz * pole, 10.0, 0.45 * self.rate);
-            let g = crate::dsp::filter_tan(core::f32::consts::PI * f / self.rate);
-            *coeff = g / (1.0 + g);
+            *coeff = crate::dsp::ladder_coefficient(f * self.radians_per_hz);
         }
         let [a, b, c, d] = self.coeff;
         let cd = c * d;
@@ -193,14 +242,30 @@ impl DiodeLadder {
         Self::stage(self.saturate(c), self.coeff[3], &mut self.state[3])
     }
 
-    // SAFETY: the FM-1 linker places .data in executable SRAM and startup copies it before use.
+    // Use one copy of the two-tick kernel for the clean-tap and single-output voices.
+    // SAFETY: The FM-1 startup copies this section into executable SRAM.
     #[cfg_attr(
         all(target_os = "none", feature = "fm1-ram-code"),
         allow(unsafe_code),
-        unsafe(link_section = ".data.wavegraph_audio")
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
     )]
+    fn pair(&mut self, x: f32, k: f32) -> f32 {
+        if self.compact && self.stage_drive == 0.75 {
+            self.process::<true>(x, k) + self.process::<true>(x, k)
+        } else {
+            self.direct_pair(x, k)
+        }
+    }
+
+    // Keep the direct calibration path out of the FM-1's limited audio SRAM.
+    #[inline(never)]
+    fn direct_pair(&mut self, x: f32, k: f32) -> f32 {
+        self.process::<false>(x, k) + self.process::<false>(x, k)
+    }
+
     #[inline(always)]
-    fn process(&mut self, x: f32, k: f32) -> f32 {
+    fn process<const COMPACT: bool>(&mut self, x: f32, k: f32) -> f32 {
         // Zero-delay feedback: each stage is y = G x + (1 - G) z, so the
         // chain's output is Gamma u + Sigma, and the loop u = x - k (y - hp)
         // solves for this step's output directly. (Feeding back the last
@@ -208,9 +273,26 @@ impl DiodeLadder {
         // The input saturation is then applied to the solved input.
         let [a, b, c, d] = self.sigma_weights;
         let sigma = a * self.state[0] + b * self.state[1] + c * self.state[2] + d * self.state[3];
-        let y_est = (self.gamma * (x + k * self.hp) + sigma) * self.feedback_recip;
-        let input = fast_tanh(x - k * (y_est - self.hp));
-        let output = if self.stage_drive > 0.0 && self.stage_recip.is_finite() {
+        let output = if COMPACT {
+            // Solve directly for the feedback-corrected input, using
+            // 1/(1+k*gamma). The input and first stage clips share no state.
+            let u = (x + k * (self.hp - sigma)) * self.feedback_recip;
+            let a = Self::stage(stock_input(u), self.coeff[0], &mut self.state[0]);
+            let b = Self::stage(stock_stage(a), self.coeff[1], &mut self.state[1]);
+            let c = Self::stage(stock_stage(b), self.coeff[2], &mut self.state[2]);
+            Self::stage(stock_stage(c), self.coeff[3], &mut self.state[3])
+        } else {
+            let y_est = (self.gamma * (x + k * self.hp) + sigma) * self.feedback_recip;
+            let input = fast_tanh(x - k * (y_est - self.hp));
+            self.direct_stages(input)
+        };
+        self.hp += (output - self.hp) * self.hp_coef;
+        output
+    }
+
+    #[inline(never)]
+    fn direct_stages(&mut self, input: f32) -> f32 {
+        if self.stage_drive > 0.0 && self.stage_recip.is_finite() {
             let drive = self.stage_drive;
             let reciprocal = self.stage_recip;
             let scaled = |value| fast_tanh(drive * value) * reciprocal;
@@ -220,13 +302,15 @@ impl DiodeLadder {
             Self::stage(scaled(c), self.coeff[3], &mut self.state[3])
         } else {
             self.exceptional_stages(input)
-        };
-        self.hp += (output - self.hp) * self.hp_coef;
-        output
+        }
     }
 }
 
 impl Voice {
+    pub(crate) fn use_compact_ladder(&mut self) {
+        self.ladder.compact = true;
+    }
+
     /// Reset oscillator phase, gates and envelopes as in the upstream transport reset.
     pub fn reset(&mut self) {
         self.phase = 0.0;
@@ -297,8 +381,10 @@ impl Voice {
             1.0
         };
         let envelopes = self.envelopes.coefficients(p);
-        let input_gain =
-            p.ladder_in * fast_exp2(p.overdrive_db / (20.0 * core::f32::consts::LOG10_2));
+        let input_gain = p.ladder_in
+            * self.oscillator_drive.get(p.overdrive_db, || {
+                fast_exp2(p.overdrive_db / (20.0 * core::f32::consts::LOG10_2))
+            });
         let k = p.max_loop_gain * p.resonance;
         self.ladder.set_drive(p.stage_drive);
         // Resonance can change on an event boundary before the next cutoff update.
@@ -313,8 +399,11 @@ impl Voice {
         } else {
             0.0
         };
-        let base_oct = p.base_octaves();
-        let fixed_inc = midi_to_hz(self.target + p.tuning_st) / self.sr;
+        let base_oct = self.cutoff_octaves.get(p.cutoff_hz, || p.base_octaves());
+        let note = self.target + p.tuning_st;
+        let fixed_inc = self
+            .tuned_increment
+            .get(note, || midi_to_hz(note) / sample_rate);
         let mut last_cycle = None;
         for (frame, sample) in out.iter_mut().enumerate() {
             let inc = if self.sliding {
@@ -342,10 +431,7 @@ impl Voice {
             }
             let x = self.osc(inc, self.square_mix, p.pulse_width) * input_gain;
             // Hold the input for both filter steps and retain the upstream sum and gain.
-            let mut y = 0.0;
-            for _ in 0..2 {
-                y += self.ladder.process(x, k);
-            }
+            let mut y = self.ladder.pair(x, k);
             y /= p.ladder_in;
             // Make up some of the level resonance takes (a ladder's gain at
             // low frequencies is 1 / (1 + k)); the rest of the bass loss is
@@ -489,7 +575,7 @@ mod tests {
                     } else {
                         random * (1.0 / 1024.0) - 32.0
                     };
-                    let output = actual.process(input, k);
+                    let output = actual.process::<false>(input, k);
                     let reference = original_ladder_process(&mut expected, input, k);
                     assert!(
                         output.is_finite(),
@@ -543,6 +629,12 @@ mod tests {
                         _ => {}
                     }
                 }
+                p.cutoff_hz = [80.0, 500.0, 1600.0][block / 15 % 3];
+                p.tuning_st = [0.0, -1.0, 0.5][block / 11 % 3];
+                p.overdrive_db = [0.0, 12.0, 36.0][block / 19 % 3];
+                original.cutoff_octaves = CachedCoefficient::EMPTY;
+                original.tuned_increment = CachedCoefficient::EMPTY;
+                original.oscillator_drive = CachedCoefficient::EMPTY;
                 original.glide_coefficient = CachedCoefficient::EMPTY;
                 original.post_hp_coefficient = CachedCoefficient::EMPTY;
                 original.envelopes.invalidate_coefficients();
@@ -562,6 +654,36 @@ mod tests {
                     assert_eq!(sample.to_bits(), reference.to_bits());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn stock_ladder_fits_follow_the_two_direct_clippers() {
+        for i in i16::MIN..=i16::MAX {
+            let x = f32::from(i) / 4096.0;
+            let first = fast_tanh(0.75 * fast_tanh(x)) / 0.75;
+            let single = fast_tanh(0.75 * x) / 0.75;
+            assert!((stock_input(x) - first).abs() < 0.000_03);
+            assert!((stock_stage(x) - single).abs() < 0.000_011);
+        }
+        for drive in [0.0, 0.125, 0.74, 0.76, 2.0] {
+            let mut a = Voice::new(44_118.0);
+            let mut b = Voice::new(44_118.0);
+            b.use_compact_ladder();
+            let p = VoiceParams {
+                stage_drive: drive,
+                resonance: 0.95,
+                square: true,
+                ..VoiceParams::default()
+            };
+            for v in [&mut a, &mut b] {
+                v.note_on(43, true, false);
+            }
+            let mut a_out = [0.0; 512];
+            let mut b_out = [0.0; 512];
+            a.render_add(&p, &mut a_out);
+            b.render_add(&p, &mut b_out);
+            assert_eq!(a_out, b_out);
         }
     }
 

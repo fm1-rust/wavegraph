@@ -147,7 +147,7 @@ keyed from **909 KICK**, at 75% depth below 180 Hz.
 | --- | --- | --- |
 | 1 · DEEP HOUSE | Track 1 voice: saw, 315 Hz cutoff, 82% resonance, 50% OD. | Saturator → Sidechain |
 | 2 · HARMONY | Track 2 voice: square, 707 Hz cutoff, shorter decay, 44% OD. | Saturator → Sidechain |
-| 3 · PUMP PANEL | Saw, 500 Hz cutoff, 86% resonance, 450 ms decay, 67% OD. | Gentle saturator → Sidechain |
+| 3 · PUMP PANEL | Square, 500 Hz cutoff, 86% resonance, 450 ms decay, 67% OD. Centered bass, stereo echo and plate. | Both slots free |
 | 4 · REBIRTH BITE | Saw, 397 Hz cutoff, 78% resonance, 400 ms decay, 28% OD. | Saturator → Sidechain |
 | 5 · RUBBER SQR | Square, 250 Hz cutoff, 48% resonance, 260 ms decay, 8% OD. | Gentle saturator → Sidechain |
 | 6 · ACID PLUCK | Square, 86% resonance, 140 ms decay, 0.75 ms attack, 17% OD. | Saturator → Phaser |
@@ -155,14 +155,13 @@ keyed from **909 KICK**, at 75% depth below 180 Hz.
 
 Recall replaces the eight voice knob values, waveform, both insert types,
 settings and bypass states, and the channel's Echo send, Echo grid and Slicer.
-It keeps the held note, slide switch, sequence, tempo, fader, reverb send, LFO
+It keeps the held note, slide switch, sequence, tempo, fader, LFO
 and arpeggiator settings. The shared BEATS division, Echo return, global Echo
 input and Beat Flanger routing are not changed. Live knob and FX edits remain
 until another recall; returning to the same preset restores its factory sound.
 
 Deep House and Harmony keep their factory Echo sends (104/128 and 112/128).
-Pump Panel reduces the send to 32/128 and opens only the last sixteenth of
-each beat for occasional echo throws. ReBirth Bite and Rubber Sqr use lighter
+ReBirth Bite and Rubber Sqr use lighter
 continuous Echo sends. Acid Pluck echoes only the first sixteenth of each
 beat at 100/128 send. Devil Drive uses downbeat echoes and a 56/128-depth
 Slicer, with two short cuts in each 16-cell cycle. The Slicer follows the
@@ -183,8 +182,10 @@ values are an approximation, not recovered studio settings.
 
 Select **OD**, then turn **ALGORITHM** to set the amount from 0–100%. All 303
 presets use this post-VCA pedal. Fully left bypasses it after a short smoothing
-ramp. The old oscillator-to-filter gain is no longer the FM-1 OD control; it
-remains available through the standalone 303 crate's legacy API.
+ramp. The standalone 303 also exposes oscillator-to-filter gain. On the analog
+Devil Fish, **Overdrive** feeds the filter up to 66.6 times the stock oscillator
+level. **Muffler** clips the VCA output, catching loud or accented notes first.
+See Robin Whittle’s [Devil Fish manual][devil-fish], pp. 4 and 6.
 
 The voicing is informed by the TB-03's first overdrive type, which Roland identifies
 as a high-gain BOSS OD-2 sound. BOSS describes [OD-2 Turbo][od2] as two gain stages
@@ -197,6 +198,17 @@ they are not recovered TB-03 circuit or DSP parameters. Roland's exact TB-03
 algorithm is unpublished, and the other two distortion types are not modeled.
 Pump Panel's original pedal is unidentified, so a TB-03-inspired voicing alone
 does not establish a match to the record.
+
+PUMP PANEL blends the 180 Hz low-passed clean voice back under the pedal.
+The pedal alone feeds a dark stereo eighth-note echo (208 ms at 144 BPM,
+27% feedback) and a Dattorro plate with 21 ms of pre-delay and a nominal
+1.1-second decay. The first echo leans left and the second leans right.
+The reinforced lows and each note attack stay centered. Both effects ring
+after key release. The echo follows tempo edits even with the transport stopped.
+Recall starts this strip's shared Echo and reverb sends at zero. Other
+presets retain the reverb send. The mixer can add either shared effect
+and both channel insert slots are available for live edits.
+Muting the strip in GLO stops it feeding the echo and plate. Existing tails ring out.
 
 Try Pump Panel with accented, sliding notes and sweep cutoff with knob 1.
 The existing sequencer automation still owns its recorded parameters during
