@@ -214,6 +214,14 @@ impl<const KEYS: usize> Piano<KEYS> {
 
 pub(super) use wavegraph_dsp::midi::MidiMessage as MidiAction;
 
+/// A queued USB MIDI message tagged with its session and track assignment.
+pub(super) struct MidiEvent {
+    pub(super) epoch: u32,
+    pub(super) generation: u32,
+    pub(super) channel: Channel,
+    pub(super) action: MidiAction,
+}
+
 pub(super) fn decode_midi([header, status, key, value]: [u8; 4]) -> Option<(Channel, MidiAction)> {
     if header != status >> 4 {
         return None;
@@ -239,6 +247,7 @@ struct Held {
 // Keep both in strike order, including notes currently stolen by a newer note.
 pub(super) struct Keys<const PANEL: usize> {
     channels: [ChannelKeys<PANEL>; CHANNELS],
+    midi_epoch: u32,
 }
 
 struct ChannelKeys<const PANEL: usize> {
@@ -344,6 +353,7 @@ impl<const PANEL: usize> Keys<PANEL> {
     pub(super) const fn new() -> Self {
         Self {
             channels: [const { ChannelKeys::new() }; CHANNELS],
+            midi_epoch: 0,
         }
     }
 
@@ -377,6 +387,32 @@ impl<const PANEL: usize> Keys<PANEL> {
                 continue;
             }
             self.channels[new.channel.index()].event(Key::Panel(new.key), MidiAction::On(new.note));
+        }
+    }
+
+    pub(super) fn drain_midi(
+        &mut self,
+        tracks: &mut [Track; CHANNELS],
+        mut events: impl Iterator<Item = MidiEvent>,
+        mut read_epoch: impl FnMut() -> u32,
+    ) {
+        loop {
+            // USB can start a new session and enqueue its first note between dequeues.
+            let event = events.next();
+            let epoch = read_epoch();
+            if epoch != self.midi_epoch {
+                self.clear_midi();
+                for track in tracks.iter_mut() {
+                    track.bass.slide = false;
+                }
+                self.midi_epoch = epoch;
+            }
+            // A disconnect can leave held notes without queuing another packet.
+            let Some(event) = event else { break };
+            let track = &mut tracks[event.channel.index()];
+            if event.epoch == epoch && event.generation == track.assignment.generation {
+                self.midi(event.channel, event.action, track);
+            }
         }
     }
 
