@@ -699,7 +699,7 @@ impl Screen {
                 selected,
             })),
             PresetRole::Channel
-                if feedback.is_some() && !matches!(labels.view, View::BeatFx(_)) =>
+                if feedback.is_some() && !matches!(labels.view, View::Mixer | View::BeatFx(_)) =>
             {
                 Some(badge::Mode::Channel)
             }
