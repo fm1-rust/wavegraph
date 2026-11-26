@@ -1,6 +1,6 @@
 //! Post-VCA pedal controls, timing, silence, and independent output attenuation.
 
-use wavegraph_303::{Destination, Message, Tb303};
+use wavegraph_303::{Destination, Message, Muffler, Tb303};
 use wavegraph_core::{Event, Process, ProcessContext};
 use wavegraph_sample::{I24, Sample};
 
@@ -83,6 +83,8 @@ fn timed_changes_and_ramps_are_independent_of_block_partitioning() {
         at(0, Message::OverdriveDb(18.0)),
         at(0, note(38)),
         at(17, Message::PedalDrive(0.7)),
+        at(43, Message::Muffler(Muffler::Two)),
+        at(61, Message::Muffler(Muffler::One)),
         at(79, Message::CutoffHz(1200.0)),
         at(129, Message::PedalDrive(0.2)),
         at(
@@ -94,6 +96,7 @@ fn timed_changes_and_ramps_are_independent_of_block_partitioning() {
             },
         ),
         at(277, Message::PedalDrive(0.95)),
+        at(321, Message::Muffler(Muffler::Off)),
         at(399, Message::Modulate(Destination::PedalDrive, -0.2)),
         at(512, Message::Modulate(Destination::PedalDrive, 0.0)),
         at(600, Message::PedalDrive(0.0)),
@@ -120,6 +123,61 @@ fn timed_changes_and_ramps_are_independent_of_block_partitioning() {
     }
     assert_eq!(start, actual.len());
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn muffler_feeds_both_taps_before_the_pedal_and_returns_to_exact_dry() {
+    let mut original = Tb303::new(RATE).with_output_gain(0.0625);
+    let mut bass = Tb303::new(RATE).with_output_gain(0.0625);
+    let mut reference = [I24::default(); 4096];
+    let mut spare = reference;
+    let mut clean = reference;
+    let mut driven = reference;
+    for (mode, pedal) in [
+        (Muffler::One, 0.0),
+        (Muffler::Two, 0.7),
+        (Muffler::Off, 0.0),
+    ] {
+        let controls = [
+            at(0, Message::Reset),
+            at(0, Message::OverdriveDb(12.0)),
+            at(0, note(38)),
+        ];
+        original.process_with_clean_tap(&mut spare, &mut reference, &controls);
+        bass.process_with_clean_tap(
+            &mut [],
+            &mut [],
+            &[
+                at(0, Message::Muffler(mode)),
+                at(0, Message::PedalDrive(pedal)),
+            ],
+        );
+        bass.process_with_clean_tap(&mut driven, &mut clean, &controls);
+        assert_eq!(clean == reference, mode == Muffler::Off);
+        assert_eq!(driven == clean, pedal == 0.0);
+    }
+}
+
+#[test]
+fn releasing_the_muffler_switch_restores_the_dry_voice_mid_note() {
+    let mut bass = Tb303::new(RATE);
+    let controls = [at(0, Message::OverdriveDb(18.0)), at(0, note(38))];
+    let mut reference = [0.0; 4096];
+    let mut actual = reference;
+    render(&mut Tb303::new(RATE), &controls, &mut reference);
+    render(
+        &mut bass,
+        &[
+            controls[0],
+            controls[1],
+            at(100, Message::Muffler(Muffler::Two)),
+            at(1800, Message::Muffler(Muffler::Off)),
+        ],
+        &mut actual,
+    );
+    assert_eq!(&actual[..100], &reference[..100]);
+    assert_ne!(&actual[164..1800], &reference[164..1800]);
+    assert_eq!(&actual[1864..], &reference[1864..]);
 }
 
 #[test]
@@ -218,6 +276,7 @@ fn released_pedal_tails_settle_before_idle_suspension_and_reset_clears_them() {
         &mut bass,
         &[
             at(0, Message::OverdriveDb(18.0)),
+            at(0, Message::Muffler(Muffler::Two)),
             at(0, Message::PedalDrive(1.0)),
             at(0, note(38)),
         ],

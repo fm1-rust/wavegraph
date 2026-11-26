@@ -79,6 +79,8 @@ fn a_whole_bank_turn_recalls_the_same_preset_after_live_edits() {
     let mut nav = Navigation::INITIAL;
     let mut track = Track::factory(Channel::One, nav.assignments[0]);
     track.bass.turn(Knob::Resonance, -30);
+    track.turn_algorithm(View::Scope, Some(Control::Muffler), i8::MAX);
+    assert_eq!(track.bass.muffler_label(), "2");
     track.inserts[0].edit([0, 0, 0, 40], false);
     let previous_selection = track.bass_preset;
 
@@ -88,6 +90,7 @@ fn a_whole_bank_turn_recalls_the_same_preset_after_live_edits() {
     track.sync_panel(nav.bass_presets[0], nav.insert_kinds[0]);
     assert_eq!(track.bass, PRESETS[0].controls);
     assert_eq!(track.inserts, PRESETS[0].inserts);
+    assert_eq!(track.bass.muffler_label(), "OFF");
 
     track.bass.turn(Knob::Accent, -9);
     let edited = track;

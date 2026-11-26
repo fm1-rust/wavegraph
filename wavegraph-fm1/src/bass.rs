@@ -1,21 +1,22 @@
 //! TB-303 panel values and their corresponding WaveGraph messages.
 
 use crate::instrument::{EventBatch, Voice, at};
-use wavegraph_303::{Message, VoiceParams, Waveform};
+use wavegraph_303::{Message, Muffler, VoiceParams, Waveform};
 
 pub(super) mod envelope;
 pub(super) mod presets;
 pub(super) mod space;
 
-/// A selected faceplate control. The waveform switch is separate from the dials.
+/// A selected dial or switch on the 303 faceplate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Control {
     Knob(Knob),
+    Muffler,
     Waveform,
 }
 
 impl Control {
-    pub(super) const PANEL: [Self; 9] = [
+    pub(super) const PANEL: [Self; 10] = [
         Self::Knob(Knob::Tuning),
         Self::Knob(Knob::Cutoff),
         Self::Knob(Knob::Resonance),
@@ -24,6 +25,7 @@ impl Control {
         Self::Knob(Knob::Accent),
         Self::Knob(Knob::Attack),
         Self::Knob(Knob::Overdrive),
+        Self::Muffler,
         Self::Waveform,
     ];
 }
@@ -217,6 +219,7 @@ pub(super) struct Controls {
     values: [u8; 8],
     midi: [Option<u8>; 8],
     pub(super) slide: bool,
+    pub(super) muffler: Muffler,
     pub(super) last: Knob,
 }
 
@@ -235,6 +238,7 @@ impl Controls {
         values: [18, 50, 24, 60, 120, 5, 50, 0],
         midi: [None; 8],
         slide: false,
+        muffler: Muffler::Off,
         last: Knob::Cutoff,
     };
 
@@ -332,6 +336,23 @@ impl Controls {
         self.values[knob as usize]
     }
 
+    pub(super) fn turn_muffler(&mut self, detents: i8) {
+        let position = (self.muffler as u8).saturating_add_signed(detents);
+        self.muffler = match position {
+            0 => Muffler::Off,
+            1 => Muffler::One,
+            _ => Muffler::Two,
+        };
+    }
+
+    pub(super) fn muffler_label(self) -> &'static str {
+        match self.muffler {
+            Muffler::Off => "OFF",
+            Muffler::One => "1",
+            Muffler::Two => "2",
+        }
+    }
+
     pub(super) fn turn_knobs(&mut self, detents: [i8; 4]) {
         for (&knob, delta) in Knob::direct().iter().zip(detents) {
             self.turn(knob, delta);
@@ -411,6 +432,11 @@ impl Controls {
                 let message = knob.message(&self);
                 batch.push(at(message)).expect("eight panel controls");
             }
+        }
+        if self.muffler != previous.muffler {
+            batch
+                .push(at(Message::Muffler(self.muffler)))
+                .expect("one Muffler change");
         }
         if voice.waveform != old_voice.waveform {
             let shape = if voice.waveform == 0 {

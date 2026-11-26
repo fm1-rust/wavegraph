@@ -383,6 +383,12 @@ impl Screen {
         }
         self.text.highlight(field.0, field.1, theme.selected);
         self.text.text(0, 13, b"                    ", muted);
+        if selected == Some(Control::Muffler) {
+            self.text.text(0, 13, b"MUFFLER", ink);
+            self.text
+                .text(10, 13, controls.muffler_label().as_bytes(), ink);
+            return;
+        }
         if selected == Some(Control::Waveform) {
             self.text.text(0, 13, b"WAVEFORM", ink);
             self.text.text(10, 13, labels.voice.label(Part::Bass), ink);

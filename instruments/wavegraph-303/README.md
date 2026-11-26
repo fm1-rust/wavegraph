@@ -42,9 +42,22 @@ signed 24-bit limits.
 
 [Devil Fish manual]: https://www.firstpr.com.au/rwi/dfish/Devil-Fish-Manual.pdf
 
+## Muffler
+
+`Message::Muffler(Muffler::One)` rounds the strongest VCA peaks. Switch to
+`Muffler::Two` for a lower threshold and a firmer buzz on accents. Both settings
+pass quiet notes at unity. A 145 Hz one-pole crossover carries the low end
+around the clipper. Its frequency and the two knees were tuned on the WaveGraph
+voice. The [Devil Fish manual], p. 6, describes the behavior that inspired them.
+
+The Muffler starts at `Muffler::Off`. The switch fades between positions over
+64 samples. Settled Off passes the original samples exactly. The Muffler feeds
+both the clean tap and the pedal input, ahead of the final output trim.
+`Message::Reset` clears its filter history and retains the selected position.
+
 ## Integrated post-VCA overdrive
 
-`Message::PedalDrive(amount)` controls the mono overdrive immediately after the VCA,
+`Message::PedalDrive(amount)` controls the mono overdrive after the Muffler,
 with an amount in `0.0..=1.0`. It defaults to zero. Zero returns to exact dry
 bypass; enabling, disabling, and changing the amount slew over 64 samples.
 `Tb303::pedal_drive()` returns the retained amount. A bipolar

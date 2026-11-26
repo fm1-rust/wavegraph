@@ -577,6 +577,7 @@ impl Track {
             // Navigation owns preset recalls; this path only edits a selected control.
             match bass_control {
                 Some(Control::Knob(knob)) => self.bass.turn(knob, detents),
+                Some(Control::Muffler) => self.bass.turn_muffler(detents),
                 Some(Control::Waveform) => {
                     self.voice.waveform = self.voice.waveform.saturating_add_signed(detents).min(1);
                 }
@@ -3386,6 +3387,10 @@ mod tests {
             (
                 Control::Knob(Knob::Overdrive),
                 BassMessage::PedalDrive(1.0 / 36.0),
+            ),
+            (
+                Control::Muffler,
+                BassMessage::Muffler(wavegraph_303::Muffler::One),
             ),
             (
                 Control::Waveform,

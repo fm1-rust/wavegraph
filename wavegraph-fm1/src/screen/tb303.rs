@@ -1,4 +1,4 @@
-//! Eight sound knobs, a waveform slide switch and an Algorithm preset readout.
+//! Eight sound knobs, the waveform and Muffler switches, and a preset readout.
 
 use super::{mixer::Band, selector::Selector, style::TB303};
 use crate::{
@@ -147,22 +147,21 @@ impl WaveSwitch {
         } else {
             GRAPHITE
         };
-        band.label("SAW", Point::new(2, 0), Alignment::Left, shade(ink));
-        band.label("SQR", Point::new(76, 0), Alignment::Right, shade(ink));
-        // A recessed slot, a raised ivory actuator and grip grooves match the dials' bevels.
-        band.rect(Point::new(24, 1), Size::new(30, 9), shade(SHADOW));
-        band.rect(Point::new(25, 2), Size::new(28, 7), shade(GRAPHITE));
-        band.rect(Point::new(25, 9), Size::new(29, 1), shade(IVORY));
-        let x = if self.square { 42 } else { 26 };
-        band.rect(Point::new(x + 1, 3), Size::new(10, 7), shade(SHADOW));
-        band.rect(Point::new(x, 2), Size::new(10, 7), shade(IVORY));
-        for groove in [3, 6] {
-            band.rect(Point::new(x + groove, 3), Size::new(1, 5), shade(GRAPHITE));
-        }
+        band.label(
+            if self.square { "SQR" } else { "SAW" },
+            Point::new(1, 0),
+            Alignment::Left,
+            shade(ink),
+        );
+        band.rect(Point::new(20, 1), Size::new(17, 9), shade(SHADOW));
+        band.rect(Point::new(21, 2), Size::new(15, 7), shade(GRAPHITE));
+        let x = if self.square { 29 } else { 21 };
+        band.rect(Point::new(x, 2), Size::new(7, 7), shade(IVORY));
+        band.rect(Point::new(x + 3, 3), Size::new(1, 5), shade(GRAPHITE));
         // The actuator retains the panel choice; a witness mark follows clip automation.
         if let Some(square) = self.marker {
             band.rect(
-                Point::new(if square { 46 } else { 30 }, 0),
+                Point::new(if square { 31 } else { 23 }, 0),
                 Size::new(3, 2),
                 shade(if self.selected { ink } else { OXIDE }),
             );
@@ -294,9 +293,32 @@ impl Panel {
             } else {
                 paper
             };
-            let mut band = Band::new(pixels, 0, 0, 78, 11, fill).with_panel_type(true);
+            let mut band = Band::new(pixels, 0, 0, 38, 11, fill).with_panel_type(true);
             switch.draw(&mut band, selector);
-            lcd.write_rect(0, 21, 78, 11, band.pixels).await?;
+            lcd.write_rect(0, 21, 38, 11, band.pixels).await?;
+        }
+        let selected = state.selected == Some(Control::Muffler);
+        if old.is_none_or(|s| {
+            (s.selected == Some(Control::Muffler)) != selected
+                || s.controls.muffler != state.controls.muffler
+        }) {
+            let (fill, ink) = if selected {
+                (
+                    selector.shade(TB303.selected.fill),
+                    selector.shade(TB303.selected.ink),
+                )
+            } else {
+                (paper, selector.shade(GRAPHITE))
+            };
+            let mut band = Band::new(pixels, 0, 0, 40, 11, fill).with_panel_type(true);
+            band.label("MUF", Point::new(1, 0), Alignment::Left, ink);
+            band.label(
+                state.controls.muffler_label(),
+                Point::new(38, 0),
+                Alignment::Right,
+                ink,
+            );
+            lcd.write_rect(38, 21, 40, 11, band.pixels).await?;
         }
         if old.is_none_or(|s| s.status != state.status) {
             let mut status = Band::new(pixels, 0, 0, 80, 10, paper).with_panel_type(true);
@@ -377,23 +399,21 @@ fn readout(band: &mut Band<'_>, state: Snapshot, selector: &Selector) {
             );
             return;
         }
-        Some(Control::Waveform) => {
-            band.label(
-                "ALG WAVEFORM",
-                Point::new(2, 0),
-                Alignment::Left,
-                shade(IVORY),
-            );
-            band.label(
-                if state.status.voice.waveform == 0 {
-                    "SAW"
-                } else {
-                    "SQUARE"
-                },
-                Point::new(77, 10),
-                Alignment::Right,
-                shade(LAMP),
-            );
+        Some(control @ (Control::Waveform | Control::Muffler)) => {
+            let (label, value) = if control == Control::Muffler {
+                ("ALG MUFFLER", state.controls.muffler_label())
+            } else {
+                (
+                    "ALG WAVEFORM",
+                    if state.status.voice.waveform == 0 {
+                        "SAW"
+                    } else {
+                        "SQUARE"
+                    },
+                )
+            };
+            band.label(label, Point::new(2, 0), Alignment::Left, shade(IVORY));
+            band.label(value, Point::new(77, 10), Alignment::Right, shade(LAMP));
             return;
         }
         Some(Control::Knob(knob)) => knob,
