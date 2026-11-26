@@ -19,6 +19,7 @@ pub(crate) struct Preset {
     pub waveform: u8,
     pub inserts: [Insert; INSERT_SLOTS],
     pub echo_send: u8,
+    pub spatial: bool,
     pub echo_steps: StepPattern,
     pub slicer: SlicerControls,
     pub slicer_steps: StepPattern,
@@ -30,6 +31,9 @@ impl Preset {
     pub(crate) fn apply_beat_fx(self, channel: Channel, fx: &mut Fx, mixer: &mut Mixer) {
         let i = channel.index();
         mixer.0[i].delay = self.echo_send;
+        if self.spatial {
+            mixer.0[i].reverb = 0;
+        }
         fx.slicers[i] = self.slicer;
     }
 }
@@ -50,6 +54,7 @@ const SIDECHAIN: Insert = Insert::Compressor(BassFx::INITIAL);
 pub(crate) const PRESETS: [Preset; 7] = [
     Preset {
         name: "DEEP HOUSE",
+        spatial: false,
         echo_send: 104,
         echo_steps: StepPattern::ALL,
         slicer: SlicerControls::INITIAL,
@@ -60,6 +65,7 @@ pub(crate) const PRESETS: [Preset; 7] = [
     },
     Preset {
         name: "HARMONY",
+        spatial: false,
         echo_send: 112,
         echo_steps: StepPattern::ALL,
         slicer: SlicerControls::INITIAL,
@@ -70,8 +76,9 @@ pub(crate) const PRESETS: [Preset; 7] = [
     },
     Preset {
         name: "PUMP PANEL",
-        echo_send: 32,
-        echo_steps: StepPattern::from_bits(0x8888),
+        spatial: true,
+        echo_send: 0,
+        echo_steps: StepPattern::ALL,
         slicer: SlicerControls::INITIAL,
         slicer_steps: StepPattern::FIRST_HALF,
         controls: Controls {
@@ -80,11 +87,12 @@ pub(crate) const PRESETS: [Preset; 7] = [
             values: [18, 86, 36, 45, 120, 5, 92, 24],
             ..Controls::INITIAL
         },
-        waveform: 0,
-        inserts: [saturation(16, 32, 96, 0), SIDECHAIN],
+        waveform: 1,
+        inserts: [Insert::None; INSERT_SLOTS],
     },
     Preset {
         name: "REBIRTH BITE",
+        spatial: false,
         echo_send: 72,
         echo_steps: StepPattern::ALL,
         slicer: SlicerControls::INITIAL,
@@ -99,6 +107,7 @@ pub(crate) const PRESETS: [Preset; 7] = [
     },
     Preset {
         name: "RUBBER SQR",
+        spatial: false,
         echo_send: 48,
         echo_steps: StepPattern::ALL,
         slicer: SlicerControls::INITIAL,
@@ -113,6 +122,7 @@ pub(crate) const PRESETS: [Preset; 7] = [
     },
     Preset {
         name: "ACID PLUCK",
+        spatial: false,
         echo_send: 100,
         echo_steps: StepPattern::from_bits(0x1111),
         slicer: SlicerControls::INITIAL,
@@ -136,6 +146,7 @@ pub(crate) const PRESETS: [Preset; 7] = [
     },
     Preset {
         name: "DEVIL DRIVE",
+        spatial: false,
         echo_send: 48,
         echo_steps: StepPattern::from_bits(0x1111),
         slicer: SlicerControls {

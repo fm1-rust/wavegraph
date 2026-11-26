@@ -40,16 +40,22 @@ impl Processor {
         }
     }
 
-    fn new(kind: InsertKind, rate_hz: u32, factory: SidechainDucker, eq: ThreeBandEq) -> Self {
+    // Construct directly in the slot. A chorus-sized temporary adds work to
+    // small Saturator and Phaser recalls on the audio thread.
+    fn replace(&mut self, kind: InsertKind, rate: u32, factory: SidechainDucker, eq: ThreeBandEq) {
         match kind {
-            InsertKind::None => Self::None,
+            InsertKind::None => *self = Self::None,
             #[allow(clippy::cast_precision_loss)]
-            InsertKind::Chorus => Self::Chorus(Chorus::new(1.0 / rate_hz as f32)),
-            InsertKind::Eq => Self::Eq(eq),
-            InsertKind::Compressor => Self::Compressor(factory),
-            InsertKind::Saturator => Self::Saturator(Saturator::new()),
-            InsertKind::Phaser => Self::Phaser(Phaser::new(rate_hz).expect("audio sample rate")),
-            InsertKind::Flanger => Self::Flanger(Flanger::new(rate_hz).expect("audio sample rate")),
+            InsertKind::Chorus => *self = Self::Chorus(Chorus::new(1.0 / rate as f32)),
+            InsertKind::Eq => *self = Self::Eq(eq),
+            InsertKind::Compressor => *self = Self::Compressor(factory),
+            InsertKind::Saturator => *self = Self::Saturator(Saturator::new()),
+            InsertKind::Phaser => {
+                *self = Self::Phaser(Phaser::new(rate).expect("audio sample rate"))
+            }
+            InsertKind::Flanger => {
+                *self = Self::Flanger(Flanger::new(rate).expect("audio sample rate"))
+            }
         }
     }
 }
@@ -161,7 +167,7 @@ impl Process<Message, I24> for ChannelInserts {
                 Message::Insert(channel, part) => {
                     let i = channel.index();
                     self.parts[i] = part;
-                    self.processors[i] = [Processor::None; INSERT_SLOTS];
+                    self.processors[i].fill(Processor::None);
                     changed[i] = [true; INSERT_SLOTS];
                 }
                 Message::ChannelInserts(channel, settings) => {
@@ -197,10 +203,8 @@ impl Process<Message, I24> for ChannelInserts {
                     None
                 };
                 let processor = &mut self.processors[i][slot];
-                if processor.kind() != setting.kind() {
-                    *processor =
-                        Processor::new(setting.kind(), self.rate_hz, self.factory, self.flat_eq);
-                    changed[i][slot] = true;
+                if changed[i][slot] && processor.kind() != setting.kind() {
+                    processor.replace(setting.kind(), self.rate_hz, self.factory, self.flat_eq);
                 }
                 match (processor, setting) {
                     (Processor::Compressor(fx), Insert::Compressor(settings)) => {
@@ -219,9 +223,7 @@ impl Process<Message, I24> for ChannelInserts {
                         if changed[i][slot] {
                             fx.set_controls(settings);
                         }
-                        for sample in &mut *strip {
-                            *sample = fx.tick(*sample);
-                        }
+                        fx.process_in_place(strip);
                     }
                     (Processor::Flanger(fx), Insert::Flanger(settings)) => {
                         if changed[i][slot] {

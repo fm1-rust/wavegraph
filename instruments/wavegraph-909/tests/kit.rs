@@ -255,3 +255,34 @@ fn editing_a_live_decay_changes_only_its_modeled_voice() {
         assert!(changed, "{voice:?} decay affects its ringing tail");
     }
 }
+
+#[test]
+fn active_stems_match_samplewise_strikes_chokes_and_releases() {
+    let mut block = Tr909::new(SAMPLES).expect("test kit");
+    let mut reference = block;
+    for (voices, len) in [
+        (&[OpenHat, Ride][..], 0),
+        (&[ClosedHat, Kick][..], 1),
+        (&[Snare, Clap][..], 3),
+        (&[ClosedHat, Ride][..], 63),
+        (&[][..], 127),
+        (&[OpenHat, ClosedHat][..], 128),
+    ] {
+        for &v in voices {
+            reference.trigger(v);
+            block.trigger(v);
+        }
+        let mut stems = [[0; 6]; 128];
+        block.render_active_stems(&mut [0; 128][..len], |voice, samples| {
+            for (frame, sample) in stems.iter_mut().zip(samples) {
+                frame[voice as usize] = *sample;
+            }
+        });
+        for frame in &stems[..len] {
+            assert_eq!(*frame, reference.next_voices());
+        }
+        for voice in Voice::ALL {
+            assert_eq!(block.voice_active(voice), reference.voice_active(voice));
+        }
+    }
+}

@@ -300,6 +300,51 @@ impl Phaser {
                 0
             },
         );
+        let depth = (11469 * i32::from(c.depth.min(128))) >> 7;
+        let feedback = (96 * i32::from(c.feedback.min(128))) >> 7;
+        self.sample(sample, mix, depth, feedback)
+    }
+
+    /// Apply the current controls to a span, preserving sample-by-sample mix ramps.
+    #[allow(clippy::arithmetic_side_effects)]
+    // SAFETY: FM-1 startup copies this hot audio path into executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
+    pub fn process_in_place(&mut self, samples: &mut [I24]) {
+        let c = self.controls;
+        let target = if c.enabled {
+            i32::from(c.mix.min(128))
+        } else {
+            0
+        };
+        let ramp = self.blend.abs_diff(target).div_ceil(2) as usize;
+        let (changing, steady) = samples.split_at_mut(ramp.min(samples.len()));
+        for sample in changing {
+            *sample = self.tick(*sample);
+        }
+        if steady.is_empty() {
+            return;
+        }
+        if target == 0 {
+            self.phase.advance(steady.len());
+            self.state = [0; 4];
+            self.last = 0;
+            return;
+        }
+        let depth = (11469 * i32::from(c.depth.min(128))) >> 7;
+        let feedback = (96 * i32::from(c.feedback.min(128))) >> 7;
+        for sample in steady {
+            *sample = self.sample(*sample, target, depth, feedback);
+        }
+    }
+
+    #[inline]
+    #[allow(clippy::arithmetic_side_effects, clippy::cast_possible_wrap)]
+    fn sample(&mut self, sample: I24, mix: i32, depth: i32, feedback: i32) -> I24 {
         self.phase.advance(1);
         if mix == 0 {
             self.state = [0; 4];
@@ -307,10 +352,8 @@ impl Phaser {
             return sample;
         }
         // g = 0.55 +/- 0.35; never reaches either unstable endpoint.
-        let depth = (11469 * i32::from(c.depth.min(128))) >> 7;
         let g = 18022 + mul_q15(self.phase.triangle_q15(), depth);
         let x = sample.inner();
-        let feedback = (96 * i32::from(c.feedback.min(128))) >> 7;
         let mut wet = clamp_pcm(x + mul_q7(self.last, feedback));
         // Allow internal headroom; clamp only at an explicit safety bound.
         const LIMIT: i32 = 1 << 27;
@@ -415,6 +458,38 @@ mod tests {
             fx.tick(sample);
         }
         assert_eq!(fx.tick(sample).inner(), 5_767_168);
+    }
+
+    #[test]
+    fn phaser_spans_match_sample_edits_through_dry_bypass() {
+        let mut block = Phaser::new(44_118).expect("valid audio clock");
+        let mut reference = block;
+        let signal: [I24; 128] =
+            core::array::from_fn(|i| pcm(if i % 3 == 0 { -8_388_608 } else { 6_000_000 }));
+        for (mix, enabled, frames) in [
+            (100, true, 13),
+            (100, true, 128),
+            (7, false, 0),
+            (7, false, 17),
+            (7, false, 128),
+            (65, true, 128),
+        ] {
+            let c = ModulationControls {
+                mix,
+                enabled,
+                depth: 111,
+                feedback: 103,
+                ..ModulationControls::INITIAL
+            };
+            block.set_controls(c);
+            reference.set_controls(c);
+            let mut actual = signal;
+            block.process_in_place(&mut actual[..frames]);
+            for (s, input) in actual[..frames].iter().zip(signal) {
+                assert_eq!(*s, reference.tick(input));
+            }
+            assert_eq!(block.phase.position(), reference.phase.position());
+        }
     }
 
     #[test]

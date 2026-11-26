@@ -505,6 +505,10 @@ impl Track {
         }
     }
 
+    fn pump_panel(&self) -> bool {
+        self.assignment.part == Part::Bass && PRESETS[usize::from(self.bass_preset.index)].spatial
+    }
+
     pub(super) fn turn_select(&mut self, detents: i8) {
         if self.amen_slices() {
             return;
@@ -822,6 +826,15 @@ impl Track {
         offset: KnobOffset,
         previous_offset: KnobOffset,
     ) -> Result<EventBatch, Error> {
+        if self.assignment.part == Part::Bass
+            && let Some(old) = previous
+            && !self.arp.enabled
+            && !old.arp.enabled
+            && offset == KnobOffset::default()
+            && previous_offset == KnobOffset::default()
+        {
+            return self.bass_events(Some(old));
+        }
         self.direct(offset)
             .events(previous.map(|track| track.direct(previous_offset)))
     }
@@ -857,10 +870,7 @@ impl Track {
             }
             Part::Organ => self.organ_events(old),
             Part::Wavetable => self.wave_events(old),
-            Part::Bass => {
-                let old = old.unwrap_or_else(|| Self::new(self.assignment));
-                self.bass.events(old.bass, self.voice, old.voice)
-            }
+            Part::Bass => self.bass_events(old.as_ref())?,
             Part::Tr808 | Part::Tr909 => {
                 let mut events = EventBatch::new();
                 if self.assignment.part == Part::Tr808
@@ -883,6 +893,19 @@ impl Track {
         if old.is_none() {
             events
                 .insert(0, at(Message::Assign(self.assignment)))
+                .map_err(|_| Error::Capacity)?;
+        }
+        Ok(events)
+    }
+
+    fn bass_events(&self, old: Option<&Self>) -> Result<EventBatch, Error> {
+        let (controls, voice) =
+            old.map_or((Controls::INITIAL, Voice::INITIAL), |t| (t.bass, t.voice));
+        let mut events = self.bass.events(controls, self.voice, voice);
+        let active = self.pump_panel();
+        if active != old.is_some_and(Self::pump_panel) {
+            events
+                .push(at(Message::ParallelBass(active)))
                 .map_err(|_| Error::Capacity)?;
         }
         Ok(events)
@@ -1155,6 +1178,8 @@ pub(super) enum Message {
         wavegraph_lfo::PhaseControl,
     ),
     Master(MasterControls),
+    ParallelBass(bool),
+    AcidSends([u8; CHANNELS], u16),
     GainReduction(u8),
     Cue(Cue),
 }
@@ -1246,10 +1271,12 @@ pub(super) struct Node<'a> {
     drums: &'a DrumKits,
     sample_rate: f32,
     player: Player<'a>,
+    bass_tone: crate::bass::space::Tone,
+    parallel_bass: bool,
 }
 
 impl<'a> Node<'a> {
-    pub(super) const fn new(
+    pub(super) fn new(
         tuning: &'a Tuning,
         organ: &'a Organ,
         drums: &'a DrumKits,
@@ -1261,6 +1288,8 @@ impl<'a> Node<'a> {
             drums,
             sample_rate,
             player: Player::Empty,
+            bass_tone: crate::bass::space::Tone::new(sample_rate),
+            parallel_bass: false,
         }
     }
 
@@ -1269,6 +1298,7 @@ impl<'a> Node<'a> {
     #[cold]
     #[inline(never)]
     fn assign(&mut self, part: Part) {
+        self.parallel_bass = false;
         self.player = match part {
             Part::Mono => Player::Mono(Monosynth::new(self.tuning).with_idle_suspension()),
             Part::Organ => Player::Organ(self.organ.clone()),
@@ -1286,6 +1316,7 @@ impl<'a> Node<'a> {
             // Reserve headroom before the resonant signal is converted to Q23.
             Part::Bass => Player::Bass(
                 Tb303::new(self.sample_rate)
+                    .with_compact_ladder()
                     .with_output_gain(0.0625)
                     .with_idle_suspension(),
             ),
@@ -1312,8 +1343,42 @@ impl Process<Message, I24> for Node<'_> {
         if let Player::Drums(node) = &mut self.player {
             return node.process(cx);
         }
-        let (signal, kick) = cx.outputs.split_at_mut(1);
-        kick[0].fill(I24::default());
+        let (signal, auxiliary) = cx.outputs.split_at_mut(1);
+        if let Player::Bass(node) = &mut self.player {
+            for event in cx.events {
+                if let Message::ParallelBass(enabled) = event.message {
+                    self.parallel_bass = enabled;
+                    self.bass_tone.reset();
+                }
+            }
+            let events = unpack_events(cx.events, |m| match m {
+                Message::Bass(message) => Some(message),
+                _ => None,
+            });
+            if self.parallel_bass {
+                node.process_with_clean_tap(signal[0], auxiliary[0], &events);
+                self.bass_tone
+                    .mix(signal[0], auxiliary[0], node.pedal_drive());
+            } else {
+                auxiliary[0].fill(I24::default());
+                node.process(&mut ProcessContext {
+                    frames: cx.frames,
+                    inputs: &[],
+                    outputs: signal,
+                    events: &events,
+                    emit: &mut Err,
+                });
+            }
+            if let Some(frame) = node.last_cycle_start() {
+                let _ = (cx.emit)(Event {
+                    frame,
+                    port: 2,
+                    message: Message::BassCycle,
+                });
+            }
+            return;
+        }
+        auxiliary[0].fill(I24::default());
         let cx = &mut ProcessContext {
             frames: cx.frames,
             inputs: cx.inputs,
@@ -1367,20 +1432,7 @@ impl Process<Message, I24> for Node<'_> {
                 Message::Organ(m) => Some(m),
                 _ => None,
             }),
-            Player::Bass(node) => {
-                dispatch(node, cx, |m| match m {
-                    Message::Bass(m) => Some(m),
-                    _ => None,
-                });
-                if let Some(frame) = node.last_cycle_start() {
-                    let _ = (cx.emit)(Event {
-                        frame,
-                        port: 2,
-                        message: Message::BassCycle,
-                    });
-                }
-            }
-            Player::Drums(_) => unreachable!("kit rendered both outlets"),
+            Player::Bass(_) | Player::Drums(_) => unreachable!("source rendered both outlets"),
         }
     }
 }
@@ -1406,14 +1458,28 @@ impl Process<Message, I24> for FxMixer {
 }
 
 /// Restore dry headroom and process both wet returns in the final mix.
-pub(super) struct Master(pub(super) MasterBus);
+pub(super) struct Master<'a> {
+    pub(super) bus: MasterBus,
+    pub(super) space: crate::bass::space::Space<'a>,
+    levels: [u8; CHANNELS],
+}
 
-impl Process<Message, I24> for Master {
+impl<'a> Master<'a> {
+    pub(super) fn new(rate: u32, echo: &'a mut [i16], plate: &'a mut [f32]) -> Self {
+        Self {
+            bus: MasterBus::new(rate).expect("master clock"),
+            space: crate::bass::space::Space::new(rate, echo, plate).expect("acid return storage"),
+            levels: [0; CHANNELS],
+        }
+    }
+}
+
+impl Process<Message, I24> for Master<'_> {
     fn inlets(&self) -> &[Port] {
-        &[Port::Signal; 3]
+        &[Port::Signal; 7]
     }
     fn outlets(&self) -> &[Port] {
-        &[Port::Signal, Port::Message]
+        &[Port::Signal, Port::Signal, Port::Message]
     }
 
     #[allow(
@@ -1427,7 +1493,11 @@ impl Process<Message, I24> for Master {
         let mut cue = Cue::EMPTY;
         for event in cx.events {
             match event.message {
-                Message::Master(control) => self.0.edit(control),
+                Message::Master(control) => self.bus.edit(control),
+                Message::AcidSends(levels, tempo) => {
+                    self.levels = levels;
+                    self.space.set_tempo(tempo);
+                }
                 Message::Cue(samples) => cue = samples,
                 _ => (),
             }
@@ -1438,20 +1508,60 @@ impl Process<Message, I24> for Master {
         let mut mix = cx.inputs[0].iter().zip(cx.inputs[1]).zip(cx.inputs[2]).map(
             |((dry, reverb), delay)| (dry.inner() << DRY_HEADROOM) + reverb.inner() + delay.inner(),
         );
-        let output = &mut *cx.outputs[0];
-        let (intro, rest) = output.split_at_mut(cue.len.min(output.len()));
-        for ((out, sum), sample) in intro.iter_mut().zip(&mut mix).zip(cue.samples()) {
-            *out = self.0.process_sample(sum + (i32::from(sample) << 8));
-        }
-        for (out, sum) in rest.iter_mut().zip(mix) {
-            *out = self.0.process_sample(sum);
+        let (left, right) = cx.outputs.split_at_mut(1);
+        let left = &mut *left[0];
+        let right = &mut *right[0];
+        let taps: Vec<_, CHANNELS> = self
+            .levels
+            .iter()
+            .zip(&cx.inputs[3..])
+            .filter(|(level, _)| **level != 0)
+            .map(|(&level, signal)| (f32::from(level) / 128.0, *signal))
+            .collect();
+        if taps.is_empty() && !self.space.ringing() {
+            let (intro, rest) = left.split_at_mut(cue.len.min(left.len()));
+            for ((out, sum), sample) in intro.iter_mut().zip(&mut mix).zip(cue.samples()) {
+                *out = self.bus.process_sample(sum + (i32::from(sample) << 8));
+            }
+            for (out, sum) in rest.iter_mut().zip(mix) {
+                *out = self.bus.process_sample(sum);
+            }
+            right.copy_from_slice(left);
+        } else {
+            use crate::bass::space::CHUNK;
+            let mut intro = cue.samples();
+
+            for (block, (l, r)) in left
+                .chunks_mut(CHUNK)
+                .zip(right.chunks_mut(CHUNK))
+                .enumerate()
+            {
+                let mut send = [0.0; CHUNK];
+                let send = &mut send[..l.len()];
+                for (gain, signal) in &taps {
+                    #[allow(clippy::cast_precision_loss)]
+                    for (out, sample) in send.iter_mut().zip(&signal[block * CHUNK..]) {
+                        *out += gain * sample.inner() as f32;
+                    }
+                }
+                let mut wet = [[0; 2]; CHUNK];
+                let wet = &mut wet[..l.len()];
+                self.space.render(send, wet);
+                let frames = l.iter_mut().zip(r).zip(wet.iter()).zip(&mut mix);
+                for (((left, right), &[wet_l, wet_r]), mut center) in frames {
+                    if let Some(sample) = intro.next() {
+                        center += i32::from(sample) << 8;
+                    }
+                    [*left, *right] = self.bus.process_stereo(center, wet_l, wet_r);
+                }
+            }
         }
         // One Q7 meter reading per block; the LCD converts it to dB.
-        let reduction = ((1.0 - self.0.dynamics_gain()) * 128.0 + 0.5) as u8;
+        let reduction = ((1.0 - self.bus.dynamics_gain()) * 128.0 + 0.5) as u8;
         if let Some(frame) = cx.frames.checked_sub(1) {
             let _ = (cx.emit)(Event {
                 frame,
-                port: 1,
+                port: 2,
                 message: Message::GainReduction(reduction),
             });
         }
@@ -1483,18 +1593,7 @@ fn dispatch<M>(
     cx: &mut ProcessContext<'_, '_, Message, I24>,
     unpack: impl Fn(Message) -> Option<M>,
 ) {
-    // Only pitched synths and effects use this adapter.
-    let events: Vec<_, 32> = cx
-        .events
-        .iter()
-        .filter_map(|e| {
-            unpack(e.message).map(|message| Event {
-                frame: e.frame,
-                port: e.port,
-                message,
-            })
-        })
-        .collect();
+    let events = unpack_events(cx.events, unpack);
     node.process(&mut ProcessContext {
         frames: cx.frames,
         inputs: cx.inputs,
@@ -1504,29 +1603,51 @@ fn dispatch<M>(
     });
 }
 
+fn unpack_events<M>(
+    events: &[Event<Message>],
+    unpack: impl Fn(Message) -> Option<M>,
+) -> Vec<Event<M>, 32> {
+    events
+        .iter()
+        .filter_map(|e| {
+            unpack(e.message).map(|message| Event {
+                frame: e.frame,
+                port: e.port,
+                message,
+            })
+        })
+        .collect()
+}
+
 /// The contiguous, post-insert signals immediately upstream of the faders.
 pub(super) const STRIP_BUS: usize = 8;
 pub(super) const DRY_HEADROOM: u8 = 3;
 const MASTER_BUS: usize = 18;
-pub(super) const BUS_COUNT: usize = MASTER_BUS + 2;
+pub(super) const BUS_COUNT: usize = MASTER_BUS + 4;
 
-/// Final graph outlet for the program that rendered this block.
+/// The first outlet of the stereo master that rendered this block.
 fn master_bus<const N: usize>(buses: &[[I24; N]; BUS_COUNT], half_gain: bool) -> &[I24; N] {
     &buses[if half_gain {
-        MASTER_BUS + 1
+        MASTER_BUS + 2
     } else {
         MASTER_BUS
     }]
 }
 
-/// Center the completed mono master in the CPU0 output mix before physical MASTER.
-pub(super) fn mix_master<const N: usize>(
+pub(super) fn write_master<const N: usize>(
     buses: &[[I24; N]; BUS_COUNT],
     half_gain: bool,
     out: &mut [[i32; 2]; N],
 ) {
-    let mono = I24::as_i32_slice(master_bus(buses, half_gain));
-    fm1_audio::mix::planar_q23(out, mono, mono);
+    let [left, right] = if half_gain {
+        [MASTER_BUS + 2, MASTER_BUS + 3]
+    } else {
+        [MASTER_BUS, MASTER_BUS + 1]
+    };
+    // AudioBlock::write receives the cleared DAC staging block and owns both channels.
+    for ((frame, l), r) in out.iter_mut().zip(&buses[left]).zip(&buses[right]) {
+        *frame = [l.inner(), r.inner()];
+    }
 }
 
 impl Channel {
@@ -1590,10 +1711,11 @@ impl Programs {
             1, 4, 4, 3, 8, 9, 10, 11, // CALL mixer -> dry 13, reverb send 14, delay send 15
             1, 5, 1, 1, 14, // CALL reverb -> 16
             1, 6, 1, 1, 15, // CALL delay -> 17
-            1, 8, 3, 1, 13, 16, 17, // CALL master EQ and dynamics on dry + returns -> 18
-            2, 18, 64, // GAIN optional output trim -> 19
+            1, 8, 7, 2, 13, 16, 17, 1, 3, 5,
+            7, // CALL stereo master, four optional pedal taps -> 18,19
+            2, 18, 64, 2, 19, 64, // GAIN optional output trim on both channels -> 20,21
         ];
-        const FULL_LEN: usize = ROUTE.len() - 3;
+        const FULL_LEN: usize = ROUTE.len() - 6;
         Ok(Self([
             Plan::decode(&ROUTE[..FULL_LEN])?,
             Plan::decode(ROUTE)?,
@@ -1633,6 +1755,7 @@ impl Programs {
                 .expect("audio sample clock"),
             echo_gates: 0xf,
             previous_bpm: 0,
+            acid_levels: [0; CHANNELS],
             shape_offsets: [0; CHANNELS],
             fx: Fx::INITIAL,
             cue: Cue::EMPTY,
@@ -1668,6 +1791,7 @@ pub(super) struct Instrument<'a> {
     beat_rate: u32,
     echo_gates: u8,
     previous_bpm: u16,
+    acid_levels: [u8; CHANNELS],
     shape_offsets: [u8; CHANNELS],
     fx: Fx,
     pub(super) cue: Cue,
@@ -1822,16 +1946,17 @@ impl Instrument<'_> {
         tracks: [Track; CHANNELS],
         buses: &'b mut [[I24; N]; BUS_COUNT],
     ) -> Result<&'b [I24; N], Error> {
-        self.render_with_midi(&tracks, buses, |_, _| ())
+        self.render_with_midi(&tracks, true, buses, |_, _| ())
     }
 
     pub(super) fn render_with_midi<'b, const N: usize>(
         &mut self,
         tracks: &[Track; CHANNELS],
+        settings_changed: bool,
         buses: &'b mut [[I24; N]; BUS_COUNT],
         wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
-        self.render_controlled::<N, true>(tracks, buses, wire)
+        self.render_controlled::<N, true>(tracks, settings_changed, buses, wire)
     }
 
     // The uncached instantiation exists only in regression tests, where complete
@@ -1839,6 +1964,7 @@ impl Instrument<'_> {
     fn render_controlled<'b, const N: usize, const CACHE_CONTROLS: bool>(
         &mut self,
         tracks: &[Track; CHANNELS],
+        settings_changed: bool,
         buses: &'b mut [[I24; N]; BUS_COUNT],
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
@@ -1888,14 +2014,14 @@ impl Instrument<'_> {
         let mut enabled = self.sequences;
         let mut live_counts = [0; CHANNELS];
         let mut offsets = [KnobOffset::default(); CHANNELS];
-        let mut tracks_changed = false;
+        let mut changed_tracks = [false; CHANNELS];
         let recovering = core::mem::take(&mut self.gap_events);
         for (i, events) in self.events.iter_mut().enumerate() {
             let track = &tracks[i];
             let part = track.assignment.part;
             let previous = self.previous.as_ref().map(|tracks| &tracks[i]);
-            let changed = previous != Some(track);
-            tracks_changed |= changed;
+            let changed = previous.is_none() || (settings_changed && previous != Some(track));
+            changed_tracks[i] = changed;
             let old = previous.filter(|old| old.assignment == track.assignment);
             if old.is_none() {
                 inserts
@@ -1926,7 +2052,11 @@ impl Instrument<'_> {
                     Route::Knob { index, span } => offset = KnobOffset::new(index, span, amount),
                 }
             }
-            let mut panel = if CACHE_CONTROLS && !changed && offset == self.offsets[i] {
+            let mut panel = if !CACHE_CONTROLS {
+                track
+                    .direct(offset)
+                    .events(old.map(|t| t.direct(self.offsets[i])))?
+            } else if !changed && offset == self.offsets[i] {
                 EventBatch::new()
             } else {
                 track.direct_events(old, offset, self.offsets[i])?
@@ -1999,7 +2129,11 @@ impl Instrument<'_> {
             }
             live_counts[i] = events.len();
         }
-        let mut mixer_events = self.mixer.events(self.previous_mixer);
+        let mut mixer_events = if settings_changed {
+            self.mixer.events(self.previous_mixer)
+        } else {
+            Vec::new()
+        };
         let mut gates = self.echo_gates;
         let input_open = !self.fx.clocked_delay || self.fx.echo_input_open;
         let stepped = input_open
@@ -2048,7 +2182,9 @@ impl Instrument<'_> {
             Channel::ALL.map(|c| player.automation(c).map_or(0, |a| a.shape_offset));
         for (i, track) in tracks.iter().enumerate() {
             let old = self.previous.as_ref().map(|tracks| &tracks[i]);
-            if old.is_none_or(|t| t.assignment != track.assignment || t.inserts != track.inserts)
+            if (changed_tracks[i]
+                && old
+                    .is_none_or(|t| t.assignment != track.assignment || t.inserts != track.inserts))
                 || self.shape_offsets[i] != shape_offsets[i]
             {
                 let mut slots = track.inserts;
@@ -2071,19 +2207,38 @@ impl Instrument<'_> {
                     })?;
             }
         }
-        let reverb = self.fx.return_events(
-            self.previous_fx,
-            Device::Reverb,
-            self.transport.bpm,
-            self.previous_bpm,
-        );
-        let delay = self.fx.return_events(
-            self.previous_fx,
-            Device::Delay,
-            self.transport.bpm,
-            self.previous_bpm,
-        );
-        let mut master = self.fx.master_events(self.previous_fx);
+        let (reverb, delay, mut master, acid_levels) =
+            if settings_changed || self.previous_bpm != self.transport.bpm {
+                let returns = |device| {
+                    self.fx.return_events(
+                        self.previous_fx,
+                        device,
+                        self.transport.bpm,
+                        self.previous_bpm,
+                    )
+                };
+                let mut master = self.fx.master_events(self.previous_fx);
+                let levels = core::array::from_fn(|i| {
+                    if tracks[i].pump_panel() {
+                        self.mixer.0[i].output_level()
+                    } else {
+                        0
+                    }
+                });
+                if self.acid_levels != levels || self.previous_bpm != self.transport.bpm {
+                    master
+                        .push(at(Message::AcidSends(levels, self.transport.bpm)))
+                        .map_err(|_| Error::Capacity)?;
+                }
+                (
+                    returns(Device::Reverb),
+                    returns(Device::Delay),
+                    master,
+                    levels,
+                )
+            } else {
+                (Vec::new(), Vec::new(), Vec::new(), self.acid_levels)
+            };
         if self.cue.len != 0 {
             master
                 .push(at(Message::Cue(self.cue)))
@@ -2142,13 +2297,24 @@ impl Instrument<'_> {
         self.bass_cycles = bass_cycles;
         self.reduction = reduction;
         self.offsets = offsets;
-        if !CACHE_CONTROLS || tracks_changed {
+        if let Some(previous) = self.previous.as_mut() {
+            if settings_changed {
+                for (i, changed) in changed_tracks.into_iter().enumerate() {
+                    if changed {
+                        previous[i] = tracks[i];
+                    }
+                }
+            }
+        } else {
             self.previous = Some(*tracks);
         }
-        self.previous_mixer = Some(self.mixer);
+        self.acid_levels = acid_levels;
+        if settings_changed {
+            self.previous_mixer = Some(self.mixer);
+            self.previous_fx = Some(self.fx);
+        }
         self.echo_gates = gates;
         self.previous_bpm = self.transport.bpm;
-        self.previous_fx = Some(self.fx);
         self.cue = Cue::EMPTY;
         Ok(master_bus(buses, self.half_gain))
     }
@@ -2377,26 +2543,27 @@ mod tests {
                 let session = out.session().expect("connected");
                 let mut batch = Batch::default();
                 let mut slide = None;
-                let mut render =
-                    |engine: &mut Instrument<'_>, out: &mut OutputQueue, batch: &mut Batch| {
-                        batch.begin(session);
-                        engine.render_with_midi(&tracks, &mut buses, |c, e| batch.push(c, e))?;
-                        out.append(batch);
-                        let mut packets = [[0; 4]; 16];
-                        loop {
-                            let (revision, count) = out.peek(&mut packets);
-                            if count == 0 {
-                                break;
-                            }
-                            for &[_, status, cc, value] in &packets[..count] {
-                                if (status, cc) == (0xb0, CC_SLIDE) {
-                                    slide = Some(value);
-                                }
-                            }
-                            out.sent(revision, count);
+                let mut render = |engine: &mut Instrument<'_>,
+                                  out: &mut OutputQueue,
+                                  batch: &mut Batch| {
+                    batch.begin(session);
+                    engine.render_with_midi(&tracks, true, &mut buses, |c, e| batch.push(c, e))?;
+                    out.append(batch);
+                    let mut packets = [[0; 4]; 16];
+                    loop {
+                        let (revision, count) = out.peek(&mut packets);
+                        if count == 0 {
+                            break;
                         }
-                        Ok::<_, Error>(slide)
-                    };
+                        for &[_, status, cc, value] in &packets[..count] {
+                            if (status, cc) == (0xb0, CC_SLIDE) {
+                                slide = Some(value);
+                            }
+                        }
+                        out.sent(revision, count);
+                    }
+                    Ok::<_, Error>(slide)
+                };
                 engine.transport.toggle();
                 let mut receiver = None;
                 for _ in 0..1000 {
@@ -2480,18 +2647,20 @@ mod tests {
                 } else {
                     let (mut off, mut kick) = (false, false);
                     for _ in 0..BLOCKS {
-                        engine.render_with_midi(&tracks, &mut buses, |c, e| match e.message {
-                            MidiMessage::Off(_) => off = true,
-                            MidiMessage::On(n) if c == Channel::Three && n.number == 36 => {
-                                kick = true
+                        engine.render_with_midi(&tracks, true, &mut buses, |c, e| {
+                            match e.message {
+                                MidiMessage::Off(_) => off = true,
+                                MidiMessage::On(n) if c == Channel::Three && n.number == 36 => {
+                                    kick = true
+                                }
+                                _ => (),
                             }
-                            _ => (),
                         })?;
                     }
                     assert!(off && kick);
                 }
                 for block in 0..400 {
-                    engine.render_with_midi(&tracks, &mut buses, |c, e| {
+                    engine.render_with_midi(&tracks, true, &mut buses, |c, e| {
                         if let MidiMessage::On(n) = e.message {
                             attacks.push((block * 128 + e.frame, c, n.number));
                         }
@@ -2603,7 +2772,9 @@ mod tests {
                 .with_boost()
                 .with_dry_headroom(DRY_HEADROOM),
         );
-        let mut master = Master(MasterBus::new(rate_hz).expect("sample clock"));
+        let mut echo_storage = vec![0; crate::bass::space::echo_samples(rate_hz)];
+        let mut plate_storage = vec![0.0; wavegraph_303::Reverb::FRAMES];
+        let mut master = Master::new(rate_hz, &mut echo_storage, &mut plate_storage);
         let mut storage = [0_i32; wavegraph_fx::REVERB_SAMPLES];
         let mut reverb = FxNode(Reverb::new(&mut storage));
         let mut line = [0; 44_118];
@@ -3148,7 +3319,7 @@ mod tests {
                 instrument.set_half_gain(half)?;
                 let mix = instrument.render(parts, &mut buses)?.map(I24::inner);
                 let mut stereo = [[0; 2]; 128];
-                mix_master(&buses, half, &mut stereo);
+                write_master(&buses, half, &mut stereo);
                 assert_eq!(stereo, mix.map(|sample| [sample; 2]));
                 let mono = &buses[Channel::One.source_bus()];
                 let bass = &buses[BASS_INSERT];
@@ -3266,6 +3437,74 @@ mod tests {
         assert_eq!(track.bass_preset.index, 1);
         assert_eq!(track.voice, before.voice);
         assert_eq!(track.inserts, PRESETS[1].inserts);
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::arithmetic_side_effects)]
+    fn pump_panel_routes_only_its_pedal_through_the_stereo_master() -> Result<(), Error> {
+        const RATE: u32 = 12_000;
+        for selected in Channel::ALL {
+            with_instrument(RATE, |instrument| {
+                let mut parts = Track::rack([Assignment::new(Part::Bass); CHANNELS]);
+                let i = selected.index();
+                let mut preset = parts[i].bass_preset;
+                preset.turn(2 - i8::try_from(preset.index).expect("small preset bank"));
+                let patch = PRESETS[usize::from(preset.index)];
+                parts[i].sync_panel(preset, patch.inserts.map(Insert::kind));
+                parts[i].voice.gate.note = Some(note(41, 120));
+                let mut mixer = Mixer::DRY;
+                mixer.0[i].level = 0;
+                instrument.set_mixer(mixer);
+                instrument.set_fx(FX_WITHOUT_DYNAMICS);
+                instrument.transport.bpm = 144;
+                let mut buses = [[I24::default(); 128]; BUS_COUNT];
+                for block in 0..5 {
+                    instrument.render(parts, &mut buses)?;
+                    if block == 0 {
+                        assert!(
+                            instrument.events[i].contains(&at(BassMessage::Waveform(
+                                wavegraph_303::Waveform::Square
+                            )))
+                        );
+                    }
+                    assert!(buses[MASTER_BUS].iter().all(|s| s.inner() == 0));
+                    assert_eq!(buses[MASTER_BUS], buses[MASTER_BUS + 1]);
+                }
+                mixer.0[i].level = 128;
+                mixer.0[i].enabled = false;
+                instrument.set_mixer(mixer);
+                instrument.render(parts, &mut buses)?;
+                assert_eq!(instrument.acid_levels[i], 0);
+                assert!(buses[MASTER_BUS].iter().all(|s| s.inner() == 0));
+                assert_eq!(buses[MASTER_BUS], buses[MASTER_BUS + 1]);
+                mixer.0[i].enabled = true;
+                instrument.set_mixer(mixer);
+                instrument.render(parts, &mut buses)?;
+                assert_eq!(instrument.acid_levels[i], 128);
+                assert_eq!(buses[MASTER_BUS], buses[MASTER_BUS + 1]);
+                assert!(buses[MASTER_BUS].iter().any(|s| s.inner() != 0));
+                // A key release ends the source. The filtered echo and plate ring out.
+                parts[i].voice.gate.note = None;
+                let mut stereo_tail = false;
+                for block in 0..35 {
+                    if block == 18 {
+                        instrument.set_half_gain(true)?;
+                    }
+                    instrument.render(parts, &mut buses)?;
+                    let mut hardware = [[0; 2]; 128];
+                    write_master(&buses, instrument.half_gain, &mut hardware);
+                    if block > 18 && hardware.iter().any(|[l, r]| (l - r).abs() > 128) {
+                        stereo_tail = true;
+                    }
+                }
+                assert!(
+                    stereo_tail,
+                    "strip {i} should have a stereo eighth-note repeat"
+                );
+                Ok(())
+            })?;
+        }
         Ok(())
     }
 
@@ -3464,7 +3703,7 @@ mod tests {
             instrument.transport.toggle();
             for block in 0..2713 {
                 // one four-bar loop at 122 BPM
-                instrument.render_with_midi(&tracks, &mut buses, |_, e| {
+                instrument.render_with_midi(&tracks, true, &mut buses, |_, e| {
                     assert!(!matches!(e.message, MidiMessage::Control(20, _)));
                 })?;
                 for (i, reference) in refs.iter_mut().enumerate() {
@@ -3574,7 +3813,10 @@ mod tests {
             emit: &mut Err,
         });
         assert_eq!(mix[0][0].inner() << DRY_HEADROOM, full * 3 / 2);
-        let mut master = Master(MasterBus::new(44_118).expect("audio clock"));
+        let mut echo_storage = vec![0; 17_650];
+        let mut plate_storage = vec![0.0; crate::bass::space::PLATE_SAMPLES];
+        let mut master = Master::new(44_118, &mut echo_storage, &mut plate_storage);
+        let mut right = silent;
         let mut output = silent;
         let returns = [
             I24::new_unchecked(-full * 3 / 4),
@@ -3582,8 +3824,16 @@ mod tests {
         ];
         master.process(&mut ProcessContext {
             frames: 1,
-            inputs: &[&mix[0], &returns[..1], &returns[1..]],
-            outputs: &mut [&mut output],
+            inputs: &[
+                &mix[0],
+                &returns[..1],
+                &returns[1..],
+                &silent,
+                &silent,
+                &silent,
+                &silent,
+            ],
+            outputs: &mut [&mut output, &mut right],
             events: &[],
             emit: &mut Err,
         });

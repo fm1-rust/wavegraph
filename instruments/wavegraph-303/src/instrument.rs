@@ -181,6 +181,15 @@ impl Tb303 {
         }
     }
 
+    /// Use fitted saturation curves for the stock ladder calibration. Both
+    /// oversampling ticks and all four integrators retain their state. Editing
+    /// the stage drive away from 0.75 selects the direct curves automatically.
+    #[must_use]
+    pub fn with_compact_ladder(mut self) -> Self {
+        self.voice.use_compact_ladder();
+        self
+    }
+
     /// Let the oscillator and ladder sleep once the released VCA is below the Q23 floor.
     /// The accent circuit continues to discharge between notes.
     #[must_use]
@@ -232,7 +241,7 @@ impl Tb303 {
         clippy::arithmetic_side_effects,
         reason = "The span offset never exceeds the valid output slice length."
     )]
-    fn render<S: OutputSample>(&mut self, output: &mut [S], start: usize) {
+    fn render<S: OutputSample>(&mut self, output: &mut [S], clean: &mut [S], start: usize) {
         if output.is_empty() {
             return;
         }
@@ -249,13 +258,55 @@ impl Tb303 {
         self.pedal.set_amount(pedal_amount);
         let gain = self.output_gain;
         let voice_sleeping = self.suspend_idle && self.voice.skip_silence(params, output.len());
+        let mut tap = clean.iter_mut();
         if voice_sleeping {
+            for sample in tap {
+                S::write(sample, 0.0);
+            }
             self.render_silence(output);
         } else if let Some(frame) = self.voice.render_with(params, output, |dst, x| {
+            if let Some(sample) = tap.next() {
+                S::write(sample, x * gain);
+            }
             S::write(dst, self.pedal.sample(x) * gain);
         }) {
             self.last_cycle_start = start.checked_add(frame);
         }
+    }
+
+    /// Render the driven voice and its clean, post-VCA signal into equally sized
+    /// Q23 buffers. Both taps share one oscillator, envelope and output gain.
+    /// Events have the same sample offsets as on the normal message inlet.
+    ///
+    /// # Panics
+    /// Panics if the lengths differ or event offsets are outside the block or out of order.
+    pub fn process_with_clean_tap(
+        &mut self,
+        driven: &mut [I24],
+        clean: &mut [I24],
+        events: &[wavegraph_core::Event<Message>],
+    ) {
+        assert_eq!(driven.len(), clean.len());
+        self.process_block(driven, clean, events);
+    }
+
+    fn process_block<S: OutputSample>(
+        &mut self,
+        output: &mut [S],
+        mut clean: &mut [S],
+        events: &[wavegraph_core::Event<Message>],
+    ) {
+        self.last_cycle_start = None;
+        let mut start = 0;
+        for event in events {
+            let span = &mut output[start..event.frame];
+            let (tap, rest) = clean.split_at_mut(span.len().min(clean.len()));
+            self.render(span, tap, start);
+            clean = rest;
+            self.apply(event.message);
+            start = event.frame;
+        }
+        self.render(&mut output[start..], clean, start);
     }
 
     // Keep the released overdrive's tail loop in cached flash. Duplicating its
@@ -284,15 +335,7 @@ impl<S: OutputSample> Process<Message, S> for Tb303 {
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, S>) {
-        let output = &mut cx.outputs[0];
-        self.last_cycle_start = None;
-        let mut start = 0;
-        for event in cx.events {
-            self.render(&mut output[start..event.frame], start);
-            self.apply(event.message);
-            start = event.frame;
-        }
-        self.render(&mut output[start..], start);
+        self.process_block(cx.outputs[0], &mut [], cx.events);
     }
 }
 

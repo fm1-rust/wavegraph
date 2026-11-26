@@ -10,18 +10,30 @@ pub(crate) fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
 
 pub(crate) fn fast_exp2(mut x: f32) -> f32 {
     x = clamp(x, -30.0, 30.0);
-    // This bounded floor is exact on both the host and the FM-1.
-    let fl = micromath::F32Ext::floor(x);
-    let f = x - fl;
-    let p = 1.0 + f * (core::f32::consts::LN_2 + f * (0.2402265 + f * (0.0555041 + f * 0.0096181)));
-    // Every power of two from 2^-30 through 2^30 is a normal f32.
-    // Scaling the polynomial this way gives the same result as ldexpf.
+    // Keep the integer octave for the exponent field as well as the fraction.
     #[allow(
         clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "The biased exponent is an integer in 97..=157 for finite inputs."
+        reason = "The clamped exponent is in -30..=30"
     )]
-    let exponent = (fl + 127.0) as u32;
+    let truncated = x as i32;
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "The integer octave is exact in f32"
+    )]
+    let integral = truncated as f32;
+    let below = x < integral;
+    let f = if below {
+        x - (integral - 1.0)
+    } else {
+        x - integral
+    };
+    let p = 1.0 + f * (core::f32::consts::LN_2 + f * (0.2402265 + f * (0.0555041 + f * 0.0096181)));
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::arithmetic_side_effects,
+        reason = "The biased integer octave is in 97..=157"
+    )]
+    let exponent = (truncated - i32::from(below) + 127) as u32;
     p * f32::from_bits(exponent << 23)
 }
 
@@ -37,11 +49,23 @@ pub(crate) fn filter_tan(x: f32) -> f32 {
     } else {
         x
     };
+    let (p, q) = tan_terms(y);
+    let t = p / q;
+    if reciprocal { 1.0 / t } else { t }
+}
+
+fn tan_terms(y: f32) -> (f32, f32) {
     let z = y * y;
     let p = 135_135.0 + z * (-17_325.0 + z * (378.0 - z));
     let q = 135_135.0 + z * (-62_370.0 + z * (3_150.0 - 28.0 * z));
-    let t = y * p / q;
-    if reciprocal { 1.0 / t } else { t }
+    (y * p, q)
+}
+
+// The ladder needs tan(x)/(1+tan(x)). Substitute the numerator and denominator
+// directly: the bounded coefficient stays smooth throughout 0..0.45π.
+pub(crate) fn ladder_coefficient(x: f32) -> f32 {
+    let (p, q) = tan_terms(x);
+    p / (p + q)
 }
 
 pub(crate) fn fast_tanh(x: f32) -> f32 {
@@ -177,8 +201,10 @@ mod tests {
             let exact = x.tan();
             let approx = filter_tan(x);
             let reference = exact / (1.0 + exact);
-            let error = (approx / (1.0 + approx) - reference).abs();
-            assert!(error <= 2e-7 && error / reference <= 4e-7, "x = {x}");
+            for coefficient in [approx / (1.0 + approx), super::ladder_coefficient(x)] {
+                let error = (coefficient - reference).abs();
+                assert!(error <= 2e-7 && error / reference <= 4e-7, "x = {x}");
+            }
         }
     }
 }

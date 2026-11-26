@@ -314,7 +314,7 @@ mod app {
         control::{Controller, EditQueue, Revision},
         mailbox,
     };
-    use wavegraph_fx::{ChannelMixer, Delay, MasterBus, REVERB_SAMPLES, Reverb};
+    use wavegraph_fx::{ChannelMixer, Delay, REVERB_SAMPLES, Reverb};
     use wavegraph_monosynth::Tuning;
     use wavegraph_organ::Organ;
     use wavegraph_sample::I24;
@@ -348,10 +348,32 @@ mod app {
     const LONG_ECHO: usize = (RATE_HZ as usize * 8).div_ceil(16) + 1;
     const _: () = assert!((LONG_ECHO - 1) * 16 >= RATE_HZ as usize * 8);
 
+    // Hardware retention tests cover the SRAM between the loader and plug-in slots.
+    // Only audio history lives there. The ownership guard stays in startup-cleared BSS.
+    struct EchoHistory {
+        mid: [u8; LONG_ECHO],
+        long: [u8; LONG_ECHO],
+        pump: [i16; crate::bass::space::echo_samples(RATE_HZ)],
+    }
+
+    fn take_echo_history() -> &'static mut EchoHistory {
+        static OWNER: StaticCell<()> = StaticCell::new();
+        #[unsafe(link_section = ".wavegraph.echo")]
+        static mut HISTORY: core::mem::MaybeUninit<EchoHistory> = core::mem::MaybeUninit::uninit();
+        OWNER.init(());
+        let ptr = (&raw mut HISTORY).cast::<EchoHistory>();
+        // SAFETY: the linker reserves the complete bank, OWNER grants one borrow,
+        // and all-zero bytes initialize the three integer arrays after a warm boot.
+        unsafe {
+            ptr.write_bytes(0, 1);
+            &mut *ptr
+        }
+    }
+
     pub struct ScopeBlock {
         samples: Option<[i32; OUTPUT_FRAMES]>,
         bass_cycle: Option<usize>,
-        labels: Labels,
+        labels: Option<Labels>,
         gap: bool,
     }
 
@@ -389,13 +411,15 @@ mod app {
             ConstStaticCell::new([0; REVERB_SAMPLES]);
         static DELAY_STORAGE: ConstStaticCell<[i16; SHORT_ECHO]> =
             ConstStaticCell::new([0; SHORT_ECHO]);
-        static MID: ConstStaticCell<[u8; LONG_ECHO]> = ConstStaticCell::new([0; LONG_ECHO]);
-        static LONG: ConstStaticCell<[u8; LONG_ECHO]> = ConstStaticCell::new([0; LONG_ECHO]);
+        use crate::bass::space::PLATE_SAMPLES;
+        static PLATE: ConstStaticCell<[f32; PLATE_SAMPLES]> =
+            ConstStaticCell::new([0.0; PLATE_SAMPLES]);
+        let history = take_echo_history();
         type Effects = (
             FxMixer,
             FxNode<Reverb<'static>>,
             FxNode<Delay<'static>>,
-            Master,
+            Master<'static>,
         );
         static EFFECTS: StaticCell<Effects> = StaticCell::new();
         static INSERTS: StaticCell<ChannelInserts> = StaticCell::new();
@@ -423,10 +447,10 @@ mod app {
                 FxNode(Reverb::new(REVERB_STORAGE.take())),
                 FxNode(
                     Delay::with_rate(DELAY_STORAGE.take(), FRAME_RATE)
-                        .and_then(|d| d.with_long_taps(MID.take(), LONG.take()))
+                        .and_then(|d| d.with_long_taps(&mut history.mid, &mut history.long))
                         .expect("echo history"),
                 ),
-                Master(MasterBus::new(RATE_HZ).expect("audio sample clock")),
+                Master::new(RATE_HZ, &mut history.pump, PLATE.take()),
             )
         });
         let inserts = INSERTS.init_with(|| ChannelInserts::new(RATE_HZ));
@@ -1349,7 +1373,7 @@ mod app {
                     self.scope_updates.publish(
                         (block.settings_revision, block.half_gain),
                         visible,
-                        |gap| {
+                        |gap, labels_changed| {
                             if self.tap.is_full()
                                 || (visible && settings.source_tap() && !block.capture_source)
                             {
@@ -1364,7 +1388,8 @@ mod app {
                                             core::array::from_fn(|i| output.block()[i][0])
                                         }
                                     }),
-                                    labels: settings.labels(block.half_gain),
+                                    labels: labels_changed
+                                        .then(|| settings.labels(block.half_gain)),
                                     bass_cycle: block.bass_cycle,
                                     gap,
                                 })
@@ -1470,15 +1495,23 @@ mod app {
         type SpawnInput = ();
         async fn exec(&mut self, (): ()) {
             while let Ok(block) = self.blocks.recv().await {
-                let labels = block.labels;
-                let previous = self.previous.replace(labels);
-                let changed = previous != Some(labels);
-                let source_changed = previous.is_none_or(|old| {
-                    old.view != labels.view
-                        || old.channel != labels.channel
-                        || old.focus != labels.focus
-                        || old.voice_tap != labels.voice_tap
-                });
+                let mut changed = false;
+                let mut source_changed = false;
+                if let Some(labels) = block.labels {
+                    let previous = self.previous.as_ref();
+                    changed = previous != Some(&labels);
+                    source_changed = previous.is_none_or(|old| {
+                        old.view != labels.view
+                            || old.channel != labels.channel
+                            || old.focus != labels.focus
+                            || old.voice_tap != labels.voice_tap
+                    });
+                    self.previous = Some(labels);
+                }
+                let labels = self
+                    .previous
+                    .as_ref()
+                    .expect("first scope block carries labels");
                 let voice_scope =
                     matches!(labels.view, View::Scope | View::SampleEdit) && labels.voice_tap;
                 let bass_scope = voice_scope && labels.focus == Part::Bass;
@@ -1508,7 +1541,7 @@ mod app {
                             frame.trace = t;
                         }
                         if changed {
-                            frame.labels = labels;
+                            frame.labels = *labels;
                         }
                         changed || new_trace
                     });

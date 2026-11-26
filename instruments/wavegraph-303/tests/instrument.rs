@@ -285,3 +285,76 @@ fn modulation_follows_automation_and_retargeting_restores_the_base() {
     assert!(actual.iter().any(|&s| s != 0.0));
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn clean_tap_matches_a_bypassed_voice_and_preserves_the_driven_outlet() {
+    let new = || {
+        Tb303::new(RATE)
+            .with_output_gain(0.0625)
+            .with_idle_suspension()
+    };
+    let (mut split, mut pedal, mut dry) = (new(), new(), new());
+    let drive = at(5, Message::PedalDrive(2.0 / 3.0));
+    for block in 0..240 {
+        let changes = match block {
+            0 => vec![at(11, note(41, true, false))],
+            31 => vec![at(7, note(53, false, true)), at(95, Message::NoteOff(53))],
+            220 => vec![at(17, note(44, true, false))],
+            _ => vec![],
+        };
+        let mut driven_events = changes.clone();
+        if block == 0 {
+            driven_events.insert(0, drive);
+        }
+        let mut expected = [[I24::default(); 128]; 2];
+        for (out, (instrument, events)) in expected
+            .iter_mut()
+            .zip([(&mut pedal, &driven_events), (&mut dry, &changes)])
+        {
+            instrument.process(&mut ProcessContext {
+                frames: out.len(),
+                inputs: &[],
+                outputs: &mut [&mut out[..]],
+                events,
+                emit: &mut Err,
+            });
+        }
+        let [mut driven, mut clean] = [[I24::default(); 128]; 2];
+        split.process_with_clean_tap(&mut driven, &mut clean, &driven_events);
+        assert_eq!([driven, clean], expected);
+        assert_eq!(split.last_cycle_start(), pedal.last_cycle_start());
+    }
+}
+
+#[test]
+fn a_size_limited_plate_matches_the_full_tank_across_ring_wraps() {
+    use wavegraph_303::{Reverb, StereoFrame};
+
+    let rate = 8823.6;
+    let mut full_memory = vec![0.0; Reverb::FRAMES];
+    let mut small_memory = vec![0.0; 7424];
+    let mut full = Reverb::new(rate, &mut full_memory).expect("reference tank");
+    let mut small = Reverb::with_max_size(rate, &mut small_memory, 0.38).expect("fixed plate");
+    full.set_size(0.38);
+    small.set_size(1.0); // Clamped to the actual allocation.
+    let mut peak = 0.0_f32;
+    for block in 0..1000 {
+        let mut input = [0.0; 17];
+        if block == 0 || block == 400 {
+            input[0] = 0.75;
+        }
+        let mut a = [StereoFrame::default(); 17];
+        let mut b = a;
+        full.process_add(&input, &mut a)
+            .expect("one reference block");
+        small
+            .process_add(&input, &mut b)
+            .expect("one compact block");
+        for (reference, compact) in a.iter().zip(b) {
+            assert_eq!(reference.left.to_bits(), compact.left.to_bits());
+            assert_eq!(reference.right.to_bits(), compact.right.to_bits());
+            peak = peak.max(compact.left.abs()).max(compact.right.abs());
+        }
+    }
+    assert!(peak > 0.01);
+}

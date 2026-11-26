@@ -260,12 +260,61 @@ instead performs up to ten rational nonlinear evaluations per output sample
 inside its oversampled ladder. This explains differing per-voice costs
 without implying that OD itself must be expensive.
 
-### Next exact opportunities, not yet implemented
+### Follow-up on the original profiling
 
-Measure cache hit rates before adding a base-cutoff logarithm cache, a fixed
-pitch-increment cache, or an input-gain exponential cache. Identical clamped
-ladder cutoff targets could also skip repeated prewarps, provided feedback is
-still updated when resonance changes. Retain the current arithmetic and
-control boundaries and validate forced recomputation against cached output.
-The optional native Super Saw ramp kernel is another measured-build candidate;
-its timing and emulator instruction coverage should be checked separately.
+The 303 now caches the base-cutoff logarithm, fixed pitch increment and oscillator
+gain across spans. Repeated clamped cutoff targets reuse the pole coefficients;
+resonance still updates the feedback. The voice tests force fresh calculations
+through notes, slides, parameter edits and transport resets for comparison.
+
+## Pump Panel stereo return
+
+The 303 supplies clean and driven taps from one voice. The FM-1 mixes the
+parallel bass at full rate and runs one shared stereo return at one fifth
+of the audio rate. All strips feed the same tank so a second Pump Panel
+instance adds no delay storage. The fixed-size plate uses 7,424 floats.
+Both master channels share one dynamics detector and limiter gain.
+
+The FM-1 uses `Tb303::with_compact_ladder()` for the stock 0.75 stage drive.
+Its input and first-stage clippers share a static transfer curve. The other
+three integrators use a fitted curve over their normal range with direct
+evaluation outside it. All four filter states still advance twice per
+sample. Both the cutoff update rate and the pedal's 64-frame control ramp
+are unchanged. On a four-bar accented square phrase with cutoff sweeps at
+144 BPM, the stereo difference from the earlier square build measured
+−83.3 dB RMS relative to that build. This compares the isolated 303 and its
+returns including the tail. Drum stems and phaser spans have sample-for-sample
+tests against the original frame methods.
+
+On preset recall the renderer converts the edited bass knobs and initializes
+replacement inserts in their slots. Unchanged blocks reuse the retained
+control revision. The scope only publishes new labels after a settings or
+gain change. The echo and plate continue to ring when a channel leaves the
+preset. Settled tail blocks can advance the echo and plate clocks without
+running the input filters at audio rate.
+
+### Preset switching on base `45ea84320`
+
+Each pair below ran the previously delivered square firmware and the new
+`fm1-audio/dsp` firmware in the strict emulator with 32-instruction stepping.
+PLAY starts the four-track factory sequence. The bank replay sweeps the seven
+presets with live controls. The rapid replay turns ALGORITHM through 32 single
+detents, 135 ms apart, reversing direction after every eight. Two further runs
+shift those detents against the same playing sequence.
+
+| Replay | Duration | Previous minimum ready margin | New minimum ready margin | New worst worker |
+| --- | ---: | ---: | ---: | ---: |
+| Factory | 7 s | 369.2 µs | 592.4 µs | 2,125.5 µs |
+| Pump Panel on channel 1 | 7 s | 69.7 µs | 292.8 µs | 2,423.8 µs |
+| Pump Panel on both channels, with recalls | 8.2 s | 87.8 µs | 300.3 µs | 2,405.8 µs |
+| Preset bank and live controls | 22 s | -12.2 µs | 199.2 µs | 2,460.8 µs |
+| Rapid ALGORITHM reversals | 10 s | 14.7 µs | 227.3 µs | 2,472.5 µs |
+| Reversals shifted by 43 ms | 10 s | -53.2 µs | 55.2 µs | 2,631.6 µs |
+| Reversals shifted by 89 ms | 10 s | 0.0 µs | 195.4 µs | 2,506.0 µs |
+
+Ready margin measures how early the completed job reached the scheduled
+refill target. Each 128-frame half is about 2,901 µs. The old image produced
+two silent halves and discarded one job on the 43 ms offset. All seven new-image
+runs recorded zero silent replacements, discarded jobs, service overruns
+and dropped emulator CPU1 ticks. Physical switch timing still requires
+on-device observation. The linked stack gap is 3,552 bytes.

@@ -107,10 +107,17 @@ fn capture<const CACHED: bool>() -> Result<Capture, Error> {
             rack.set_fx(fx);
             rack.beat_steps = nav.beat_steps;
             rack.slicer_steps = nav.slicer_steps;
+            let settings_changed = !CACHED
+                || rack.previous.as_ref() != Some(&tracks)
+                || rack.previous_mixer != Some(mixer)
+                || rack.previous_fx != Some(fx);
             captured.pcm.extend(
-                rack.render_controlled::<128, CACHED>(&tracks, &mut buses, |c, e| {
-                    captured.midi.push((block, c, e))
-                })?
+                rack.render_controlled::<128, CACHED>(
+                    &tracks,
+                    settings_changed,
+                    &mut buses,
+                    |c, e| captured.midi.push((block, c, e)),
+                )?
                 .iter()
                 .map(|s| s.inner()),
             );

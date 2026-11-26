@@ -192,6 +192,13 @@ impl<'a> Delay<'a> {
         }
     }
 
+    // SAFETY: the FM-1 linker and startup place this DSP loop in executable SRAM.
+    #[cfg_attr(
+        all(target_os = "none", feature = "fm1-ram-code"),
+        allow(unsafe_code),
+        unsafe(link_section = ".data.wavegraph_audio"),
+        inline(never)
+    )]
     fn render(&mut self, input: &[I24], output: &mut [I24]) {
         if self.tail == 0 && input.iter().all(|s| s.inner() == 0) {
             output.fill(I24::default());

@@ -27,10 +27,11 @@ impl ScopeUpdates {
         &mut self,
         labels: (u32, bool),
         visible: bool,
-        send: impl FnOnce(bool) -> bool,
+        send: impl FnOnce(bool, bool) -> bool,
     ) {
-        if visible || self.last_labels != Some(labels) {
-            let sent = send(self.gap);
+        let changed = self.last_labels != Some(labels);
+        if visible || changed {
+            let sent = send(self.gap, changed);
             self.gap = !visible || !sent;
             if sent {
                 self.last_labels = Some(labels);
@@ -234,21 +235,21 @@ mod tests {
         let mut updates = ScopeUpdates::default();
         let mut offer = |revision, gain, visible, room| {
             let mut offered = None;
-            updates.publish((revision, gain), visible, |gap| {
-                offered = Some(gap);
+            updates.publish((revision, gain), visible, |gap, changed| {
+                offered = Some((gap, changed));
                 room
             });
             offered
         };
-        assert_eq!(offer(0, false, true, true), Some(false));
-        assert_eq!(offer(1, false, false, false), Some(false)); // queue full on exit
-        assert_eq!(offer(1, false, false, true), Some(true)); // retry
+        assert_eq!(offer(0, false, true, true), Some((false, true)));
+        assert_eq!(offer(1, false, false, false), Some((false, true))); // queue full on exit
+        assert_eq!(offer(1, false, false, true), Some((true, true))); // retry
         assert_eq!(offer(1, false, false, true), None);
-        assert_eq!(offer(1, true, false, true), Some(true)); // graph edit only
-        assert_eq!(offer(2, true, true, true), Some(true)); // scope reopens
-        assert_eq!(offer(2, true, true, true), Some(false));
-        assert_eq!(offer(3, true, false, false), Some(false));
-        assert_eq!(offer(4, true, true, true), Some(true)); // hidden page never delivered
+        assert_eq!(offer(1, true, false, true), Some((true, true))); // graph edit only
+        assert_eq!(offer(2, true, true, true), Some((true, true))); // scope reopens
+        assert_eq!(offer(2, true, true, true), Some((false, false)));
+        assert_eq!(offer(3, true, false, false), Some((false, true)));
+        assert_eq!(offer(4, true, true, true), Some((true, true))); // hidden page never delivered
     }
 
     #[test]

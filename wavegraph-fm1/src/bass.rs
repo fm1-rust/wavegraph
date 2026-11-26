@@ -5,6 +5,7 @@ use wavegraph_303::{Message, VoiceParams, Waveform};
 
 pub(super) mod envelope;
 pub(super) mod presets;
+pub(super) mod space;
 
 /// A selected faceplate control. The waveform switch is separate from the dials.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,16 +149,21 @@ impl Knob {
         })
     }
 
-    fn message(self, params: VoiceParams, pedal_drive: f32) -> Message {
+    fn message(self, controls: &Controls) -> Message {
+        let i = self as usize;
+        if let Some(value) = controls.midi[i] {
+            return midi_parameter(CONTROLLERS[i], value).expect("each panel knob has a MIDI CC");
+        }
+        let value = f32::from(controls.values[i]);
         match self {
-            Self::Cutoff => Message::CutoffHz(params.cutoff_hz),
-            Self::Resonance => Message::Resonance(params.resonance),
-            Self::EnvMod => Message::EnvOctaves(params.env_oct),
-            Self::Decay => Message::DecaySeconds(params.decay_s),
-            Self::Tuning => Message::TuningSemitones(params.tuning_st),
-            Self::Attack => Message::AttackSeconds(params.attack_s),
-            Self::Accent => Message::Accent(params.accent),
-            Self::Overdrive => Message::PedalDrive(pedal_drive),
+            Self::Cutoff => Message::CutoffHz(f32::from(controls.cutoff_hz())),
+            Self::Resonance => Message::Resonance(value / 100.0),
+            Self::EnvMod => Message::EnvOctaves(value / 12.0),
+            Self::Decay => Message::DecaySeconds(value / 100.0),
+            Self::Tuning => Message::TuningSemitones(f32::from(controls.tuning_cents()) / 100.0),
+            Self::Attack => Message::AttackSeconds(f32::from(controls.attack_us()) / 1_000_000.0),
+            Self::Accent => Message::Accent(value / 100.0),
+            Self::Overdrive => Message::PedalDrive(value / 36.0),
         }
     }
 
@@ -215,6 +221,15 @@ pub(super) struct Controls {
 }
 
 impl Controls {
+    const VOICE_KNOBS: [Knob; 7] = [
+        Knob::Cutoff,
+        Knob::Resonance,
+        Knob::EnvMod,
+        Knob::Decay,
+        Knob::Tuning,
+        Knob::Attack,
+        Knob::Accent,
+    ];
     pub(super) const INITIAL: Self = Self {
         // 500 Hz, 50% resonance, 24 semitones, 600 ms, concert pitch, 1.5 ms, 50% accent, OD off.
         values: [18, 50, 24, 60, 120, 5, 50, 0],
@@ -239,19 +254,7 @@ impl Controls {
     /// Hand the three automated controls back to their retained panel settings.
     #[cfg(test)]
     pub(super) fn automation_reset(self) -> [Message; 3] {
-        let params = self.voice_params();
-        [
-            Message::CutoffHz(params.cutoff_hz),
-            Message::Resonance(params.resonance),
-            Message::PedalDrive(self.pedal_amount()),
-        ]
-    }
-
-    fn pedal_amount(self) -> f32 {
-        self.midi[Knob::Overdrive as usize].map_or_else(
-            || f32::from(self.detent(Knob::Overdrive)) / 36.0,
-            |value| f32::from(value) / 127.0,
-        )
+        [Knob::Cutoff, Knob::Resonance, Knob::Overdrive].map(|knob| knob.message(&self))
     }
 
     #[allow(
@@ -322,7 +325,7 @@ impl Controls {
                 Waveform::Square
             }));
         }
-        Some(Knob::from_cc(cc)?.message(self.voice_params(), self.pedal_amount()))
+        Some(Knob::from_cc(cc)?.message(&self))
     }
 
     pub(super) fn detent(self, knob: Knob) -> u8 {
@@ -381,29 +384,17 @@ impl Controls {
     }
 
     fn voice_params(self) -> VoiceParams {
-        let value = |knob: Knob| f32::from(self.values[knob as usize]);
-        let mut params = VoiceParams {
-            cutoff_hz: f32::from(self.cutoff_hz()),
-            resonance: value(Knob::Resonance) / 100.0,
-            env_oct: value(Knob::EnvMod) / 12.0,
-            decay_s: value(Knob::Decay) / 100.0,
-            tuning_st: f32::from(self.tuning_cents()) / 100.0,
-            attack_s: f32::from(self.attack_us()) / 1_000_000.0,
-            accent: value(Knob::Accent) / 100.0,
-            ..VoiceParams::default()
-        };
-        for (cc, value) in CONTROLLERS.into_iter().zip(self.midi) {
-            if let Some(value) = value {
-                match midi_parameter(cc, value) {
-                    Some(Message::CutoffHz(v)) => params.cutoff_hz = v,
-                    Some(Message::Resonance(v)) => params.resonance = v,
-                    Some(Message::EnvOctaves(v)) => params.env_oct = v,
-                    Some(Message::DecaySeconds(v)) => params.decay_s = v,
-                    Some(Message::TuningSemitones(v)) => params.tuning_st = v,
-                    Some(Message::AttackSeconds(v)) => params.attack_s = v,
-                    Some(Message::Accent(v)) => params.accent = v,
-                    _ => (),
-                }
+        let mut params = VoiceParams::default();
+        for knob in Self::VOICE_KNOBS {
+            match knob.message(&self) {
+                Message::CutoffHz(v) => params.cutoff_hz = v,
+                Message::Resonance(v) => params.resonance = v,
+                Message::EnvOctaves(v) => params.env_oct = v,
+                Message::DecaySeconds(v) => params.decay_s = v,
+                Message::TuningSemitones(v) => params.tuning_st = v,
+                Message::AttackSeconds(v) => params.attack_s = v,
+                Message::Accent(v) => params.accent = v,
+                _ => unreachable!("voice calibration knob"),
             }
         }
         params
@@ -412,13 +403,12 @@ impl Controls {
     pub(super) fn events(self, previous: Self, voice: Voice, old_voice: Voice) -> EventBatch {
         let mut batch = EventBatch::new();
         if self.values != previous.values || self.midi != previous.midi {
-            let params = self.voice_params();
             for knob in CONTROLLERS.into_iter().filter_map(Knob::from_cc) {
                 let i = knob as usize;
                 if self.values[i] == previous.values[i] && self.midi[i] == previous.midi[i] {
                     continue;
                 }
-                let message = knob.message(params, self.pedal_amount());
+                let message = knob.message(&self);
                 batch.push(at(message)).expect("eight panel controls");
             }
         }

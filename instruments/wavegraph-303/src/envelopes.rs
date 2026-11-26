@@ -23,6 +23,7 @@ pub struct Envelopes {
     sample_rate: f32,
     hold: f32,
     release: f32,
+    accented_decay: f32,
     accent_charge: f32,
     accent_glide: f32,
     filter: f32,
@@ -83,6 +84,7 @@ impl Envelopes {
             sample_rate,
             hold: tau_to_coef(1.34, sample_rate),
             release: tau_to_coef(0.004, sample_rate),
+            accented_decay: tau_to_coef(0.2 / 4.6, sample_rate),
             accent_charge: tau_to_coef(0.012, sample_rate),
             accent_glide: tau_to_coef(0.002, sample_rate),
             filter: 0.0,
@@ -157,12 +159,14 @@ impl Envelopes {
     }
 
     pub(super) fn coefficients(&mut self, p: &VoiceParams) -> Coefficients {
-        let decay = if self.accent { 0.2 } else { p.decay_s };
         let sample_rate = self.sample_rate;
         Coefficients {
-            filter_decay: self
-                .filter_decay_coefficient
-                .get(decay, || tau_to_coef(decay / 4.6, sample_rate)),
+            filter_decay: if self.accent {
+                self.accented_decay
+            } else {
+                self.filter_decay_coefficient
+                    .get(p.decay_s, || tau_to_coef(p.decay_s / 4.6, sample_rate))
+            },
             attack: self
                 .attack_coefficient
                 .get(p.attack_s, || tau_to_coef(p.attack_s, sample_rate)),

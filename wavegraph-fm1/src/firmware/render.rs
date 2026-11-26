@@ -2,7 +2,7 @@
 use super::{Motion, Performance, Settings};
 use crate::{
     bumper::Cue,
-    instrument::{BUS_COUNT, Instrument, STRIP_BUS, mix_master},
+    instrument::{BUS_COUNT, Instrument, STRIP_BUS, write_master},
     midi_out::Batch,
     mixer::Meter,
     panel::{Assignment, CHANNELS, Channel, Navigation, View},
@@ -120,7 +120,8 @@ impl Renderer {
                 .set_half_gain(block.half_gain)
                 .expect("routes checked at boot");
         }
-        if self.applied_revision != Some(block.settings_revision) {
+        let settings_changed = self.applied_revision != Some(block.settings_revision);
+        if settings_changed {
             // A snapshot revision covers the retained settings and arp chords.
             // Recovery advances the player but does not modify these controls.
             Self::apply_settings(graph, block);
@@ -131,11 +132,16 @@ impl Renderer {
             block.midi.begin(session);
         }
         graph
-            .render_with_midi(&settings.tracks, block.buses, |channel, event| {
-                if block.usb_session.is_some() {
-                    block.midi.push(channel, event);
-                }
-            })
+            .render_with_midi(
+                &settings.tracks,
+                settings_changed,
+                block.buses,
+                |channel, event| {
+                    if block.usb_session.is_some() {
+                        block.midi.push(channel, event);
+                    }
+                },
+            )
             .expect("fixed patch");
         let i = nav.focus.index();
         if block.capture_source {
@@ -143,17 +149,21 @@ impl Renderer {
                 .copy_scope(nav.part(), nav.view, block.buses, &mut block.source);
         }
         block.bass_cycle = graph.bass_cycles[i];
-        for i in 0..CHANNELS {
-            if self.assignments[i] != nav.assignments[i] {
-                self.meter.clear(i);
+        if settings_changed {
+            for i in 0..CHANNELS {
+                if self.assignments[i] != nav.assignments[i] {
+                    self.meter.clear(i);
+                }
             }
+            self.assignments = nav.assignments;
         }
-        self.assignments = nav.assignments;
         let peaks = if nav.view.is_mixer() {
             self.meter
                 .update(settings.mixer, &block.buses[STRIP_BUS..][..CHANNELS])
         } else {
-            self.meter = Meter::default();
+            if settings_changed {
+                self.meter = Meter::default();
+            }
             [0; CHANNELS]
         };
         block.motion = Motion {
@@ -206,7 +216,7 @@ impl Settings {
 
 impl wavegraph_fm1_core::AudioBlock for RenderBlock {
     fn write(&self, out: &mut fm1_audio::OutputBlock) {
-        mix_master(self.buses, self.half_gain, out);
+        write_master(self.buses, self.half_gain, out);
     }
 }
 
