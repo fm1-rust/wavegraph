@@ -46,3 +46,4 @@ for text, w, h, caps, split in [
     Path(text + ".raw").write_bytes(pack(raster(text,w,h,caps,split)))
 
 Path("badge.raw").write_bytes(b"".join(pack(raster(c,24,32,23)) for c in "1234"))
+Path("Bass-Line.raw").write_bytes(pack(raster("Bass Line", 90, 18, 14)))

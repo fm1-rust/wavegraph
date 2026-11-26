@@ -35,9 +35,9 @@ recording level. The Pump Panel echo alternates between left and right.
 USB audio runs from the FM-1 to the computer. If the host falls behind, the
 capture FIFO drops excess frames and local playback continues.
 
-| Monosynth | 303 direct knobs | 303 editing OD |
+| Monosynth | 303 preset | 303 editing Muffler |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with OD highlighted in oxide red beside the readout](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![Pump Panel with the six original dials above Attack, OD and Muffler](assets/tb-303.png) | ![Muffler highlighted in oxide red with its slider in position 2](assets/tb-303-voice.png) |
 
 ## Swap the instrument on one channel
 
@@ -198,7 +198,7 @@ See Robin Whittle’s [Devil Fish manual][devil-fish], pp. 4 and 6.
 
 To hear the **Muffler**, start on the 303 scope with no control selected.
 Turn SELECT two clicks left, then turn ALGORITHM through **OFF**, **1** and **2**.
-The **MUF** readout shows the setting on this channel. Try an accented square
+The ivory slider shows the setting on this channel. Try an accented square
 phrase with OD down first. Position 1 rounds the loudest peaks. Position 2
 catches more of the note and adds a firmer buzz. Both carry the bass around
 the clipper. Raise OD to drive the pedal with that sound. On Pump Panel the
@@ -235,13 +235,15 @@ post-VCA amount.
 Play the piano roll or mute that channel's sequence to hear the stored
 settings directly; the preset does not replace the sequence with the record's riff.
 
-The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
-Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
-[Roland TB-03][tb03]. The numbered encoders map to the four lighter graphite
-knobs inside the red outline. Turn SELECT clockwise to select Attack, OD,
-Muffler, the **SAW/SQR** slide switch, then the six dials from Tuning to Accent. One click
-counterclockwise from idle goes straight to the waveform switch. Turn ALGORITHM
-left for saw or right for square; the actuator stops at either end.
+The first row of dials follows the [Roland TB-03][tb03] order from Tuning
+through Cutoff, Resonance, Env Mod, Decay and Accent. The four numbered
+encoders map to the lighter knobs inside the red outline. Attack, OD and the
+three-position Muffler switch sit on the row below, alongside the **Bass Line**
+wordmark. The live scope uses the lower 240 × 144 pixels.
+
+From idle, turn SELECT clockwise to reach Attack, OD, Muffler, the **SAW/SQR**
+slide switch and then the six original dials. One click counterclockwise
+selects waveform. Turn ALGORITHM left for saw or right for square.
 
 The selected control gets an oxide-red rectangle and HOME lights up.
 ALGORITHM adjusts that control, and the display beside the logo shows its value

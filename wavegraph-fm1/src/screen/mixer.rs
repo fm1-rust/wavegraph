@@ -6,6 +6,7 @@ use crate::{
     firmware::Labels,
     mixer::{MAX_LEVEL, SEGMENTS, Strip, UNITY},
     panel::{CHANNELS, View},
+    scope::Window,
 };
 use core::{convert::Infallible, str};
 use fm1_graphics::embedded_graphics::{
@@ -279,7 +280,7 @@ impl<'a> Band<'a> {
         }
     }
 
-    fn panel_text(
+    pub(super) fn panel_text(
         &mut self,
         name: &str,
         mut point: Point,
@@ -531,6 +532,14 @@ impl<'a> Band<'a> {
         )
         .draw(self)
         .expect("infallible strip");
+    }
+
+    /// Composite the picker over an already shaded cell drawn in local coordinates.
+    pub(super) fn overlay_at(&mut self, list: &Selector, x: u16, y: u16) {
+        list.overlay(
+            Window::new(x.into(), y.into(), self.width.into(), self.height.into()),
+            self.pixels,
+        );
     }
 
     pub(super) fn compose(&mut self, list: &Selector) {

@@ -93,7 +93,7 @@ pub(super) enum Knob {
 }
 
 impl Knob {
-    /// Left to right along the six-knob row, then the two dials beside the wordmark.
+    /// The six original dials, then Attack and OD on the row below.
     pub(super) const PANEL: [Self; 8] = [
         Self::Tuning,
         Self::Cutoff,

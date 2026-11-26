@@ -34,6 +34,7 @@ pub(super) const HEADING: Mask = mask!(7, 13, "heading");
 pub(super) const GRID: Mask = mask!(12, 16, "grid");
 pub(super) const BADGE: Mask = mask!(24, 32, "badge");
 pub(super) const BASS: Mask = mask!(78, 20, "TB-303");
+pub(super) const BASS_LINE: Mask = mask!(90, 18, "Bass-Line");
 pub(super) const TR808: Mask = mask!(100, 32, "TR-808");
 pub(super) const TR909: Mask = mask!(112, 32, "TR-909");
 pub(super) const HOOVER: Mask = mask!(16, 32, "hoover");
