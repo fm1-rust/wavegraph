@@ -381,6 +381,7 @@ mod app {
         bumper: Bumper,
         leds: (Leds, [bool; CHANNELS]),
         frame: Frame,
+        battery_low: bool,
         overloads: Overloads,
         timing: Timing,
         stream: Option<Playback>,
@@ -534,6 +535,8 @@ mod app {
         // CPU0 tasks each own a sender. One pending wake covers every change
         // until Draw reads the next snapshot. CPU1 only uses the mailboxes.
         let (draw_wake, updates) = make_channel!((), 1);
+        let mut controls = board.panel.into_touch_controls();
+        controls.enable_battery();
         let mut leds = Leds::default();
         leds.set_play(PlayLedState::Red);
         leds.set(Button::Sel, Settings::INITIAL.sel_lamp());
@@ -550,6 +553,7 @@ mod app {
                     trace: FLAT,
                     labels: Settings::INITIAL.labels(false),
                 },
+                battery_low: false,
                 overloads: Overloads::default(),
                 timing: Timing {
                     boot,
@@ -587,7 +591,7 @@ mod app {
                 panel: Panel {
                     draw_wake: draw_wake.clone(),
                     timer,
-                    controls: board.panel.into_touch_controls().into(),
+                    controls: controls.into(),
                     piano: PIANO.take(),
                     nav: Navigation::INITIAL,
                     seq: Sequencer::INITIAL,
@@ -643,7 +647,7 @@ mod app {
 
     // The upper seven keys share an LED line with the velocity probe. End its
     // 100 µs column slot on time even when the audio graph is rendering.
-    #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing])]
+    #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing, battery_low])]
     struct Panel {
         draw_wake: Sender<'static, (), 1>,
         timer: Timer5,
@@ -670,6 +674,14 @@ mod app {
             let Some((scan, touch)) = self.controls.scan(&self.leds) else {
                 return;
             };
+            let low = scan.battery_low() == Some(true);
+            if self
+                .shared()
+                .battery_low
+                .lock(|old| core::mem::replace(old, low) != low)
+            {
+                let _ = self.draw_wake.try_send(());
+            }
             // Start with the UI button lamps each sweep, then add the physical key lamps.
             let (base, slice_keys) = self.shared().leds.lock(|leds| *leds);
             self.leds = base;
@@ -1732,7 +1744,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing])]
+    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing, battery_low])]
     struct Draw {
         updates: Receiver<'static, (), 1>,
         port: Option<Cpu0<DisplayPort>>,
@@ -1759,6 +1771,8 @@ mod app {
                 // pending for the next pass, even if the final SPI transfer is still in flight.
                 let _ = self.updates.try_recv();
                 let at = Clock::now();
+                let low = self.shared().battery_low.lock(|low| *low);
+                screen.set_battery_low(low);
                 let timing = self.shared().timing.lock(|t| *t);
                 let interval = if timing.visible || timing.starving || timing.boot != 1 {
                     if screen
@@ -1789,6 +1803,13 @@ mod app {
                         || severity.is_some();
                     animated.then_some(20)
                 };
+                if low
+                    && Screen::paint_battery(&mut lcd, &mut self.clock)
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
                 if let Some(ms) = interval {
                     let deadline = pin!(Clock::delay_until(at + ms.millis()));
                     let update = pin!(self.updates.recv());

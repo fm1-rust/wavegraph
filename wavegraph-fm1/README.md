@@ -782,6 +782,10 @@ A seven-pixel dot in the upper-right corner turns amber on a missed audio
 deadline and red on a second miss within one second. It disappears after one
 second without a miss. The synth scope’s `V` readout is the current note velocity.
 
+A small red battery outline appears just left of the dot when the panel scanner
+confirms a low battery. It stays in that position even when the dot is hidden
+and disappears once the scanner confirms recovery.
+
 On a build with USB MIDI active, hold SAVE while running `fm1 log` from the
 [FM-1 CLI][cli] for the timing snapshot. The example
 `B1 D02400 F00080 W00076 O00000000 S00000002` means CPU1 started successfully
