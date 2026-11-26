@@ -9,22 +9,39 @@ use core::sync::atomic::{AtomicI16, Ordering};
 use wavegraph_sample::I24;
 use wavegraph_sampler::Clip;
 
+mod tape;
+pub(super) use tape::Playback;
+use tape::Tape;
+
 const FRAMES: usize = 32_768;
 // SAFETY: the application linker reserves this 64 KiB independently of stacks,
 // bootloader plug-ins and the BSP's .bss. Startup initializes it before CPU1 starts.
 #[cfg_attr(target_os = "none", unsafe(link_section = ".wavegraph.clipboard"))]
 pub(super) static PCM: [AtomicI16; FRAMES] = [const { AtomicI16::new(0) }; FRAMES];
 
+#[cfg(test)]
+pub(super) fn test_slot() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Options {
     length: u8,
     pub root: u8,
+    pub tape: bool,
+    pub level: u8,
+    pub mix: bool,
 }
 
 impl Options {
     pub const INITIAL: Self = Self {
         length: 1,
         root: 60,
+        tape: false,
+        level: 128,
+        mix: false,
     };
     const BEATS: [u8; 4] = [1, 4, 8, 16];
 
@@ -36,6 +53,29 @@ impl Options {
     pub fn beats(self) -> u8 {
         Self::BEATS[usize::from(self.length)]
     }
+
+    pub fn turn_tape(&mut self, mode: i8, level: i8, input: i8) {
+        if mode != 0 {
+            self.tape = mode > 0;
+        }
+        if self.tape {
+            if input != 0 {
+                self.mix = input > 0;
+            }
+            self.level = self
+                .level
+                .saturating_add_signed(level.saturating_mul(4))
+                .min(128);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Action {
+    Sample,
+    Strip,
+    Mix,
+    Clear,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +85,7 @@ pub(super) struct Request {
     assignment: Assignment,
     /// The recorder latches the current length and root at the first recorded frame.
     pub options: Options,
+    action: Action,
 }
 
 impl Request {
@@ -53,12 +94,25 @@ impl Request {
         source: Channel::One,
         assignment: Assignment::new(Part::Bass),
         options: Options::INITIAL,
+        action: Action::Sample,
     };
 
     pub fn press(&mut self, source: Channel, assignment: Assignment) {
         self.serial = self.serial.wrapping_add(1);
         self.source = source;
         self.assignment = assignment;
+        self.action = if !self.options.tape {
+            Action::Sample
+        } else if self.options.mix {
+            Action::Mix
+        } else {
+            Action::Strip
+        };
+    }
+
+    pub fn clear(&mut self) {
+        self.serial = self.serial.wrapping_add(1);
+        self.action = Action::Clear;
     }
 }
 
@@ -68,6 +122,7 @@ pub(super) enum State {
     Idle,
     Armed,
     Recording,
+    Dubbing,
     Interrupted,
     SelfInput,
 }
@@ -78,6 +133,7 @@ pub(super) struct Take {
     pub frames: u16,
     pub hz: u16,
     pub root: u8,
+    pub beats: u8,
 }
 
 impl Take {
@@ -92,6 +148,8 @@ pub(super) struct Status {
     pub state: State,
     pub source: Channel,
     pub take: Option<Take>,
+    pub monitoring: bool,
+    pub mix: bool,
 }
 
 pub(super) struct Recorder {
@@ -105,6 +163,8 @@ pub(super) struct Recorder {
     sum: i32,
     pending: u16,
     written: u16,
+    beats: u8,
+    tape: Tape,
 }
 
 impl Recorder {
@@ -120,17 +180,28 @@ impl Recorder {
             sum: 0,
             pending: 0,
             written: 0,
+            beats: 4,
+            tape: Tape::default(),
         }
     }
 
+    #[cold]
     pub fn interrupt(&mut self) {
-        if self.status.state == State::Recording {
+        self.tape.stop();
+        self.status.monitoring = false;
+        if matches!(self.status.state, State::Recording | State::Dubbing) {
             self.status.state = State::Interrupted;
         }
     }
 
+    fn clear_stopped(&mut self, transport: Transport) {
+        if !transport.playing() {
+            self.tape.stop();
+            self.status = Status::default();
+        }
+    }
+
     fn press(&mut self, request: Request) {
-        self.serial = request.serial;
         match self.status.state {
             State::Armed => self.status.state = State::Idle,
             State::Recording => self.finish(),
@@ -141,14 +212,25 @@ impl Recorder {
         }
     }
 
+    /// Duration in output frames. Both tape heads round up to the same sample.
+    #[inline(never)]
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "The audio clock and tempo are nonzero and 16 beats fit in u64."
+    )]
+    fn loop_frames(&self, bpm: u16, beats: u8) -> u64 {
+        (u64::from(self.rate.0) * 60 * u64::from(beats))
+            .div_ceil(u64::from(self.rate.1) * u64::from(bpm))
+    }
+
     #[allow(
         clippy::arithmetic_side_effects,
         reason = "Nonzero validated audio clock, tempo and capacity; 16 beats fit the 64-bit numerator."
     )]
     fn begin(&mut self, bpm: u16, options: Options) {
         self.root = options.root;
-        let frames = (u64::from(self.rate.0) * 60 * u64::from(options.beats()))
-            .div_ceil(u64::from(self.rate.1) * u64::from(bpm));
+        self.beats = options.beats();
+        let frames = self.loop_frames(bpm, self.beats);
         self.remaining = u32::try_from(frames).expect("FM-1 capture length");
         self.divisor = u16::try_from(frames.div_ceil(FRAMES as u64)).expect("bounded decimation");
         let denominator = u64::from(self.rate.1) * u64::from(self.divisor);
@@ -173,6 +255,7 @@ impl Recorder {
         self.pending = 0;
     }
 
+    #[cold]
     fn finish(&mut self) {
         if self.pending > 0 {
             self.store();
@@ -182,6 +265,7 @@ impl Recorder {
             frames: self.written,
             hz: self.hz,
             root: self.root,
+            beats: self.beats,
         });
         self.status.state = State::Idle;
     }
@@ -198,8 +282,20 @@ impl Recorder {
         downbeat: Option<usize>,
         buses: &[[I24; N]],
     ) {
+        if self.tape.selected {
+            self.interrupt();
+            if self.status.state == State::Armed {
+                self.status.state = State::Idle;
+            }
+            self.tape.selected = false;
+        }
         if self.serial != request.serial {
-            self.press(request);
+            self.serial = request.serial;
+            match request.action {
+                Action::Sample => self.press(request),
+                Action::Clear => self.clear_stopped(transport),
+                Action::Strip | Action::Mix => (),
+            }
         }
         if !matches!(self.status.state, State::Armed | State::Recording) {
             return;
@@ -226,16 +322,27 @@ impl Recorder {
             input = &input[start..];
         }
         for sample in input {
-            self.sum += sample.inner() >> 8;
-            self.pending += 1;
-            self.remaining -= 1;
-            if self.pending == self.divisor {
-                self.store();
-            }
-            if self.remaining == 0 {
-                self.finish();
+            if self.record_sample(sample.inner() >> 8) {
                 break;
             }
         }
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "A bounded PCM16 group and a positive remaining frame count."
+    )]
+    fn record_sample(&mut self, sample: i32) -> bool {
+        self.sum += sample;
+        self.pending += 1;
+        self.remaining -= 1;
+        if self.pending == self.divisor {
+            self.store();
+        }
+        if self.remaining == 0 {
+            self.finish();
+            return true;
+        }
+        false
     }
 }

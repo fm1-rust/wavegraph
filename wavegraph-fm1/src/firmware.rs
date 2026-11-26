@@ -768,14 +768,44 @@ mod app {
                     scan.encoder_delta(Encoder::Knob1),
                     scan.encoder_delta(Encoder::Knob2),
                 );
-                if scan.pressed(Button::Rec) {
+                self.nav.clip_request.options.turn_tape(
+                    scan.encoder_delta(Encoder::Knob3),
+                    scan.encoder_delta(Encoder::Knob4),
+                    scan.encoder_delta(Encoder::Algorithm),
+                );
+            }
+            let pressed_rec = scan.pressed(Button::Rec);
+            let tape_busy = pressed_rec
+                && self.nav.view == View::Sequencer
+                && self.nav.clip_request.options.tape
+                && self.shared().motion.lock(|m| {
+                    matches!(
+                        m.clipboard.state,
+                        crate::clipboard::State::Armed
+                            | crate::clipboard::State::Recording
+                            | crate::clipboard::State::Dubbing
+                    )
+                });
+            // Keep REC available while performing on an instrument or its FX.
+            // SEQ takes it back for note entry once the tape pass is finished.
+            let capture_rec = self.nav.view == View::Clipboard
+                || (self.nav.clip_request.options.tape
+                    && (self.nav.view != View::Sequencer || tape_busy));
+            if pressed_rec && capture_rec {
+                if self.nav.view == View::Clipboard
+                    && self.nav.clip_request.options.tape
+                    && scan.is_down(Button::Sel)
+                    && !self.seq.transport.playing()
+                {
+                    self.nav.clip_request.clear();
+                } else {
                     let source = self.nav.focus;
                     self.nav
                         .clip_request
                         .press(source, self.nav.assignments[source.index()]);
                 }
             }
-            let rec = scan.pressed(Button::Rec) && self.nav.view != View::Clipboard;
+            let rec = pressed_rec && !capture_rec;
             if rec && self.nav.view != View::Sequencer {
                 self.nav.press(PageButton::Seq);
             }
@@ -820,10 +850,11 @@ mod app {
             } else {
                 PlayLedState::Red
             });
-            let recording_lamp = self.nav.view == View::Clipboard
+            let recording_lamp = (self.nav.view == View::Clipboard
+                || self.nav.clip_request.options.tape)
                 && self.shared().motion.lock(|m| match m.clipboard.state {
                     crate::clipboard::State::Armed => ticks() & 16 == 0,
-                    crate::clipboard::State::Recording => true,
+                    crate::clipboard::State::Recording | crate::clipboard::State::Dubbing => true,
                     _ => false,
                 });
             self.leds.set(
@@ -1132,7 +1163,7 @@ mod app {
             let sel = scan.pressed(Button::Sel);
             match view {
                 View::Clipboard => {
-                    if sel && nav.part() == Part::Sampler {
+                    if sel && !nav.clip_request.options.tape && nav.part() == Part::Sampler {
                         self.settings.tracks[channel.index()].voice.waveform =
                             crate::assets::CLIPBOARD_SLOT;
                     }
