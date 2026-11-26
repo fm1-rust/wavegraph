@@ -1,4 +1,4 @@
-use crate::{Voice, VoiceParams};
+use crate::{Muffler, Voice, VoiceParams};
 use wavegraph_core::{Port, Process, ProcessContext};
 use wavegraph_sample::{I24, Sample, types::i24};
 
@@ -84,6 +84,8 @@ pub enum Message {
     AttackSeconds(f32),
     /// Set the oscillator overdrive into the resonant filter, in dB (0..=36).
     OverdriveDb(f32),
+    /// Select bass-preserving clipping after the VCA and before the pedal.
+    Muffler(Muffler),
     /// Set the compact post-VCA overdrive amount in 0..=1.
     /// Zero returns to exact dry bypass after a short crossfade. This is an
     /// approximation, independent of [`Self::OverdriveDb`]'s filter input gain.
@@ -115,6 +117,7 @@ pub struct Tb303 {
     suspend_idle: bool,
     output_gain: f32,
     pedal_drive: f32,
+    muffler: crate::muffler::Stage,
     pedal: crate::pedal::Pedal,
 }
 
@@ -131,6 +134,7 @@ impl Tb303 {
             suspend_idle: false,
             output_gain: 1.0,
             pedal_drive: 0.0,
+            muffler: crate::muffler::Stage::new(sample_rate),
             pedal: crate::pedal::Pedal::new(sample_rate),
         }
     }
@@ -161,6 +165,7 @@ impl Tb303 {
                 self.params.attack_s = seconds
             }
             Message::OverdriveDb(db) if (0.0..=36.0).contains(&db) => self.params.overdrive_db = db,
+            Message::Muffler(mode) => self.muffler.select(mode),
             Message::PedalDrive(amount) if (0.0..=1.0).contains(&amount) => {
                 self.pedal_drive = amount;
             }
@@ -174,6 +179,7 @@ impl Tb303 {
             Message::Waveform(shape) => self.params.square = shape == Waveform::Square,
             Message::Reset => {
                 self.voice.reset();
+                self.muffler.reset();
                 self.pedal.reset();
                 self.held_note = None;
             }
@@ -198,7 +204,7 @@ impl Tb303 {
         self
     }
 
-    /// Attenuate the voice after its filter and optional pedal, before output conversion.
+    /// Attenuate the voice after its filter, Muffler and pedal, before output conversion.
     ///
     /// The default gain is `1.0`. A smaller gain reserves mixing headroom and
     /// avoids clipping a hot resonant voice at the [`I24`] rails; it leaves the
@@ -258,13 +264,13 @@ impl Tb303 {
         self.pedal.set_amount(pedal_amount);
         let gain = self.output_gain;
         let voice_sleeping = self.suspend_idle && self.voice.skip_silence(params, output.len());
-        let mut tap = clean.iter_mut();
         if voice_sleeping {
-            for sample in tap {
-                S::write(sample, 0.0);
-            }
-            self.render_silence(output);
-        } else if let Some(frame) = self.voice.render_with(params, output, |dst, x| {
+            self.render_silence(output, clean);
+            return;
+        }
+        let mut tap = clean.iter_mut();
+        if let Some(frame) = self.voice.render_with(params, output, |dst, x| {
+            let x = self.muffler.sample(x);
             if let Some(sample) = tap.next() {
                 S::write(sample, x * gain);
             }
@@ -274,7 +280,7 @@ impl Tb303 {
         }
     }
 
-    /// Render the driven voice and its clean, post-VCA signal into equally sized
+    /// Render the driven voice and its post-Muffler, pre-pedal signal into equally sized
     /// Q23 buffers. Both taps share one oscillator, envelope and output gain.
     /// Events have the same sample offsets as on the normal message inlet.
     ///
@@ -312,7 +318,21 @@ impl Tb303 {
     // Keep the released overdrive's tail loop in cached flash. Duplicating its
     // inlined sample operation here must not consume the active renderer's SRAM.
     #[inline(never)]
-    fn render_silence<S: OutputSample>(&mut self, output: &mut [S]) {
+    fn render_silence<S: OutputSample>(&mut self, output: &mut [S], clean: &mut [S]) {
+        if !self.muffler.bypassed() && !self.muffler.skip_silence(output.len()) {
+            let mut tap = clean.iter_mut();
+            for sample in output {
+                let dry = self.muffler.sample(0.0);
+                if let Some(clean) = tap.next() {
+                    S::write(clean, dry * self.output_gain);
+                }
+                S::write(sample, self.pedal.sample(dry) * self.output_gain);
+            }
+            return;
+        }
+        for sample in clean {
+            S::write(sample, 0.0);
+        }
         let sleeping = self.pedal.skip_silence(output.len());
         for sample in output {
             let value = if sleeping {

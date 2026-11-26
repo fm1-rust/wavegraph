@@ -9,6 +9,7 @@ mod dsp;
 mod effects;
 mod envelopes;
 mod instrument;
+mod muffler;
 mod pedal;
 mod reverb;
 mod voice;
@@ -19,6 +20,7 @@ pub use drum_fx::{DrumFx, DrumFxSettings};
 pub use effects::{Effects, EffectsSettings, LengthMismatch, StereoFrame};
 pub use envelopes::{EnvelopeLevels, Envelopes};
 pub use instrument::{Destination, Message, Tb303, Waveform};
+pub use muffler::Muffler;
 pub use reverb::Reverb;
 pub use voice::{Voice, VoiceParams};
 

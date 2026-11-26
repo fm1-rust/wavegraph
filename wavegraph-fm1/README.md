@@ -153,7 +153,7 @@ keyed from **909 KICK**, at 75% depth below 180 Hz.
 | 6 · ACID PLUCK | Square, 86% resonance, 140 ms decay, 0.75 ms attack, 17% OD. | Saturator → Phaser |
 | 7 · DEVIL DRIVE | Saw, 76% resonance, 420 ms decay, 78% OD. | Soft saturator → Sidechain |
 
-Recall replaces the eight voice knob values, waveform, both insert types,
+Recall replaces the eight voice knob values, waveform, Muffler setting, both insert types,
 settings and bypass states, and the channel's Echo send, Echo grid and Slicer.
 It keeps the held note, slide switch, sequence, tempo, fader, LFO
 and arpeggiator settings. The shared BEATS division, Echo return, global Echo
@@ -186,6 +186,14 @@ ramp. The standalone 303 also exposes oscillator-to-filter gain. On the analog
 Devil Fish, **Overdrive** feeds the filter up to 66.6 times the stock oscillator
 level. **Muffler** clips the VCA output, catching loud or accented notes first.
 See Robin Whittle’s [Devil Fish manual][devil-fish], pp. 4 and 6.
+
+To hear the **Muffler**, start on the 303 scope with no control selected.
+Turn SELECT two clicks left, then turn ALGORITHM through **OFF**, **1** and **2**.
+The **MUF** readout shows the setting on this channel. Try an accented square
+phrase with OD down first. Position 1 rounds the loudest peaks. Position 2
+catches more of the note and adds a firmer buzz. Both carry the bass around
+the clipper. Raise OD to drive the pedal with that sound. On Pump Panel the
+centered bass tap also hears the Muffler. Every factory preset recalls it off.
 
 The voicing is informed by the TB-03's first overdrive type, which Roland identifies
 as a high-gain BOSS OD-2 sound. BOSS describes [OD-2 Turbo][od2] as two gain stages
@@ -222,7 +230,7 @@ The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
 [Roland TB-03][tb03]. The numbered encoders map to the four lighter graphite
 knobs inside the red outline. Turn SELECT clockwise to select Attack, OD,
-the **SAW/SQR** slide switch, then the six dials from Tuning to Accent. One click
+Muffler, the **SAW/SQR** slide switch, then the six dials from Tuning to Accent. One click
 counterclockwise from idle goes straight to the waveform switch. Turn ALGORITHM
 left for saw or right for square; the actuator stops at either end.
 
@@ -395,7 +403,7 @@ Press ENV on the silver 303 page. The display plays a silent reference phrase
 through a separate instance of the voice’s envelopes. PLAIN marks one ordinary
 strike. The three A marks are accented strikes 96 ms apart. Each vertical grid
 division is 96 ms. The numbered knobs keep their assignments here. Turn SELECT
-to choose any 303 parameter or the waveform switch, then ALGORITHM to edit the
+to choose a dial, Muffler or waveform switch, then ALGORITHM to edit the
 value below the traces. HOME clears the selection so ALGORITHM recalls sounds.
 HOME clears the selection. Press it again to return to the scope.
 

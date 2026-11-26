@@ -447,7 +447,7 @@ impl Navigation {
     pub(super) fn bass_knob(self) -> Option<Knob> {
         match self.bass_control()? {
             Control::Knob(knob) => Some(knob),
-            Control::Waveform => None,
+            Control::Waveform | Control::Muffler => None,
         }
     }
 
@@ -483,7 +483,7 @@ impl Navigation {
             let start = self
                 .bass_slot
                 .map_or(if select > 0 { ATTACK_SLOT - 1 } else { 0 }, i16::from);
-            let count = i16::try_from(Control::PANEL.len()).expect("nine controls");
+            let count = i16::try_from(Control::PANEL.len()).expect("small 303 panel");
             let slot = start.saturating_add(i16::from(select)).rem_euclid(count);
             self.bass_slot = Some(u8::try_from(slot).expect("wrapped knob index"));
         }
@@ -759,19 +759,19 @@ mod tests {
         nav.turn(-1, 0);
         assert_eq!(nav.bass_control(), Some(Control::Waveform));
         nav.turn(i8::MIN, 0);
-        assert_eq!(nav.bass_knob(), Some(Knob::Attack));
+        assert_eq!(nav.bass_knob(), Some(Knob::Cutoff));
         nav.turn(i8::MAX, 0);
-        assert_eq!(nav.bass_knob(), Some(Knob::Overdrive));
+        assert_eq!(nav.bass_control(), Some(Control::Muffler));
         nav.turn(2, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
 
         nav.turn(0, 1);
         assert_eq!((nav.part(), nav.bass_knob()), (Part::Bass, None));
-        nav.turn(4, 0);
+        nav.turn(5, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Tuning));
         nav.press(PageButton::Env);
         assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
-        nav.turn(-4, 0);
+        nav.turn(-5, 0);
         assert_eq!(nav.bass_knob(), Some(Knob::Accent));
         nav.press(PageButton::Home);
         assert_eq!((nav.view, nav.bass_knob()), (View::Envelope, None));
