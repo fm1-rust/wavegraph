@@ -25,9 +25,9 @@ The standard image starts USB MIDI on the tested black FM-1. Select
 channels 1–4 play mixer strips 1–4. Run `fm1 log` for a round trip over both
 USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 
-| Monosynth | 303 direct knobs | 303 editing Drive |
+| Monosynth | 303 direct knobs | 303 editing OD |
 | --- | --- | --- |
-| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with Drive highlighted in oxide red beside the readout](assets/tb-303-voice.png) |
+| ![Green monosynth scope](assets/monosynth.gif) | ![303 with the four direct knobs boxed above the scope](assets/tb-303.png) | ![303 with OD highlighted in oxide red beside the readout](assets/tb-303-voice.png) |
 
 | Control | Action |
 | --- | --- |
@@ -54,8 +54,8 @@ USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 | PRESETS encoder | Cycle channels 1–4. The new channel number flashes in the upper-left corner for 1.5 seconds on the instrument and its pages, including FX, ENV, LFO, ARP and SEQ. New notes go to that channel. Held keys keep theirs. |
 | Piano keys outside the pattern view | Play F3 to G5 at the default octave, or play drum sounds on the first four white keys for the 808 and the first six for the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
-| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, choose 303 saw/square, select a wavetable bank, load the next FM or Hoover program, or choose a sampler clip. While a 303 knob is selected, ALGORITHM adjusts its value. |
-| SELECT encoder on the scope | Transpose the monosynth, FM, Hoover, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through all eight 303 knobs. |
+| ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, load a 303 sound preset with channel inserts and Beat FX settings, select a wavetable bank, load the next FM or Hoover program, or choose a sampler clip. While a 303 dial or waveform switch is selected, ALGORITHM adjusts that control. |
+| SELECT encoder on the scope | Transpose the monosynth, FM, Hoover, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through the eight 303 knobs and its SAW/SQR switch. |
 | Knob 1 on the monosynth scope | Sweep the low-pass cutoff from 10 Hz to 20 kHz. Six detents span an octave. The header shows the cutoff in Hz. |
 | Knobs 1–4 on the organ scope | Tone, key percussion, transient decay (5–500 ms), release (0–1000 ms). The charcoal panel shows the last-touched value. |
 | Knobs 1–4 on the FM synth | Modulator-to-carrier frequency ratio, modulation index, modulator envelope decay (0–10 s), and modulator feedback. Harder strikes sound brighter. |
@@ -65,7 +65,7 @@ USB endpoints. See [USB MIDI errata](#usb-midi-errata) for hardware coverage.
 | ENV | Open or close the focused instrument’s envelope or drum shaping page. ENV stays lit while the page is open. |
 | Knobs 1–4 in monosynth, FM, organ, Super Saw, wavetable or sampler ENV | Adjust attack, decay, sustain and release. Turn SELECT or press SEL to choose the envelope on FM (carrier, modulator, pitch), Super Saw or sampler (amp, filter), or wavetable (amp, position). |
 | Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
-| HOME while editing a 303 knob | Clear the selection and turn off the HOME lamp. ALGORITHM selects saw or square again. |
+| HOME while editing a 303 control | Clear the selection and turn off the HOME lamp. ALGORITHM browses sound presets again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
 | GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
 | EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard) to record audio from the focused channel. REC arms capture on this page. |
@@ -105,22 +105,97 @@ Each key starts its own three envelopes. Both operators follow its pitch bend.
 | --- | --- |
 | ![Tine EP with the two-operator routing and live scope](assets/fm-synth.png) | ![FM pitch envelope edited for a downward bend](assets/fm-pitch.png) |
 
+## 303 sounds and waveform switch
+
+With no 303 control selected, turn **ALGORITHM** to recall a sound. The readout
+shows its number and name. Each channel remembers its own position in the bank;
+channel 1 boots on **1 DEEP HOUSE** and channel 2 on **2 HARMONY**. These retain
+the previous factory voice settings and saw/square waveforms, with OD now using
+the new pedal stage. Both run their
+existing saturator in slot 1 followed by sidechain compression in slot 2,
+keyed from **909 KICK**, at 75% depth below 180 Hz.
+
+| Preset | Oscillator and voice | Channel inserts, in order |
+| --- | --- | --- |
+| 1 · DEEP HOUSE | Track 1 voice: saw, 315 Hz cutoff, 82% resonance, 50% OD. | Saturator → Sidechain |
+| 2 · HARMONY | Track 2 voice: square, 707 Hz cutoff, shorter decay, 44% OD. | Saturator → Sidechain |
+| 3 · PUMP PANEL | Saw, 500 Hz cutoff, 86% resonance, 450 ms decay, 67% OD. | Gentle saturator → Sidechain |
+| 4 · REBIRTH BITE | Saw, 397 Hz cutoff, 78% resonance, 400 ms decay, 28% OD. | Saturator → Sidechain |
+| 5 · RUBBER SQR | Square, 250 Hz cutoff, 48% resonance, 260 ms decay, 8% OD. | Gentle saturator → Sidechain |
+| 6 · ACID PLUCK | Square, 86% resonance, 140 ms decay, 0.75 ms attack, 17% OD. | Saturator → Phaser |
+| 7 · DEVIL DRIVE | Saw, 76% resonance, 420 ms decay, 78% OD. | Soft saturator → Sidechain |
+
+Recall replaces the eight voice knob values, waveform, both insert types,
+settings and bypass states, and the channel's Echo send, Echo grid and Slicer.
+It keeps the held note, slide switch, sequence, tempo, fader, reverb send, LFO
+and arpeggiator settings. The shared BEATS division, Echo return, global Echo
+input and Beat Flanger routing are not changed. Live knob and FX edits remain
+until another recall; returning to the same preset restores its factory sound.
+
+Deep House and Harmony keep their factory Echo sends (104/128 and 112/128).
+Pump Panel reduces the send to 32/128 and opens only the last sixteenth of
+each beat for occasional echo throws. ReBirth Bite and Rubber Sqr use lighter
+continuous Echo sends. Acid Pluck echoes only the first sixteenth of each
+beat at 100/128 send. Devil Drive uses downbeat echoes and a 56/128-depth
+Slicer, with two short cuts in each 16-cell cycle. The Slicer follows the
+existing BEATS division (3/4 by default); turn it to 4 for a one-bar gate,
+noting that this changes the shared Echo and Flanger timing as well.
+To change these grids, press EDIT from FX. Echo masks apply during transport
+playback; live notes use the full send. No preset forcibly opens the shared
+Echo input, enables its return, or commandeers the assignable Flanger.
+The bank cursor survives GLO instrument changes, alongside the channel's FX.
+
+These are original starting points informed by [AudioRealism Bass Line 3][audio-realism]
+for Reason and the ReBirth/modified-303 range in [Transisthor Bass & Rhythm][transisthor].
+They do not import those products' preset files. For **PUMP PANEL**, the reference
+is *Confusion (Pump Panel Reconstruction Mix)*: [Tim Taylor describes a 303
+through an unidentified guitar pedal][pump-panel]. This patch uses the pedal
+after the VCA, before channel saturation and sidechain compression. The knob
+values are an approximation, not recovered studio settings.
+
+Select **OD**, then turn **ALGORITHM** to set the amount from 0–100%. All 303
+presets use this post-VCA pedal. Fully left bypasses it after a short smoothing
+ramp. The old oscillator-to-filter gain is no longer the FM-1 OD control; it
+remains available through the standalone 303 crate's legacy API.
+
+The voicing is informed by the TB-03's first overdrive type, which Roland identifies
+as a high-gain BOSS OD-2 sound. BOSS describes [OD-2 Turbo][od2] as two gain stages
+that clip at the supply rails. To fit the FM-1's real-time budget, our compact
+model uses a 330 Hz pre-drive high-pass, one smooth clipping stage, a 1.8 kHz
+tone low-pass and 110 Hz output coupling. It runs directly inside the 303's
+output loop, with smoothed drive and bypass and no separate audio-buffer pass.
+These values were calibrated against 303 phrases and the previous voicing;
+they are not recovered TB-03 circuit or DSP parameters. Roland's exact TB-03
+algorithm is unpublished, and the other two distortion types are not modeled.
+Pump Panel's original pedal is unidentified, so a TB-03-inspired voicing alone
+does not establish a match to the record.
+
+Try Pump Panel with accented, sliding notes and sweep cutoff with knob 1.
+The existing sequencer automation still owns its recorded parameters during
+playback, so a pattern can temporarily override preset cutoff, resonance or
+OD. MIDI CC17, clip automation and the OD LFO target all address the same
+post-VCA amount.
+Play the piano roll or mute that channel's sequence to hear the stored
+settings directly; the preset does not replace the sequence with the record's riff.
+
 The silver 303 faceplate puts a 240 × 176 live scope below the six sound knobs.
 Tuning, Cutoff, Resonance, Env Mod, Decay and Accent follow the order on the
 [Roland TB-03][tb03]. The numbered encoders map to the four lighter graphite
-knobs inside the red outline. Turn SELECT clockwise to select Attack, then Drive, then the
-six dials from Tuning to Accent. One click counterclockwise
-from idle goes straight to Drive.
+knobs inside the red outline. Turn SELECT clockwise to select Attack, OD,
+the **SAW/SQR** slide switch, then the six dials from Tuning to Accent. One click
+counterclockwise from idle goes straight to the waveform switch. Turn ALGORITHM
+left for saw or right for square; the actuator stops at either end.
 
-The selected cap turns oxide red with an ivory pointer and HOME lights up.
-ALGORITHM adjusts that knob, and the display beside the logo shows its value
-even while you turn a numbered encoder. Press HOME to finish. With the
-selection cleared, the display shows the last knob you adjusted. Tuning covers
+The selected control gets an oxide-red rectangle and HOME lights up.
+ALGORITHM adjusts that control, and the display beside the logo shows its value
+even while you turn a numbered encoder. Press HOME to finish and see the preset
+number and name again. Tuning covers
 ±12 semitones in 10-cent steps, Attack spans 0–60 ms, Accent spans 0–100% and
-Drive adds 0–36 dB before the filter.
+OD covers 0–100%.
 
-Each cap points to its saved setting. During pattern playback a separate red
-mark on each automated knob follows the sequencer. The marks disappear when you play the 303 live, mute its pattern or stop playback.
+Each cap and the waveform actuator point to their saved settings. During pattern
+playback a separate red mark on each automated control follows the sequencer.
+The marks disappear when you play the 303 live, mute its pattern or stop playback.
 The scope opens on the selected 303’s pre-fader signal (SRC). Each sweep starts
 at an oscillator phase wrap and shows 27.2 ms of filtered audio, about two
 cycles of the factory bass line’s low D. The fixed time scale lets you see the
@@ -153,7 +228,7 @@ Each channel runs its own control-rate LFO. Depth scales a bipolar sweep around 
 | --- | --- |
 | Monosynth | Filter cutoff |
 | M1 organ | Tone, percussion, click decay, release |
-| TB-303 | Pitch (±2 semitones), cutoff, resonance, env mod, decay, accent, attack, overdrive |
+| TB-303 | Pitch (±2 semitones), cutoff, resonance, env mod, decay, accent, attack, OD |
 | TR-808 | Kick tone, kick decay, snare tone, snappy |
 | TR-909 | Kick decay, snare decay, clap decay |
 | Super Saw | Filter cutoff, resonance, detune, side-saw mix |
@@ -280,7 +355,8 @@ Press ENV on the silver 303 page. The display plays a silent reference phrase
 through a separate instance of the voice’s envelopes. PLAIN marks one ordinary
 strike. The three A marks are accented strikes 96 ms apart. Each vertical grid
 division is 96 ms. The numbered knobs keep their assignments here. Turn SELECT
-to choose any 303 parameter, then ALGORITHM to edit the value below the traces.
+to choose any 303 parameter or the waveform switch, then ALGORITHM to edit the
+value below the traces. HOME clears the selection so ALGORITHM recalls sounds.
 HOME clears the selection. Press it again to return to the scope.
 
 | Trace | What to try |
@@ -584,7 +660,7 @@ held keys. The piano roll tracks panel and USB notes separately when they overla
 | --- | --- |
 | Filter cutoff / resonance | CC 74 / 71 |
 | Envelope modulation / decay | CC 12 / 75 |
-| Accent level / overdrive / tuning | CC 16 / 17 / 104 |
+| Accent level / OD / tuning | CC 16 / 17 / 104 |
 | Accented note | Note-on velocity 100–127 |
 | Slide | CC 102 on at 64–127. Factory slides also overlap notes for legato synths. |
 | WaveGraph attack / waveform | CC 73 / 70. Waveform values 0–63 select saw and 64–127 select square. |
@@ -788,7 +864,8 @@ Press PLAY with pattern 01 on both 303s. In bar four, listen for the upper
 returns to the softer curve. To watch it, select channel 2, press FX and
 turn SELECT to slot 1. Its Shape dial follows the phrase.
 
-Both factory 303 channels have their own **SAT** in slot 1. Knobs 1–4 set
+Both factory 303 channels have their own **SAT** in slot 1, followed by
+**SIDECHAIN** in slot 2. Knobs 1–4 on the saturator set
 Drive, Mix, Level and Shape. At 0% Shape the original soft knee rounds peaks.
 At 100% the harder curve flattens them. Turn knob 4 to set the starting
 shape, or press SEL to compare with the dry sound. The pattern adds to
@@ -796,8 +873,8 @@ your setting for one beat. The lower 303 stays on its own setting throughout.
 
 ### Hear the kick duck the bass
 
-Select a 303 channel, open FX, turn SELECT to slot 1 and turn PRESETS one
-detent left from **SATURATOR** to **SIDECHAIN**. Press PLAY. Knob 1 starts
+Select a factory 303 channel, open FX and turn SELECT to slot 2,
+**SIDECHAIN**. Press PLAY. Knob 1 starts
 on **909 KICK**, the isolated kick before its fader. Keep it selected and
 turn knob 2 from 0% to 100%. At 0% the insert keeps its makeup gain, so you
 can compare depths at the same level between kicks. Listen to the bottom of
@@ -816,7 +893,8 @@ accents. Only the 303 is processed. The factory setting is 75% depth at
 The channel FX scope taps the selected instrument after its inserts and before
 its fader and shared sends. It keeps the same vertical gain while you adjust
 depth, bypass the compressor or switch to the send controls. To flange the
-compressed bass, select slot 2 and turn PRESETS to **FLANGER**. Each slot keeps its own delay line.
+compressed bass, replace slot 1's saturator with **FLANGER** and keep slot 2's
+sidechain. Each slot keeps its own delay line.
 
 ![Channel FX racks showing the TB-303 compressor and flanger alongside the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
 
@@ -965,9 +1043,9 @@ One reverb and one mono digital delay run in parallel. The dry bus reserves
 three bits of headroom for four boosted tracks. The master node restores that
 gain and sums both returns and the startup cue in a widened accumulator. EQ,
 compression, makeup and limiting precede output trim and the physical MASTER.
-The delay uses 79,412 bytes. The first 375 ms uses native-rate PCM16, which
+The delay uses 77,208 bytes. The first 375 ms uses native-rate PCM16, which
 covers the factory 3/4-beat Echo at 122 BPM. Longer taps average every four
-frames, then every sixteen beyond roughly 2.1 seconds, and store logarithmic
+frames, then every sixteen beyond roughly 2 seconds, and store logarithmic
 eight-bit PCM. Longer repeats therefore sound darker. The longest setting
 covers four beats at 30 BPM (eight seconds).
 
@@ -1136,5 +1214,10 @@ or the [MIT License](LICENSE-MIT).
 [FM-1 toolchain setup]: https://github.com/fm1-rust/fm1-rust/blob/4c6a3fe082ec013ff594a06b8cd377a65bd96ffb/fm1/README.md#build-and-flash
 
 [accent-sweep]: https://www.firstpr.com.au/rwi/dfish/303-unique.html
+[audio-realism]: https://www.audiorealism.se/uploads/4/5/5/4/45545237/abl3-operation-manual.pdf
+[transisthor]: https://www.reasonstudios.com/shop/product/transisthor-bass-and-rhythm/
+[pump-panel]: https://daily.redbullmusicacademy.com/2019/02/blade-303/
+[devil-fish]: https://www.firstpr.com.au/rwi/dfish/Devil-Fish-Manual.pdf
+[od2]: https://articles.boss.info/boss-px-1-plugout-fx-dm-2-dc-2-and-od-2-model-passes/
 
 [stock-seq]: https://fuleo.github.io/fm1-guide/sequencer.html

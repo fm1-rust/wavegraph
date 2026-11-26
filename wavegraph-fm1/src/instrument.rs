@@ -4,10 +4,10 @@ use crate::sampler::Program as SampleProgram;
 use crate::wavetable::Program as WaveProgram;
 use crate::{
     arp::{self, ChannelArp},
-    bass::{Controls, Knob},
+    bass::{Control, Controls, Knob, PresetSelection, presets::PRESETS},
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
-    fx::{Device, Fx, INSERT_SLOTS, Insert},
+    fx::{Device, Fx, INSERT_SLOTS, Insert, InsertKind},
     keys::HitLog,
     keys::PolyKey,
     lfo::{KnobOffset, Route},
@@ -368,6 +368,7 @@ pub(super) struct Track {
     pub(super) voice: Voice,
     bank: Bank,
     pub(super) bass: Controls,
+    pub(super) bass_preset: PresetSelection,
     pub(super) inserts: [Insert; INSERT_SLOTS],
     pub(super) polyphony: crate::panel::Polyphony,
     pub(super) organ: OrganControls,
@@ -390,6 +391,7 @@ impl Track {
             assignment,
             voice: Voice::INITIAL,
             bass: Controls::INITIAL,
+            bass_preset: PresetSelection::FIRST,
             inserts: Insert::factory(assignment.part),
             polyphony: crate::panel::Polyphony::INITIAL,
             organ: OrganControls::INITIAL,
@@ -468,6 +470,11 @@ impl Track {
     pub(super) const fn factory(channel: Channel, assignment: Assignment) -> Self {
         let harmony = matches!((channel, assignment.part), (Channel::Two, Part::Bass));
         Self {
+            bass_preset: if harmony {
+                PresetSelection::SECOND
+            } else {
+                PresetSelection::FIRST
+            },
             bass: if harmony {
                 Controls::HARMONY
             } else {
@@ -516,9 +523,61 @@ impl Track {
         }
     }
 
-    pub(super) fn turn_algorithm(&mut self, view: View, bass_knob: Option<Knob>, detents: i8) {
-        if let Some(knob) = bass_knob {
-            self.bass.turn(knob, detents);
+    /// Instrument swaps retain channel effects and the last selected 303 sound.
+    pub(super) fn reassign(&mut self, channel: Channel, assignment: Assignment) {
+        let inserts = self.inserts;
+        let preset = self.bass_preset;
+        *self = Self::factory(channel, assignment);
+        self.inserts = inserts;
+        self.bass_preset = preset;
+        if assignment.part == Part::Bass {
+            let sound = PRESETS[usize::from(preset.index)];
+            self.bass = sound.controls;
+            self.voice.waveform = sound.waveform;
+        }
+    }
+
+    /// Consume a preset once, then honor later insert picker changes in the same snapshot.
+    pub(super) fn sync_panel(
+        &mut self,
+        preset: PresetSelection,
+        kinds: [InsertKind; INSERT_SLOTS],
+    ) {
+        if self.bass_preset != preset {
+            let sound = PRESETS[usize::from(preset.index)];
+            if self.assignment.part == Part::Bass {
+                let slide = self.bass.slide;
+                self.bass = sound.controls;
+                self.bass.slide = slide;
+                self.voice.waveform = sound.waveform;
+            }
+            // A queued recall can arrive after GLO reassigns the channel. Its effect
+            // settings still belong to this channel, even though the voice changed.
+            self.inserts = sound.inserts;
+            self.bass_preset = preset;
+        }
+        for (insert, kind) in self.inserts.iter_mut().zip(kinds) {
+            if insert.kind() != kind {
+                *insert = kind.initial(self.assignment.part);
+            }
+        }
+    }
+
+    pub(super) fn turn_algorithm(
+        &mut self,
+        view: View,
+        bass_control: Option<Control>,
+        detents: i8,
+    ) {
+        if self.assignment.part == Part::Bass {
+            // Navigation owns preset recalls; this path only edits a selected control.
+            match bass_control {
+                Some(Control::Knob(knob)) => self.bass.turn(knob, detents),
+                Some(Control::Waveform) => {
+                    self.voice.waveform = self.voice.waveform.saturating_add_signed(detents).min(1);
+                }
+                None => (),
+            }
         } else if self.assignment.part == Part::Hoover {
             if view == View::Scope && detents != 0 {
                 let program = i16::from(self.voice.waveform)
@@ -752,6 +811,19 @@ impl Track {
             self.poly_keys = [PolyKey::EMPTY; POLYPHONY];
         }
         self
+    }
+
+    // Control conversion is needed only after a panel or quantized LFO change.
+    // Keep its copies and instrument-specific event builders out of the audio loop.
+    #[inline(never)]
+    fn direct_events(
+        &self,
+        previous: Option<&Self>,
+        offset: KnobOffset,
+        previous_offset: KnobOffset,
+    ) -> Result<EventBatch, Error> {
+        self.direct(offset)
+            .events(previous.map(|track| track.direct(previous_offset)))
     }
 
     fn events(self, old: Option<Self>) -> Result<EventBatch, Error> {
@@ -1191,6 +1263,35 @@ impl<'a> Node<'a> {
             player: Player::Empty,
         }
     }
+
+    // Instrument construction needs a large temporary Player. Release that
+    // stack frame before rendering instead of keeping it below every voice.
+    #[cold]
+    #[inline(never)]
+    fn assign(&mut self, part: Part) {
+        self.player = match part {
+            Part::Mono => Player::Mono(Monosynth::new(self.tuning).with_idle_suspension()),
+            Part::Organ => Player::Organ(self.organ.clone()),
+            Part::Wavetable => Player::Wavetable(
+                Wavetable::new(self.tuning, &crate::assets::WAVETABLES)
+                    .expect("factory bank catalog"),
+            ),
+            Part::Fm => Player::Fm(Fm::new(self.tuning)),
+            Part::Hoover => Player::Hoover(Hoover::new(self.tuning)),
+            Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
+            Part::Sampler => Player::Sampler(
+                PitchedSampler::at_sample_rate(&crate::assets::RAVE_BANK, self.sample_rate)
+                    .expect("factory sample bank and audio clock"),
+            ),
+            // Reserve headroom before the resonant signal is converted to Q23.
+            Part::Bass => Player::Bass(
+                Tb303::new(self.sample_rate)
+                    .with_output_gain(0.0625)
+                    .with_idle_suspension(),
+            ),
+            part @ (Part::Tr909 | Part::Tr808) => Player::Drums(self.drums.assign(part)),
+        };
+    }
 }
 
 impl Process<Message, I24> for Node<'_> {
@@ -1206,28 +1307,7 @@ impl Process<Message, I24> for Node<'_> {
             ..
         }) = cx.events.first()
         {
-            self.player = match assignment.part {
-                Part::Mono => Player::Mono(Monosynth::new(self.tuning).with_idle_suspension()),
-                Part::Organ => Player::Organ(self.organ.clone()),
-                Part::Wavetable => Player::Wavetable(
-                    Wavetable::new(self.tuning, &crate::assets::WAVETABLES)
-                        .expect("factory bank catalog"),
-                ),
-                Part::Fm => Player::Fm(Fm::new(self.tuning)),
-                Part::Hoover => Player::Hoover(Hoover::new(self.tuning)),
-                Part::Supersaw => Player::Supersaw(Supersaw::new(self.tuning)),
-                Part::Sampler => Player::Sampler(
-                    PitchedSampler::at_sample_rate(&crate::assets::RAVE_BANK, self.sample_rate)
-                        .expect("factory sample bank and audio clock"),
-                ),
-                // Reserve headroom before the resonant signal is converted to Q23.
-                Part::Bass => Player::Bass(
-                    Tb303::new(self.sample_rate)
-                        .with_output_gain(0.0625)
-                        .with_idle_suspension(),
-                ),
-                part @ (Part::Tr909 | Part::Tr808) => Player::Drums(self.drums.assign(part)),
-            };
+            self.assign(assignment.part);
         }
         if let Player::Drums(node) = &mut self.player {
             return node.process(cx);
@@ -1749,6 +1829,17 @@ impl Instrument<'_> {
         &mut self,
         tracks: &[Track; CHANNELS],
         buses: &'b mut [[I24; N]; BUS_COUNT],
+        wire: impl FnMut(Channel, Event<MidiMessage>),
+    ) -> Result<&'b [I24; N], Error> {
+        self.render_controlled::<N, true>(tracks, buses, wire)
+    }
+
+    // The uncached instantiation exists only in regression tests, where complete
+    // PCM and MIDI traces are compared with the original per-block conversion.
+    fn render_controlled<'b, const N: usize, const CACHE_CONTROLS: bool>(
+        &mut self,
+        tracks: &[Track; CHANNELS],
+        buses: &'b mut [[I24; N]; BUS_COUNT],
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
         let downbeat = self.transport.playing() && self.player.transport_changed(self.transport);
@@ -1797,11 +1888,14 @@ impl Instrument<'_> {
         let mut enabled = self.sequences;
         let mut live_counts = [0; CHANNELS];
         let mut offsets = [KnobOffset::default(); CHANNELS];
+        let mut tracks_changed = false;
         let recovering = core::mem::take(&mut self.gap_events);
         for (i, events) in self.events.iter_mut().enumerate() {
-            let track = tracks[i];
+            let track = &tracks[i];
             let part = track.assignment.part;
-            let previous = self.previous.as_ref().map(|tracks| tracks[i]);
+            let previous = self.previous.as_ref().map(|tracks| &tracks[i]);
+            let changed = previous != Some(track);
+            tracks_changed |= changed;
             let old = previous.filter(|old| old.assignment == track.assignment);
             if old.is_none() {
                 inserts
@@ -1832,9 +1926,11 @@ impl Instrument<'_> {
                     Route::Knob { index, span } => offset = KnobOffset::new(index, span, amount),
                 }
             }
-            let mut panel = track
-                .direct(offset)
-                .events(old.map(|t| t.direct(self.offsets[i])))?;
+            let mut panel = if CACHE_CONTROLS && !changed && offset == self.offsets[i] {
+                EventBatch::new()
+            } else {
+                track.direct_events(old, offset, self.offsets[i])?
+            };
             offsets[i] = offset;
             if part == Part::Sampler && (old.is_none() || self.previous_bpm != self.transport.bpm) {
                 panel
@@ -1878,7 +1974,7 @@ impl Instrument<'_> {
             {
                 self.arps[i].clock.stop(|n| {
                     arp::route(
-                        &last,
+                        last,
                         Event {
                             frame: 0,
                             port: 0,
@@ -1933,7 +2029,7 @@ impl Instrument<'_> {
             self.player.position().map_or(0, |p| p.step)
         };
         gate_step(0, step)?;
-        let mut player = self.player;
+        let player = &mut self.player;
         player.render_steps(
             N,
             self.transport,
@@ -2039,7 +2135,6 @@ impl Instrument<'_> {
             player.downbeat,
             buses,
         );
-        self.player = player;
         self.shape_offsets = shape_offsets;
         self.position = player.position();
         self.drums = drums;
@@ -2047,7 +2142,9 @@ impl Instrument<'_> {
         self.bass_cycles = bass_cycles;
         self.reduction = reduction;
         self.offsets = offsets;
-        self.previous = Some(*tracks);
+        if !CACHE_CONTROLS || tracks_changed {
+            self.previous = Some(*tracks);
+        }
         self.previous_mixer = Some(self.mixer);
         self.echo_gates = gates;
         self.previous_bpm = self.transport.bpm;
@@ -2110,7 +2207,9 @@ fn event_order(event: &Event<Message>) -> u8 {
 #[cfg(test)]
 mod tests {
     mod arpeggiator;
+    mod control_cache;
     mod modulation;
+    mod presets;
     mod sampler;
     use super::*;
     use crate::{
@@ -3104,27 +3203,44 @@ mod tests {
     }
 
     #[test]
-    fn algorithm_edits_each_selected_303_knob_then_home_restores_the_waveform() -> Result<(), Error>
-    {
+    fn algorithm_edits_each_303_control_then_home_returns_to_presets() -> Result<(), Error> {
         let mut nav = Navigation::INITIAL;
         let mut track = Track::new(nav.assignments[0]);
         track.voice.gate.note = Some(note(53, 100));
-        for (knob, message) in [
-            (Knob::Attack, BassMessage::AttackSeconds(0.002)),
-            (Knob::Overdrive, BassMessage::OverdriveDb(1.0)),
-            (Knob::Tuning, BassMessage::TuningSemitones(0.1)),
-            (Knob::Cutoff, BassMessage::CutoffHz(561.0)),
-            (Knob::Resonance, BassMessage::Resonance(0.51)),
-            (Knob::EnvMod, BassMessage::EnvOctaves(25.0 / 12.0)),
-            (Knob::Decay, BassMessage::DecaySeconds(0.61)),
-            (Knob::Accent, BassMessage::Accent(0.51)),
+        for (control, message) in [
+            (
+                Control::Knob(Knob::Attack),
+                BassMessage::AttackSeconds(0.002),
+            ),
+            (
+                Control::Knob(Knob::Overdrive),
+                BassMessage::PedalDrive(1.0 / 36.0),
+            ),
+            (
+                Control::Waveform,
+                BassMessage::Waveform(wavegraph_303::Waveform::Square),
+            ),
+            (
+                Control::Knob(Knob::Tuning),
+                BassMessage::TuningSemitones(0.1),
+            ),
+            (Control::Knob(Knob::Cutoff), BassMessage::CutoffHz(561.0)),
+            (Control::Knob(Knob::Resonance), BassMessage::Resonance(0.51)),
+            (
+                Control::Knob(Knob::EnvMod),
+                BassMessage::EnvOctaves(25.0 / 12.0),
+            ),
+            (Control::Knob(Knob::Decay), BassMessage::DecaySeconds(0.61)),
+            (Control::Knob(Knob::Accent), BassMessage::Accent(0.51)),
         ] {
             let before = track;
             nav.turn(1, 0);
             track.edit_panel(nav.view, 1, [0; 4], false);
-            assert_eq!(nav.bass_knob(), Some(knob));
+            assert_eq!(nav.bass_control(), Some(control));
             assert!(track.events(Some(before))?.is_empty());
-            track.turn_algorithm(nav.view, nav.bass_knob(), 1);
+            nav.turn_algorithm(1);
+            track.turn_algorithm(nav.view, nav.bass_control(), 1);
+            assert_eq!(nav.bass_presets[0], PresetSelection::FIRST);
             assert_eq!(track.events(Some(before))?.as_slice(), &[at(message)]);
         }
         let before = track;
@@ -3139,15 +3255,17 @@ mod tests {
             ]
         );
         assert_eq!(nav.bass_knob(), Some(Knob::Accent));
-        track.turn_algorithm(nav.view, nav.bass_knob(), -1);
+        track.turn_algorithm(nav.view, nav.bass_control(), -1);
         assert_eq!(track.bass.detent(Knob::Accent), 50);
         let before = track;
         nav.press(crate::panel::PageButton::Home);
-        track.turn_algorithm(nav.view, nav.bass_knob(), 1);
-        assert_eq!(
-            track.events(Some(before))?.as_slice(),
-            &[at(BassMessage::Waveform(wavegraph_303::Waveform::Square))]
-        );
+        nav.turn_algorithm(1);
+        track.sync_panel(nav.bass_presets[0], nav.insert_kinds[0]);
+        track.turn_algorithm(nav.view, nav.bass_control(), 1);
+        assert_eq!(track.bass, Controls::HARMONY);
+        assert_eq!(track.bass_preset.index, 1);
+        assert_eq!(track.voice, before.voice);
+        assert_eq!(track.inserts, PRESETS[1].inserts);
         Ok(())
     }
 
@@ -3197,7 +3315,7 @@ mod tests {
         ] {
             with_instrument(44_118, |instrument| {
                 let mut parts = Track::rack(Navigation::SYNTH_RACK.assignments);
-                parts[2].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+                parts[2].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
                 parts[2].bass_fx().edit([turn, 25, 4, 0], false);
                 let fx = *parts[2].bass_fx();
                 assert_eq!(fx.key, key);
@@ -3256,8 +3374,8 @@ mod tests {
             let mut tracks = Track::rack(
                 [Part::Tr909, Part::Bass, Part::Bass, Part::Tr909].map(Assignment::new),
             );
-            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
-            tracks[2].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+            tracks[1].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
+            tracks[2].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
             let mut mixer = Mixer::DRY;
             mixer.0[0].level = 0;
             mixer.0[3].level = 0;
@@ -3332,11 +3450,19 @@ mod tests {
             assert_eq!(tracks[3].inserts, [Insert::None; 2]);
             tracks[1].inserts[0].edit([0, 0, 0, 12], false);
             let mut refs = [Saturator::new(); 2];
+            let mut duckers =
+                [SidechainDucker::<2>::new(44_118, 32, 176).expect("valid insert"); 2];
+            let setup =
+                [FxMessage::SidechainDepth(75), FxMessage::SidechainHz(180)].map(|message| Event {
+                    frame: 0,
+                    port: 0,
+                    message,
+                });
             let mut changes = Vec::<u8, 8>::new();
             let mut muted_once = false;
             let mut buses = [[I24::default(); 128]; BUS_COUNT];
             instrument.transport.toggle();
-            for _ in 0..2713 {
+            for block in 0..2713 {
                 // one four-bar loop at 122 BPM
                 instrument.render_with_midi(&tracks, &mut buses, |_, e| {
                     assert!(!matches!(e.message, MidiMessage::Control(20, _)));
@@ -3360,7 +3486,15 @@ mod tests {
                     };
                     fx.shape = fx.shape.saturating_add(offset).min(128);
                     reference.set_controls(fx);
-                    let expected = buses[c.source_bus()].map(|sample| reference.tick(sample));
+                    let saturated = buses[c.source_bus()].map(|sample| reference.tick(sample));
+                    let mut expected = [I24::default(); 128];
+                    duckers[i].process(&mut ProcessContext {
+                        frames: 128,
+                        inputs: &[&saturated, &buses[Channel::Four.source_bus() + 1]],
+                        outputs: &mut [&mut expected],
+                        events: if block == 0 { &setup } else { &[] },
+                        emit: &mut Err,
+                    });
                     assert_eq!(buses[STRIP_BUS + i], expected);
                 }
             }
@@ -3374,8 +3508,8 @@ mod tests {
         use crate::fx::KeySource;
         with_instrument(44_118, |instrument| {
             let mut tracks = Track::rack(Navigation::INITIAL.assignments);
-            tracks[0].inserts[0] = Insert::Compressor(BassFx::INITIAL);
-            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+            tracks[0].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
+            tracks[1].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
             tracks[0].bass_fx().edit([0, 25, 0, 0], true);
             tracks[1].bass_fx().key = KeySource::Kick808;
             tracks[1].voice.gate.note = Some(note(48, 120));
@@ -3847,7 +3981,7 @@ mod tests {
                 at(BassMessage::TuningSemitones(12.0)),
                 at(BassMessage::AttackSeconds(0.06)),
                 at(BassMessage::Accent(1.0)),
-                at(BassMessage::OverdriveDb(36.0)),
+                at(BassMessage::PedalDrive(1.0)),
                 at(BassMessage::Waveform(wavegraph_303::Waveform::Square)),
                 at(BassMessage::NoteOn {
                     note: 60,
@@ -3929,7 +4063,7 @@ mod tests {
             );
             let mut tracks = Track::rack(nav.assignments);
             assert_eq!(instrument.sequences, [true; 4]);
-            tracks[1].inserts[0] = Insert::Compressor(BassFx::INITIAL);
+            tracks[1].inserts = [Insert::Compressor(BassFx::INITIAL), Insert::None];
             tracks[1].voice.gate.note = Some(note(65, 100));
             tracks[2]
                 .drum_hits_mut()

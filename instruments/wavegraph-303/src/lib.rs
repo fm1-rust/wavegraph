@@ -9,6 +9,7 @@ mod dsp;
 mod effects;
 mod envelopes;
 mod instrument;
+mod pedal;
 mod reverb;
 mod voice;
 

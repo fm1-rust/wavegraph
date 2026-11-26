@@ -1,8 +1,8 @@
-//! Six fixed sound knobs above the scope and two auxiliary knobs beside the wordmark.
+//! Eight sound knobs, a waveform slide switch and an Algorithm preset readout.
 
 use super::{mixer::Band, selector::Selector, style::TB303};
 use crate::{
-    bass::{Controls, Knob, cutoff_detent},
+    bass::{Control, Controls, Knob, cutoff_detent, presets::PRESETS},
     firmware::Labels,
     instrument::Voice,
     panel::Channel,
@@ -45,42 +45,45 @@ struct Status {
 
 impl Status {
     fn draw(self, band: &mut Band<'_>, ink: Rgb565) {
-        let mut label = |x, s: &str| band.label(s, Point::new(x, 0), Alignment::Left, ink);
-        label(3, ["CH1", "CH2", "CH3", "CH4"][self.channel.index()]);
-        label(
-            27,
-            if self.voice.waveform == 0 {
-                "SAW"
-            } else {
-                "SQR"
-            },
-        );
-        label(51, if self.voice_tap { "SRC" } else { "DAC" });
-        label(
-            75,
-            if self.voice_tap {
-                "AUTO"
-            } else if self.half_gain {
-                "HALF"
-            } else {
-                "FULL"
-            },
-        );
+        let mut status = String::<16>::new();
+        write!(
+            status,
+            "{} ",
+            ["CH1", "CH2", "CH3", "CH4"][self.channel.index()]
+        )
+        .expect("four channel labels");
         if let Some(note) = self.voice.gate.note {
-            let mut key = String::<12>::new();
-            write!(key, "{} V{}", ascii(&self.voice.note_name()), note.velocity)
-                .expect("MIDI note and velocity fit 12 bytes");
-            label(104, &key);
+            write!(
+                status,
+                "{} V{}",
+                ascii(&self.voice.note_name()),
+                note.velocity
+            )
+            .expect("channel, MIDI note and velocity fit 16 bytes");
         } else {
-            label(104, self.transport);
+            write!(
+                status,
+                "{} {}",
+                if self.voice_tap {
+                    "SRC"
+                } else if self.half_gain {
+                    "1/2"
+                } else {
+                    "DAC"
+                },
+                self.transport,
+            )
+            .expect("channel, scope tap and transport fit 16 bytes");
         }
+        band.label(&status, Point::new(2, 0), Alignment::Left, ink);
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Snapshot {
     controls: Controls,
-    selected: Option<Knob>,
+    selected: Option<Control>,
+    preset: u8,
     status: Status,
     automation: Option<Automation>,
 }
@@ -90,6 +93,13 @@ struct Dial {
     pointer: Point,
     selected: bool,
     marker: Option<Point>,
+}
+
+#[derive(Eq, PartialEq)]
+struct WaveSwitch {
+    square: bool,
+    selected: bool,
+    marker: Option<bool>,
 }
 
 impl Snapshot {
@@ -115,8 +125,50 @@ impl Snapshot {
                 self.controls.detent(knob).saturating_sub(min),
                 max.saturating_sub(min),
             ),
-            selected: self.selected == Some(knob),
+            selected: self.selected == Some(Control::Knob(knob)),
             marker,
+        }
+    }
+
+    fn wave_switch(self) -> WaveSwitch {
+        WaveSwitch {
+            square: self.status.voice.waveform != 0,
+            selected: self.selected == Some(Control::Waveform),
+            marker: self
+                .automation
+                .and_then(|a| a.get(crate::bass::CC_WAVE))
+                .map(|value| value >= 64),
+        }
+    }
+}
+
+impl WaveSwitch {
+    fn draw(&self, band: &mut Band<'_>, selector: &Selector) {
+        let shade = |c| selector.shade(c);
+        let ink = if self.selected {
+            TB303.selected.ink
+        } else {
+            GRAPHITE
+        };
+        band.label("SAW", Point::new(2, 0), Alignment::Left, shade(ink));
+        band.label("SQR", Point::new(76, 0), Alignment::Right, shade(ink));
+        // A recessed slot, a raised ivory actuator and grip grooves match the dials' bevels.
+        band.rect(Point::new(24, 1), Size::new(30, 9), shade(SHADOW));
+        band.rect(Point::new(25, 2), Size::new(28, 7), shade(GRAPHITE));
+        band.rect(Point::new(25, 9), Size::new(29, 1), shade(IVORY));
+        let x = if self.square { 42 } else { 26 };
+        band.rect(Point::new(x + 1, 3), Size::new(10, 7), shade(SHADOW));
+        band.rect(Point::new(x, 2), Size::new(10, 7), shade(IVORY));
+        for groove in [3, 6] {
+            band.rect(Point::new(x + groove, 3), Size::new(1, 5), shade(GRAPHITE));
+        }
+        // The actuator retains the panel choice; a witness mark follows clip automation.
+        if let Some(square) = self.marker {
+            band.rect(
+                Point::new(if square { 46 } else { 30 }, 0),
+                Size::new(3, 2),
+                shade(if self.selected { ink } else { OXIDE }),
+            );
         }
     }
 }
@@ -179,7 +231,7 @@ impl Dial {
         band.label(
             match knob {
                 Knob::Resonance => "RESO",
-                Knob::Overdrive => "DRIVE",
+                Knob::Overdrive => "OD",
                 _ => ascii(knob.name()),
             },
             Point::new(center.x, 21),
@@ -206,7 +258,8 @@ impl Panel {
     ) -> Result<(), Error> {
         let state = Snapshot {
             controls: labels.bass,
-            selected: labels.bass_knob,
+            selected: labels.bass_control,
+            preset: labels.bass_preset,
             status: Status {
                 channel: labels.channel,
                 voice: labels.voice,
@@ -227,17 +280,34 @@ impl Panel {
             lcd.write_rect_buffered(0, 0, 78, 20, logo.pixels.as_flattened())
                 .await?;
         }
-        if old.is_none_or(|s| s.controls != state.controls || s.selected != state.selected) {
+        if old.is_none_or(|s| {
+            s.controls != state.controls
+                || s.selected != state.selected
+                || s.preset != state.preset
+                || s.status.voice.waveform != state.status.voice.waveform
+        }) {
             let mut display =
                 Band::new(pixels, 0, 0, 80, 20, selector.shade(GRAPHITE)).with_panel_type(true);
-            readout(&mut display, state.controls, state.selected, selector);
+            readout(&mut display, state, selector);
             lcd.write_rect_buffered(78, 0, 80, 20, display.pixels.as_flattened())
                 .await?;
         }
+        let switch = state.wave_switch();
+        if old.is_none_or(|s| s.wave_switch() != switch) {
+            let fill = if switch.selected {
+                selector.shade(TB303.selected.fill)
+            } else {
+                paper
+            };
+            let mut band = Band::new(pixels, 0, 0, 78, 11, fill).with_panel_type(true);
+            switch.draw(&mut band, selector);
+            lcd.write_rect_buffered(0, 21, 78, 11, band.pixels.as_flattened())
+                .await?;
+        }
         if old.is_none_or(|s| s.status != state.status) {
-            let mut status = Band::new(pixels, 0, 0, 158, 10, paper).with_panel_type(true);
+            let mut status = Band::new(pixels, 0, 0, 80, 10, paper).with_panel_type(true);
             state.status.draw(&mut status, selector.shade(GRAPHITE));
-            lcd.write_rect_buffered(0, 21, 158, 10, status.pixels.as_flattened())
+            lcd.write_rect_buffered(78, 21, 80, 10, status.pixels.as_flattened())
                 .await?;
         }
         for (i, knob) in Knob::PANEL.into_iter().enumerate() {
@@ -294,22 +364,55 @@ fn ascii(bytes: &[u8]) -> &str {
     str::from_utf8(bytes.trim_ascii_end()).expect("ASCII panel text")
 }
 
-fn readout(band: &mut Band<'_>, controls: Controls, selected: Option<Knob>, selector: &Selector) {
-    let knob = selected.unwrap_or(controls.last);
-    let (name, value, units) = controls.readout(knob);
-    if selected.is_some() {
-        band.label(
-            "ALG",
-            Point::new(2, 0),
-            Alignment::Left,
-            selector.shade(LAMP),
-        );
-    }
+fn readout(band: &mut Band<'_>, state: Snapshot, selector: &Selector) {
+    let shade = |c| selector.shade(c);
+    let knob = match state.selected {
+        None => {
+            let mut heading = String::<16>::new();
+            write!(
+                heading,
+                "ALG {}/{}",
+                u16::from(state.preset) + 1,
+                PRESETS.len()
+            )
+            .expect("small preset bank");
+            band.label(&heading, Point::new(2, 0), Alignment::Left, shade(IVORY));
+            band.label(
+                PRESETS[usize::from(state.preset)].name,
+                Point::new(2, 10),
+                Alignment::Left,
+                shade(LAMP),
+            );
+            return;
+        }
+        Some(Control::Waveform) => {
+            band.label(
+                "ALG WAVEFORM",
+                Point::new(2, 0),
+                Alignment::Left,
+                shade(IVORY),
+            );
+            band.label(
+                if state.status.voice.waveform == 0 {
+                    "SAW"
+                } else {
+                    "SQUARE"
+                },
+                Point::new(77, 10),
+                Alignment::Right,
+                shade(LAMP),
+            );
+            return;
+        }
+        Some(Control::Knob(knob)) => knob,
+    };
+    let (name, value, units) = state.controls.readout(knob);
+    band.label("ALG", Point::new(2, 0), Alignment::Left, shade(LAMP));
     band.label(
         ascii(name),
         Point::new(77, 0),
         Alignment::Right,
-        selector.shade(IVORY),
+        shade(IVORY),
     );
     let mut number = String::<16>::new();
     if knob == Knob::Tuning {
@@ -319,12 +422,7 @@ fn readout(band: &mut Band<'_>, controls: Controls, selected: Option<Knob>, sele
     }
     .expect("panel value fits 16 bytes");
     write!(number, " {}", ascii(units)).expect("panel value and units fit 16 bytes");
-    band.label(
-        &number,
-        Point::new(77, 10),
-        Alignment::Right,
-        selector.shade(LAMP),
-    );
+    band.label(&number, Point::new(77, 10), Alignment::Right, shade(LAMP));
 }
 
 fn wordmark(band: &mut Band<'_>, selector: &Selector) {

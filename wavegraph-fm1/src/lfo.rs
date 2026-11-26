@@ -39,7 +39,7 @@ const BASS: &[Target] = &[
     bass("DECAY", Destination::Decay),
     bass("ACCENT", Destination::Accent),
     bass("ATTACK", Destination::Attack),
-    bass("OVERDRIVE", Destination::Overdrive),
+    bass("OD", Destination::PedalDrive),
 ];
 const MONO: &[Target] = &[knob("CUTOFF", 0, 18)];
 const ORGAN: &[Target] = &[
@@ -198,7 +198,7 @@ impl Controls {
 
 /// Render-time offset in the same units as the physical encoder. The track's
 /// stored program is always the center, even if edited while the LFO runs.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub(super) struct KnobOffset {
     index: u8,
     detents: i8,

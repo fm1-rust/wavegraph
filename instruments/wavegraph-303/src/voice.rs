@@ -1,5 +1,6 @@
 use crate::Envelopes;
 use crate::dsp::{clamp, fast_exp2, fast_tanh, midi_to_hz, tau_to_coef};
+use crate::envelopes::CachedCoefficient;
 
 const STAGE_POLES: [f32; 4] = [0.128, 1.0382, 2.3254, 3.2356];
 
@@ -72,9 +73,11 @@ struct DiodeLadder {
     coeff: [f32; 4],
     sigma_weights: [f32; 4],
     gamma: f32,
+    feedback_recip: f32,
     hp: f32,
     hp_coef: f32,
     stage_drive: f32,
+    stage_recip: f32,
 }
 
 /// Monophonic oscillator, resonant ladder, envelopes, accent circuit and glide.
@@ -91,6 +94,8 @@ pub struct Voice {
     envelopes: Envelopes,
     post_lp: f32,
     sliding: bool,
+    glide_coefficient: CachedCoefficient,
+    post_hp_coefficient: CachedCoefficient,
 }
 
 impl Voice {
@@ -109,18 +114,22 @@ impl Voice {
                 coeff: [0.5; 4],
                 sigma_weights: [0.0; 4],
                 gamma: 0.0,
+                feedback_recip: 1.0,
                 hp: 0.0,
                 hp_coef: tau_to_coef(
                     1.0 / (2.0 * core::f32::consts::PI * 12.0),
                     2.0 * sample_rate,
                 ),
                 stage_drive: 0.0,
+                stage_recip: 0.0,
             },
             until_cutoff: 0,
             waveform_slew: tau_to_coef(0.0015, sample_rate),
             envelopes: Envelopes::new(sample_rate),
             post_lp: 0.0,
             sliding: false,
+            glide_coefficient: CachedCoefficient::EMPTY,
+            post_hp_coefficient: CachedCoefficient::EMPTY,
         }
     }
 }
@@ -131,7 +140,16 @@ impl DiodeLadder {
         self.hp = 0.0;
     }
 
-    fn set_cutoff(&mut self, wc_hz: f32) {
+    fn set_feedback(&mut self, k: f32) {
+        self.feedback_recip = 1.0 / (1.0 + k * self.gamma);
+    }
+
+    fn set_drive(&mut self, drive: f32) {
+        self.stage_drive = drive;
+        self.stage_recip = if drive > 0.0 { 1.0 / drive } else { 0.0 };
+    }
+
+    fn set_cutoff(&mut self, wc_hz: f32, k: f32) {
         for (coeff, pole) in self.coeff.iter_mut().zip(STAGE_POLES) {
             let f = clamp(wc_hz * pole, 10.0, 0.45 * self.rate);
             let g = crate::dsp::filter_tan(core::f32::consts::PI * f / self.rate);
@@ -141,11 +159,18 @@ impl DiodeLadder {
         let cd = c * d;
         self.gamma = (a * b) * cd;
         self.sigma_weights = [b * cd * (1.0 - a), cd * (1.0 - b), d * (1.0 - c), 1.0 - d];
+        self.set_feedback(k);
     }
 
     fn saturate(&self, x: f32) -> f32 {
         if self.stage_drive > 0.0 {
-            fast_tanh(self.stage_drive * x) / self.stage_drive
+            let y = fast_tanh(self.stage_drive * x);
+            if self.stage_recip.is_finite() {
+                y * self.stage_recip
+            } else {
+                // Preserve the original behavior for tiny positive raw API drives.
+                y / self.stage_drive
+            }
         } else {
             x
         }
@@ -158,12 +183,23 @@ impl DiodeLadder {
         y
     }
 
+    // The FM-1 uses a positive drive with a finite reciprocal. Keep the raw
+    // API's bypass and tiny-drive division fallback outside the SRAM renderer.
+    #[inline(never)]
+    fn exceptional_stages(&mut self, input: f32) -> f32 {
+        let a = Self::stage(self.saturate(input), self.coeff[0], &mut self.state[0]);
+        let b = Self::stage(self.saturate(a), self.coeff[1], &mut self.state[1]);
+        let c = Self::stage(self.saturate(b), self.coeff[2], &mut self.state[2]);
+        Self::stage(self.saturate(c), self.coeff[3], &mut self.state[3])
+    }
+
     // SAFETY: the FM-1 linker places .data in executable SRAM and startup copies it before use.
     #[cfg_attr(
         all(target_os = "none", feature = "fm1-ram-code"),
         allow(unsafe_code),
         unsafe(link_section = ".data.wavegraph_audio")
     )]
+    #[inline(always)]
     fn process(&mut self, x: f32, k: f32) -> f32 {
         // Zero-delay feedback: each stage is y = G x + (1 - G) z, so the
         // chain's output is Gamma u + Sigma, and the loop u = x - k (y - hp)
@@ -172,12 +208,19 @@ impl DiodeLadder {
         // The input saturation is then applied to the solved input.
         let [a, b, c, d] = self.sigma_weights;
         let sigma = a * self.state[0] + b * self.state[1] + c * self.state[2] + d * self.state[3];
-        let y_est = (self.gamma * (x + k * self.hp) + sigma) / (1.0 + k * self.gamma);
+        let y_est = (self.gamma * (x + k * self.hp) + sigma) * self.feedback_recip;
         let input = fast_tanh(x - k * (y_est - self.hp));
-        let a = Self::stage(self.saturate(input), self.coeff[0], &mut self.state[0]);
-        let b = Self::stage(self.saturate(a), self.coeff[1], &mut self.state[1]);
-        let c = Self::stage(self.saturate(b), self.coeff[2], &mut self.state[2]);
-        let output = Self::stage(self.saturate(c), self.coeff[3], &mut self.state[3]);
+        let output = if self.stage_drive > 0.0 && self.stage_recip.is_finite() {
+            let drive = self.stage_drive;
+            let reciprocal = self.stage_recip;
+            let scaled = |value| fast_tanh(drive * value) * reciprocal;
+            let a = Self::stage(scaled(input), self.coeff[0], &mut self.state[0]);
+            let b = Self::stage(scaled(a), self.coeff[1], &mut self.state[1]);
+            let c = Self::stage(scaled(b), self.coeff[2], &mut self.state[2]);
+            Self::stage(scaled(c), self.coeff[3], &mut self.state[3])
+        } else {
+            self.exceptional_stages(input)
+        };
         self.hp += (output - self.hp) * self.hp_coef;
         output
     }
@@ -244,9 +287,12 @@ impl Voice {
         out: &mut [S],
         mut write: impl FnMut(&mut S, f32),
     ) -> Option<usize> {
-        // The upstream scheduler updates panel coefficients once per call.
+        // Check public parameters at every span boundary, while retaining
+        // coefficients whose individual inputs have not changed.
+        let sample_rate = self.sr;
         let glide = if self.sliding {
-            tau_to_coef(p.slide_s / 3.0, self.sr)
+            self.glide_coefficient
+                .get(p.slide_s, || tau_to_coef(p.slide_s / 3.0, sample_rate))
         } else {
             1.0
         };
@@ -254,9 +300,16 @@ impl Voice {
         let input_gain =
             p.ladder_in * fast_exp2(p.overdrive_db / (20.0 * core::f32::consts::LOG10_2));
         let k = p.max_loop_gain * p.resonance;
-        self.ladder.stage_drive = p.stage_drive;
+        self.ladder.set_drive(p.stage_drive);
+        // Resonance can change on an event boundary before the next cutoff update.
+        self.ladder.set_feedback(k);
         let post_hp = if p.post_hp_hz > 0.0 {
-            tau_to_coef(1.0 / (2.0 * core::f32::consts::PI * p.post_hp_hz), self.sr)
+            self.post_hp_coefficient.get(p.post_hp_hz, || {
+                tau_to_coef(
+                    1.0 / (2.0 * core::f32::consts::PI * p.post_hp_hz),
+                    sample_rate,
+                )
+            })
         } else {
             0.0
         };
@@ -276,7 +329,7 @@ impl Voice {
             if self.until_cutoff == 0 {
                 self.until_cutoff = 3;
                 self.ladder
-                    .set_cutoff(self.envelopes.cutoff_hz(p, base_oct));
+                    .set_cutoff(self.envelopes.cutoff_hz(p, base_oct), k);
             } else {
                 self.until_cutoff = self.until_cutoff.saturating_sub(1);
             }
@@ -343,6 +396,211 @@ impl Voice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Keep the original four independent saturate calls as the reference for
+    // both normal scaling and the raw API's bypass/division paths.
+    fn original_ladder_process(ladder: &mut DiodeLadder, x: f32, k: f32) -> f32 {
+        let [a, b, c, d] = ladder.sigma_weights;
+        let sigma =
+            a * ladder.state[0] + b * ladder.state[1] + c * ladder.state[2] + d * ladder.state[3];
+        let y_est = (ladder.gamma * (x + k * ladder.hp) + sigma) * ladder.feedback_recip;
+        let input = fast_tanh(x - k * (y_est - ladder.hp));
+        let a = DiodeLadder::stage(
+            ladder.saturate(input),
+            ladder.coeff[0],
+            &mut ladder.state[0],
+        );
+        let b = DiodeLadder::stage(ladder.saturate(a), ladder.coeff[1], &mut ladder.state[1]);
+        let c = DiodeLadder::stage(ladder.saturate(b), ladder.coeff[2], &mut ladder.state[2]);
+        let output = DiodeLadder::stage(ladder.saturate(c), ladder.coeff[3], &mut ladder.state[3]);
+        ladder.hp += (output - ladder.hp) * ladder.hp_coef;
+        output
+    }
+
+    #[test]
+    fn ladder_stage_specialization_preserves_output_and_all_states() {
+        // Include both sides of reciprocal overflow among the subnormal
+        // drives, signed zero, bypass, and the FM-1's fixed drive of 0.75.
+        const DRIVES: [f32; 19] = [
+            0.0,
+            -0.0,
+            -0.75,
+            f32::from_bits(1),
+            f32::from_bits(0x001f_ffff),
+            f32::from_bits(0x0020_0000),
+            f32::from_bits(0x0020_0001),
+            f32::from_bits(0x007f_ffff),
+            f32::MIN_POSITIVE,
+            1e-30,
+            0.0001,
+            0.125,
+            0.75,
+            1.0,
+            1.25,
+            4.0,
+            16.0,
+            256.0,
+            f32::MAX,
+        ];
+        const INPUTS: [f32; 16] = [
+            -16.0,
+            -3.000_001,
+            -3.0,
+            -2.999_999,
+            -1.0,
+            -f32::MIN_POSITIVE,
+            -f32::from_bits(1),
+            -0.0,
+            0.0,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.0,
+            2.999_999,
+            3.0,
+            3.000_001,
+            16.0,
+        ];
+        let mut seed = 0x3a03_7da9_u32;
+        for rate in [8000.0, 44_118.0, 96_000.0] {
+            for start in 0..DRIVES.len() {
+                let mut actual = Voice::new(rate).ladder;
+                let mut expected = Voice::new(rate).ladder;
+                for frame in 0..2048 {
+                    let drive = DRIVES[(start + frame / 101) % DRIVES.len()];
+                    let k = [0.0, 0.495, 4.95, 14.85, 16.5][frame / 13 % 5];
+                    for ladder in [&mut actual, &mut expected] {
+                        ladder.set_drive(drive);
+                        if frame % 17 == 0 {
+                            let cutoff =
+                                [62.0, 110.0, 630.0, 2000.0, 6000.0, 16_000.0][frame / 17 % 6];
+                            ladder.set_cutoff(cutoff, k);
+                        } else {
+                            ladder.set_feedback(k);
+                        }
+                        if frame % 509 == 0 {
+                            ladder.reset();
+                        }
+                    }
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let bytes = seed.to_le_bytes();
+                    let random = f32::from(u16::from_le_bytes([bytes[2], bytes[3]]));
+                    let input = if frame % 4 == 0 {
+                        INPUTS[frame / 4 % INPUTS.len()]
+                    } else {
+                        random * (1.0 / 1024.0) - 32.0
+                    };
+                    let output = actual.process(input, k);
+                    let reference = original_ladder_process(&mut expected, input, k);
+                    assert!(
+                        output.is_finite(),
+                        "rate={rate}, drive={drive}, frame={frame}"
+                    );
+                    assert_eq!(output.to_bits(), reference.to_bits());
+                    // These are all the state variables process can change;
+                    // retaining them exactly also checks subsequent samples.
+                    assert_eq!(
+                        actual.state.map(f32::to_bits),
+                        expected.state.map(f32::to_bits)
+                    );
+                    assert_eq!(actual.hp.to_bits(), expected.hp.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cached_coefficients_preserve_audio_and_clock_across_public_parameter_edits() {
+        // Recomputing every coefficient is the original control-rate behavior.
+        // Compare whole sample streams, not just cached coefficient values.
+        for rate in [8000.0, 44_118.0, 96_000.0] {
+            let mut cached = Voice::new(rate);
+            let mut original = Voice::new(rate);
+            let mut p = VoiceParams::default();
+            for block in 0..180 {
+                if block % 17 == 0 {
+                    p.decay_s = [0.0, 0.05, 0.2, 0.6, 2.0][block / 17 % 5];
+                }
+                if block % 19 == 0 {
+                    p.attack_s = [0.0, 0.0015, 0.060][block / 19 % 3];
+                }
+                if block % 23 == 0 {
+                    p.slide_s = [0.0, 0.006, 0.06, 0.2][block / 23 % 4];
+                }
+                if block % 13 == 0 {
+                    p.post_hp_hz = [0.0, 20.0, 120.0, 600.0][block / 13 % 4];
+                }
+                // Include continuous resonance modulation while other inputs
+                // remain fixed, and return to previously cached settings.
+                p.resonance = [0.0, 0.3, 0.6, 0.9, 1.0, 0.9, 0.6, 0.3][block % 8];
+                p.square = block % 29 >= 14;
+                for voice in [&mut cached, &mut original] {
+                    match block % 30 {
+                        0 => voice.note_on(36, false, false),
+                        4 => voice.note_on(43, true, true),
+                        8 => voice.note_on(50, false, true),
+                        12 => voice.note_off(),
+                        22 => voice.reset(),
+                        _ => {}
+                    }
+                }
+                original.glide_coefficient = CachedCoefficient::EMPTY;
+                original.post_hp_coefficient = CachedCoefficient::EMPTY;
+                original.envelopes.invalidate_coefficients();
+                let frames = [1, 17, 32, 127, 128, 257][block % 6];
+                let mut actual = [0.0_f32; 257];
+                let mut expected = [0.0_f32; 257];
+                let idle = cached.skip_silence(&p, frames);
+                assert_eq!(idle, original.skip_silence(&p, frames));
+                if !idle {
+                    let cycle = cached.render_with(&p, &mut actual[..frames], |out, x| *out = x);
+                    let reference =
+                        original.render_with(&p, &mut expected[..frames], |out, x| *out = x);
+                    assert_eq!(cycle, reference);
+                }
+                for (sample, reference) in actual[..frames].iter().zip(&expected[..frames]) {
+                    assert!(sample.is_finite());
+                    assert_eq!(sample.to_bits(), reference.to_bits());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stage_reciprocal_matches_direct_scaling() {
+        let mut voice = Voice::new(44_118.0);
+        for drive in [0.0, f32::from_bits(1), 0.125, 0.75, 1.25, 4.0] {
+            voice.ladder.set_drive(drive);
+            for x in [-4.0, -1.0, -0.125, 0.0, 0.125, 1.0, 4.0] {
+                let expected = if drive > 0.0 {
+                    fast_tanh(drive * x) / drive
+                } else {
+                    x
+                };
+                let actual = voice.ladder.saturate(x);
+                assert!((actual - expected).abs() <= 2e-7 * expected.abs().max(1.0));
+            }
+        }
+    }
+
+    #[test]
+    fn feedback_reciprocal_tracks_resonance_between_cutoff_updates() {
+        let mut p = VoiceParams::default();
+        let mut voice = Voice::new(44_118.0);
+        voice.note_on(36, true, false);
+        voice.render_add(&p, &mut [0.0]);
+        let gamma = voice.ladder.gamma;
+        assert_eq!(voice.until_cutoff, 3);
+        p.resonance = 0.93;
+        voice.render_add(&p, &mut [0.0]);
+        assert_eq!(voice.ladder.gamma, gamma);
+        let k = p.max_loop_gain * p.resonance;
+        assert_eq!(voice.ladder.feedback_recip, 1.0 / (1.0 + k * gamma));
+        voice.render_add(&p, &mut [0.0; 4]);
+        assert_eq!(
+            voice.ladder.feedback_recip,
+            1.0 / (1.0 + k * voice.ladder.gamma)
+        );
+    }
 
     #[test]
     fn silent_voice_suspends_the_ladder_but_discharges_accent() {
