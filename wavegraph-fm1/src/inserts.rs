@@ -2,7 +2,7 @@
 
 use crate::{
     fx::{BassFx, INSERT_SLOTS, Insert, InsertKind, KeySource},
-    instrument::{Message, Part},
+    instrument::{DRY_HEADROOM, Message, Part},
     panel::{CHANNELS, Channel},
 };
 use heapless::Vec;
@@ -64,7 +64,8 @@ impl Processor {
 }
 
 /// Each source supplies its full signal and isolated kick. The first four
-/// outputs feed the strip faders. The last is scratch for the external key mix.
+/// outputs feed the strip faders. After the external key mix, the last outlet
+/// carries post-fader Hoover stereo width when a clean Hoover is routed.
 pub(super) struct ChannelInserts {
     parts: [Part; CHANNELS],
     controls: [[Insert; INSERT_SLOTS]; CHANNELS],
@@ -74,6 +75,8 @@ pub(super) struct ChannelInserts {
     slicers: [Slicer; CHANNELS],
     filters: [ClockedFilter; CHANNELS],
     beat_target: Option<Channel>,
+    hoover_levels: [u8; CHANNELS],
+    check_dry: u8,
     factory: SidechainDucker,
     flat_eq: ThreeBandEq,
 }
@@ -88,6 +91,8 @@ impl ChannelInserts {
             rate_hz,
             beat_flanger: Flanger::new(rate_hz).expect("audio sample rate"),
             beat_target: None,
+            hoover_levels: [0; CHANNELS],
+            check_dry: 0,
             slicers: [Slicer::new(rate_hz).expect("audio sample rate"); CHANNELS],
             filters: [ClockedFilter::new(rate_hz); CHANNELS],
             factory,
@@ -121,6 +126,40 @@ impl ChannelInserts {
                     *sample = I24::new_unchecked(sum.clamp(-(1 << 23), (1 << 23) - 1));
                 }
             }
+        }
+    }
+    // The detector scratch is free once the inserts finish. Its new contents
+    // are for the stereo master alone, leaving sends and tape capture mono.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "Four Q23 samples scaled by byte faders fit i32 after the Q7 shift"
+    )]
+    fn mix_hoover_side(&mut self, inputs: &[&[I24]], strips: &[&mut [I24]], out: &mut [I24]) {
+        let mut taps = Vec::<_, CHANNELS>::new();
+        for channel in Channel::ALL {
+            let i = channel.index();
+            let gain = self.hoover_levels[i];
+            let src = channel.source_bus();
+            // Bypassed filters, flangers and gates can still be fading to dry.
+            if gain == 0 {
+                continue;
+            }
+            let bit = 1 << i;
+            if self.check_dry & bit != 0 {
+                if *strips[i] != *inputs[src] {
+                    continue;
+                }
+                self.check_dry &= !bit;
+            }
+            taps.push((i32::from(gain), inputs[src + 1]))
+                .expect("one side per strip");
+        }
+        for (frame, out) in out.iter_mut().enumerate() {
+            let sum: i32 = taps
+                .iter()
+                .map(|(gain, tap)| (tap[frame].inner() * gain) >> 7)
+                .sum();
+            *out = I24::new_unchecked(sum >> DRY_HEADROOM);
         }
     }
 }
@@ -162,6 +201,14 @@ impl Process<Message, I24> for ChannelInserts {
         let mut changed = [[false; INSERT_SLOTS]; CHANNELS];
         for event in cx.events {
             match event.message {
+                Message::HooverLevels(levels) => {
+                    for (i, (&old, &new)) in self.hoover_levels.iter().zip(&levels).enumerate() {
+                        if old == 0 && new > 0 {
+                            self.check_dry |= 1 << i;
+                        }
+                    }
+                    self.hoover_levels = levels;
+                }
                 Message::FilterClock(timing, restart) => {
                     filter_clock.control(timing);
                     restart_filters = restart;
@@ -289,10 +336,17 @@ impl Process<Message, I24> for ChannelInserts {
                 *sample = self.beat_flanger.tick(*sample);
             }
         }
-        for ((filter, slicer), strip) in self.filters.iter_mut().zip(&mut self.slicers).zip(strips)
+        for ((filter, slicer), strip) in self
+            .filters
+            .iter_mut()
+            .zip(&mut self.slicers)
+            .zip(&mut *strips)
         {
             filter.process(strip, filter_clock, restart_filters);
             slicer.process_in_place(strip);
+        }
+        if self.hoover_levels != [0; CHANNELS] {
+            self.mix_hoover_side(cx.inputs, strips, detector[0]);
         }
     }
 }

@@ -55,7 +55,7 @@ fn gain(db: i8) -> f32 {
 /// wide bus sum directly without first clipping it to a signal port.
 /// The compressor observes consecutive 16-sample peaks (four in the detector probe). The independent
 /// zero-lookahead limiter acts on every sample, including the first transient.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MasterBus {
     bands: Bands,
     side_bands: Bands,
@@ -238,6 +238,30 @@ impl MasterBus {
             }
         }
         stereo.map(|sample| pcm(sample as i32))
+    }
+
+    /// Process a mono span whose wide input sums are all zero. A settled bus
+    /// repeats precisely after one detector window, including its meter and
+    /// window phase. Edits and decaying filter or gain state render normally.
+    pub fn process_silence(&mut self, output: &mut [I24]) {
+        let render = |bus: &mut Self, samples: &mut [I24]| {
+            for out in samples {
+                *out = bus.process_sample(0);
+            }
+        };
+        let (windows, tail) = output.as_chunks_mut::<{ WINDOW as usize }>();
+        if let Some((first, rest)) = windows.split_first_mut() {
+            let before = *self;
+            render(self, first);
+            if *self == before {
+                rest.fill(*first);
+            } else {
+                for window in rest {
+                    render(self, window);
+                }
+            }
+        }
+        render(self, tail);
     }
 
     /// Process a signed sample in Q23 units. An i32 accumulator leaves headroom

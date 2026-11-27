@@ -112,7 +112,7 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
 | FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
-| Knobs 1–4 with CHORUS selected | Set rate, depth, wet-path tone and wet/dry mix. Both taps fold into the mono strip. The initial settings match Fast Hoover. |
+| Knobs 1–4 with CHORUS selected | Set rate, depth, wet-path tone and wet/dry mix. Both taps fold into the mono strip. |
 | EDIT from channel FX or GLO’s FX rack | Open Beat FX for the focused instrument, including when an insert or rack device is selected. Knob 1 sets BEATS for every synced effect. Turn SELECT for Echo, Flanger, Slicer or PCF and PRESETS for the channel. |
 | Knobs 1–4 with FLANGER selected in a channel insert slot | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
@@ -122,7 +122,9 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for FM and 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
-For **HOOVER**, press GLO, choose a channel with SELECT and assign HOOVER with PRESETS. Press GLO again to play. Use the four knobs for cutoff, pitch sweep, PWM depth and chorus rate. Press ENV to see the shared pitch/filter/amp contour. Turn SELECT or press SEL to cycle through times T1–T4, levels L1–L3 plus resonance, DCO pulse/saw/sub waveforms plus sub level, and filter/PWM/noise settings. On the scope, ALGORITHM recalls Fast Hoover, What The and Twin Peak. To replay a Hoover chord or phrase at another pitch, [sample it into the clipboard](#sample-a-chord-into-the-clipboard).
+For **HOOVER**, press GLO, choose a channel with SELECT and assign HOOVER with PRESETS. Press GLO again to play. Use the four knobs for cutoff, pitch sweep, PWM depth and chorus rate. Press ENV to see the shared pitch/filter/amp contour. Turn SELECT or press SEL to cycle through times T1–T4, levels L1–L3 plus resonance, DCO pulse/saw/sub waveforms plus sub level, and filter/PWM/noise settings. Dominator opens with a low wind-up and sweeps about five semitones above the played note. Hold the key to hear it settle onto pitch, or lift early to catch the rev on its way up. On the scope, ALGORITHM recalls Dominator, Fast Hoover, What The and Twin Peak in that order. To replay a Hoover chord or phrase at another pitch, [sample it into the clipboard](#sample-a-chord-into-the-clipboard).
+
+For a stereo audition from the factory rack, assign HOOVER to channel 3 or 4. These strips start with empty insert slots. The Hoover's built-in chorus reaches the headphones and USB capture in stereo on a clean strip. The channel fader and master controls act on both returns. A serial channel insert, Beat Flanger, Slicer or Pattern Filter takes the mono sum while it processes the Hoover. The sampler clipboard, tape and reverb/delay sends also take the mono sum.
 
 ![Fast Hoover playing a chord on the FM-1 rack panel](assets/hoover.png)
 
@@ -1118,9 +1120,8 @@ its successful boot handshake cannot rule out the [load-dependent SRAM
 misreads observed on one FM-1][cpu1-sram].
 
 The render slot carries the exclusive reference to the graph's signal buses.
-On a current completion, CPU0 reads the selected full- or half-gain master bus
-directly. `fm1_audio::mix::planar_q23` centers that mono plane in the stereo
-output block. This removes the 512-byte worker PCM array and its per-block copy.
+On a current completion, CPU0 reads the selected full- or half-gain pair of
+master buses directly into the stereo output block. This removes the 512-byte worker PCM array and its per-block copy.
 The output driver applies the physical MASTER ramp, exposes the post-gain scope
 samples and copies the result into the released DMA half. This keeps the one-block
 lookahead (about 2.90 ms). CPU0 publishes settings, changed chords, startup cue

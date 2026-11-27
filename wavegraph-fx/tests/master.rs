@@ -123,3 +123,25 @@ fn bypass_and_frame_stamped_edits_work_for_the_graph_node() {
     assert_eq!((y[0], y[3]), (x[0], x[3]));
     assert!(y[1].inner() < x[1].inner() && y[2] == y[1]);
 }
+
+#[test]
+fn silent_spans_match_scalar_state_through_decay_and_new_attacks() {
+    let mut scalar = master();
+    scalar.edit(MasterControls::Dynamics(Some(Dynamics::GLUE)));
+    scalar.edit(MasterControls::Eq(Some([12, -3, 5])));
+    let mut spans = scalar;
+    for step in 0..2200 {
+        let len = [0, 1, 15, 16, 17, 127, 128, 129][step % 8];
+        if step == 13 || step == 2003 {
+            for input in [RAIL - 1, -RAIL, RAIL / 2] {
+                assert_eq!(spans.process_sample(input), scalar.process_sample(input));
+            }
+        }
+        let mut silent = [I24::default(); 129];
+        spans.process_silence(&mut silent[..len]);
+        for &out in &silent[..len] {
+            assert_eq!(out, scalar.process_sample(0));
+        }
+        assert_eq!(spans, scalar);
+    }
+}

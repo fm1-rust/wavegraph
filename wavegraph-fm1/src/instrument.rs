@@ -403,7 +403,7 @@ impl Track {
                 _ => EnvelopeControls::INITIAL,
             },
             bank: match assignment.part {
-                Part::Hoover => Bank::Hoover(HooverPatch::HOOVER, HooverPage::Times),
+                Part::Hoover => Bank::Hoover(HooverPatch::DOMINATOR, HooverPage::Times),
                 Part::Tr808 | Part::Tr909 => Bank::Kit(DrumHits {
                     panel: HitLog::EMPTY,
                     midi: HitLog::EMPTY,
@@ -501,7 +501,7 @@ impl Track {
         if let Bank::Hoover(patch, _) = self.bank {
             patch
         } else {
-            HooverPatch::HOOVER
+            HooverPatch::DOMINATOR
         }
     }
 
@@ -1184,6 +1184,7 @@ pub(super) enum Message {
     Master(MasterControls),
     ParallelBass(bool),
     AcidSends([u8; CHANNELS], u16),
+    HooverLevels([u8; CHANNELS]),
     GainReduction(u8),
     Cue(Cue),
 }
@@ -1382,6 +1383,14 @@ impl Process<Message, I24> for Node<'_> {
             }
             return;
         }
+        if let Player::Hoover(node) = &mut self.player {
+            let events = unpack_events(cx.events, |m| match m {
+                Message::Hoover(message) => Some(message),
+                _ => None,
+            });
+            node.process_mid_side(signal[0], auxiliary[0], &events);
+            return;
+        }
         auxiliary[0].fill(I24::default());
         let cx = &mut ProcessContext {
             frames: cx.frames,
@@ -1394,10 +1403,6 @@ impl Process<Message, I24> for Node<'_> {
             Player::Empty => cx.outputs[0].fill(I24::default()),
             Player::Mono(node) => dispatch(node, cx, |m| match m {
                 Message::Mono(m) => Some(m),
-                _ => None,
-            }),
-            Player::Hoover(node) => dispatch(node, cx, |m| match m {
-                Message::Hoover(m) => Some(m),
                 _ => None,
             }),
             Player::Fm(node) => dispatch(node, cx, |m| match m {
@@ -1436,7 +1441,9 @@ impl Process<Message, I24> for Node<'_> {
                 Message::Organ(m) => Some(m),
                 _ => None,
             }),
-            Player::Bass(_) | Player::Drums(_) => unreachable!("source rendered both outlets"),
+            Player::Bass(_) | Player::Drums(_) | Player::Hoover(_) => {
+                unreachable!("source rendered both outlets")
+            }
         }
     }
 }
@@ -1472,6 +1479,7 @@ pub(super) struct Master<'a> {
     pub(super) bus: MasterBus,
     pub(super) space: crate::bass::space::Space<'a>,
     levels: [u8; CHANNELS],
+    hoover_side: bool,
 }
 
 impl<'a> Master<'a> {
@@ -1480,13 +1488,14 @@ impl<'a> Master<'a> {
             bus: MasterBus::new(rate).expect("master clock"),
             space: crate::bass::space::Space::new(rate, echo, plate).expect("acid return storage"),
             levels: [0; CHANNELS],
+            hoover_side: false,
         }
     }
 }
 
 impl Process<Message, I24> for Master<'_> {
     fn inlets(&self) -> &[Port] {
-        &[Port::Signal; 7]
+        &[Port::Signal; 8]
     }
     fn outlets(&self) -> &[Port] {
         &[Port::Signal, Port::Signal, Port::Message]
@@ -1508,6 +1517,7 @@ impl Process<Message, I24> for Master<'_> {
                     self.levels = levels;
                     self.space.set_tempo(tempo);
                 }
+                Message::HooverLevels(levels) => self.hoover_side = levels != [0; CHANNELS],
                 Message::Cue(samples) => cue = samples,
                 _ => (),
             }
@@ -1528,13 +1538,22 @@ impl Process<Message, I24> for Master<'_> {
             .filter(|(level, _)| **level != 0)
             .map(|(&level, signal)| (f32::from(level) / 128.0, *signal))
             .collect();
-        if taps.is_empty() && !self.space.ringing() {
+        let side = self
+            .hoover_side
+            .then(|| cx.inputs[7])
+            .filter(|s| s.iter().any(|v| v.inner() != 0));
+        let acid = !taps.is_empty() || self.space.ringing();
+        if !acid && side.is_none() {
             let (intro, rest) = left.split_at_mut(cue.len.min(left.len()));
             for ((out, sum), sample) in intro.iter_mut().zip(&mut mix).zip(cue.samples()) {
                 *out = self.bus.process_sample(sum + (i32::from(sample) << 8));
             }
-            for (out, sum) in rest.iter_mut().zip(mix) {
-                *out = self.bus.process_sample(sum);
+            if mix.clone().all(|sum| sum == 0) {
+                self.bus.process_silence(rest);
+            } else {
+                for (out, sum) in rest.iter_mut().zip(mix) {
+                    *out = self.bus.process_sample(sum);
+                }
             }
             right.copy_from_slice(left);
         } else {
@@ -1546,17 +1565,27 @@ impl Process<Message, I24> for Master<'_> {
                 .zip(right.chunks_mut(CHUNK))
                 .enumerate()
             {
-                let mut send = [0.0; CHUNK];
-                let send = &mut send[..l.len()];
-                for (gain, signal) in &taps {
-                    #[allow(clippy::cast_precision_loss)]
-                    for (out, sample) in send.iter_mut().zip(&signal[block * CHUNK..]) {
-                        *out += gain * sample.inner() as f32;
-                    }
-                }
                 let mut wet = [[0; 2]; CHUNK];
                 let wet = &mut wet[..l.len()];
-                self.space.render(send, wet);
+                let start = block * CHUNK;
+                if acid {
+                    let mut send = [0.0; CHUNK];
+                    let send = &mut send[..l.len()];
+                    for (gain, signal) in &taps {
+                        #[allow(clippy::cast_precision_loss)]
+                        for (out, sample) in send.iter_mut().zip(&signal[block * CHUNK..]) {
+                            *out += gain * sample.inner() as f32;
+                        }
+                    }
+                    self.space.render(send, wet);
+                }
+                if let Some(side) = side {
+                    for (wet, sample) in wet.iter_mut().zip(&side[start..]) {
+                        let difference = sample.inner() << DRY_HEADROOM;
+                        wet[0] = wet[0].saturating_add(difference);
+                        wet[1] = wet[1].saturating_sub(difference);
+                    }
+                }
                 let frames = l.iter_mut().zip(r).zip(wet.iter()).zip(&mut mix);
                 for (((left, right), &[wet_l, wet_r]), mut center) in frames {
                     if let Some(sample) = intro.next() {
@@ -1781,7 +1810,7 @@ pub(super) struct Programs([Plan; 2]);
 
 impl Programs {
     pub(super) fn decode() -> Result<Self, Error> {
-        // Each channel provides a pre-fader scope tap and an isolated drum kick.
+        // Each channel provides a mono strip and one instrument-specific auxiliary outlet.
         const ROUTE: &[u8] = &[
             VERSION, 1, 0, 0, 2, // CALL channel 1 -> 0, 1
             1, 1, 0, 2, // CALL channel 2 -> 2, 3
@@ -1791,8 +1820,8 @@ impl Programs {
             1, 4, 4, 3, 8, 9, 10, 11, // CALL mixer -> dry 13, reverb send 14, delay send 15
             1, 5, 1, 1, 14, // CALL reverb -> 16
             1, 6, 1, 1, 15, // CALL delay -> 17
-            1, 8, 7, 2, 13, 16, 17, 1, 3, 5,
-            7, // CALL stereo master, four optional pedal taps -> 18,19
+            1, 8, 8, 2, 13, 16, 17, 1, 3, 5, 7,
+            12, // CALL stereo master: dry, returns, four pedal taps and Hoover side -> 18,19
             2, 18, 64, 2, 19, 64, // GAIN optional output trim on both channels -> 20,21
         ];
         const FULL_LEN: usize = ROUTE.len() - 6;
@@ -1836,6 +1865,7 @@ impl Programs {
             echo_gates: 0xf,
             previous_bpm: 0,
             acid_levels: [0; CHANNELS],
+            hoover_levels: [0; CHANNELS],
             shape_offsets: [0; CHANNELS],
             fx: Fx::INITIAL,
             cue: Cue::EMPTY,
@@ -1872,6 +1902,7 @@ pub(super) struct Instrument<'a> {
     echo_gates: u8,
     previous_bpm: u16,
     acid_levels: [u8; CHANNELS],
+    hoover_levels: [u8; CHANNELS],
     shape_offsets: [u8; CHANNELS],
     fx: Fx,
     pub(super) cue: Cue,
@@ -2049,8 +2080,8 @@ impl Instrument<'_> {
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
         let downbeat = self.transport.playing() && self.player.transport_changed(self.transport);
-        // Assignment, slots, Slicer and filter per strip, plus Flanger and one filter clock.
-        let mut inserts = Vec::<_, { 4 * CHANNELS + 2 }>::new();
+        // Per strip: assignment, slots, slicer and filter. Also flanger, filter clock, stereo faders.
+        let mut inserts = Vec::<_, { 4 * CHANNELS + 3 }>::new();
         let clock = BeatClock {
             beats: self.fx.beats,
             bpm: self.transport.bpm,
@@ -2360,6 +2391,27 @@ impl Instrument<'_> {
             } else {
                 (Vec::new(), Vec::new(), Vec::new(), self.acid_levels)
             };
+        let mut hoover_levels = self.hoover_levels;
+        if settings_changed {
+            hoover_levels = Channel::ALL.map(|channel| {
+                let i = channel.index();
+                if tracks[i].assignment.part == Part::Hoover
+                    && !tracks[i].inserts.iter().any(|insert| insert.enabled())
+                    && !self.fx.slicers[i].enabled
+                    && !self.fx.filters[i].pick.enabled
+                    && self.fx.flanger_target != Some(channel)
+                {
+                    self.mixer.0[i].output_level()
+                } else {
+                    0
+                }
+            });
+            if hoover_levels != self.hoover_levels {
+                let event = at(Message::HooverLevels(hoover_levels));
+                inserts.push(event).map_err(|_| Error::Capacity)?;
+                master.push(event).map_err(|_| Error::Capacity)?;
+            }
+        }
         if self.cue.len != 0 {
             master
                 .push(at(Message::Cue(self.cue)))
@@ -2435,6 +2487,7 @@ impl Instrument<'_> {
             self.previous = Some(*tracks);
         }
         self.acid_levels = acid_levels;
+        self.hoover_levels = hoover_levels;
         if settings_changed {
             self.previous_mixer = Some(self.mixer);
             self.previous_fx = Some(self.fx);
@@ -2500,6 +2553,7 @@ fn event_order(event: &Event<Message>) -> u8 {
 mod tests {
     mod arpeggiator;
     mod control_cache;
+    mod hoover;
     mod modulation;
     mod presets;
     mod sampler;
@@ -5319,8 +5373,9 @@ mod hoover_tests {
     #[test]
     fn editor_exposes_three_independent_levels_and_oscillator_programming() {
         let mut track = Track::new(Assignment::new(Part::Hoover));
+        assert_eq!(track.hoover_patch(), HooverPatch::DOMINATOR);
         track.edit_panel(View::Envelope, 1, [20, -80, -30, 45], false);
-        assert_eq!(track.hoover_patch().levels, [88, 47, 97]);
+        assert_eq!(track.hoover_patch().levels, [44, 47, 57]);
         assert_eq!(track.hoover_patch().resonance, 45);
         track.edit_panel(View::Envelope, 1, [-3, -2, -2, -1], false);
         let patch = track.hoover_patch();
@@ -5340,6 +5395,9 @@ mod hoover_tests {
             [2, 65, 0, 3]
         );
         track.turn_algorithm(View::Scope, None, 1);
+        assert_eq!(track.hoover_patch(), HooverPatch::HOOVER);
+        track.turn_algorithm(View::Scope, None, 1);
         assert_eq!(track.hoover_patch().times, [99, 78, 75, 92]);
+        assert_eq!(track.hoover_patch().levels, [68, 127, 127]);
     }
 }
