@@ -4,8 +4,9 @@ use crate::{
     firmware::{Labels, Motion},
     fx::{BeatEffect, FilterSettings},
     instrument::Part,
-    panel::Channel,
+    panel::{Channel, View},
 };
+use core::ops::Range;
 use fm1_graphics::{
     Rgb565,
     embedded_graphics::{
@@ -19,9 +20,11 @@ use fm1_rticx::{
 };
 use wavegraph_fx::{BeatDivision, FILTER_PATTERNS, FilterMode, StepPattern};
 
+pub(super) const SCOPE: Range<u16> = 216..SIZE;
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Panel {
-    effect: BeatEffect,
+    pub(super) effect: BeatEffect,
     channel: Channel,
     pub(super) part: Part,
     beats: BeatDivision,
@@ -87,23 +90,34 @@ impl Panel {
         previous: Option<Self>,
     ) -> Result<(), Error> {
         let mut lcd = lcd.as_async(clock)?;
-        for y in (0..SIZE).step_by(BAND) {
+        for y in (0..SCOPE.start).step_by(BAND) {
             if previous.is_some_and(|old| match y {
-                0..32 => (old.effect, old.channel) == (self.effect, self.channel),
+                0..16 => old.channel == self.channel,
+                16..32 => {
+                    old.effect == self.effect
+                        && old.channel == self.channel
+                        && (self.effect != BeatEffect::Filter
+                            || old.filter.pick.edited() == self.filter.pick.edited())
+                }
                 32..80 => old.beats == self.beats,
-                80..104 => old.bpm == self.bpm,
+                80..104 => {
+                    old.bpm == self.bpm
+                        && (old.effect == BeatEffect::Filter) == (self.effect == BeatEffect::Filter)
+                }
                 104..176 if self.effect == BeatEffect::Filter => {
-                    old.effect == self.effect && old.filter == self.filter
+                    old.effect == self.effect
+                        && old.filter.pick.rhythm == self.filter.pick.rhythm
+                        && old.filter.controls() == self.filter.controls()
                 }
                 104..152 => old.effect == self.effect && old.values == self.values,
                 152..176 => old.effect == self.effect,
-                176..208 => true,
+                176..200 => true,
                 _ => {
                     old.effect == self.effect
                         && old.return_enabled == self.return_enabled
                         && old.echo_input_open == self.echo_input_open
                         && old.slicer_enabled == self.slicer_enabled
-                        && old.filter.pick == self.filter.pick
+                        && old.filter.pick.enabled == self.filter.pick.enabled
                         && old.target == self.target
                         && old.channel == self.channel
                 }
@@ -120,20 +134,23 @@ impl Panel {
                 .with_panel_type(super::lettering::panel_type(self.part));
             match y {
                 0..32 => {
-                    super::badge::draw(&mut band, self.channel, Point::zero());
+                    band.fx_tabs(self.channel, View::BeatFx(self.effect), theme);
                     band.title(
                         match self.effect {
-                            BeatEffect::Filter => "BEAT FX / PCF",
-                            BeatEffect::Slicer => "BEAT FX / SLICER",
-                            BeatEffect::Echo => "BEAT FX / ECHO",
-                            BeatEffect::Flanger => "BEAT FX / FLANGER",
+                            BeatEffect::Filter if self.filter.pick.edited() => {
+                                "SELECT: PCF / EDITED"
+                            }
+                            BeatEffect::Filter => "SELECT: PCF",
+                            BeatEffect::Slicer => "SELECT: SLICER",
+                            BeatEffect::Echo => "SELECT: SHARED ECHO",
+                            BeatEffect::Flanger => "SELECT: FLANGER",
                         },
-                        Point::new(32, 9),
+                        Point::new(29, 17),
                         theme.ink,
                     );
                     band.label(
                         self.part.name(),
-                        Point::new(226, 11),
+                        Point::new(235, 19),
                         Alignment::Right,
                         theme.accent,
                     );
@@ -141,7 +158,7 @@ impl Panel {
                 32..80 => {
                     band.rect(Point::new(7, 32), Size::new(226, 48), theme.surface);
                     band.label(
-                        "KNOB 1 / BEATS",
+                        "KNOB 1 / SHARED BEAT TIME",
                         Point::new(120, 33),
                         Alignment::Center,
                         theme.ink,
@@ -150,7 +167,24 @@ impl Panel {
                 }
                 80..104 => {
                     let bpm = heapless::format!(18; "MASTER  {} BPM", self.bpm).expect("tempo");
-                    band.label(&bpm, Point::new(120, 86), Alignment::Center, theme.ink);
+                    let line = if self.effect == BeatEffect::Filter {
+                        band.label(
+                            "WHITE: 16 STEPS    BLACK 1-8: RHYTHMS",
+                            Point::new(120, 93),
+                            Alignment::Center,
+                            theme.ink,
+                        );
+                        81
+                    } else {
+                        86
+                    };
+                    band.label(&bpm, Point::new(8, line), Alignment::Left, theme.ink);
+                    band.label(
+                        "TAP FX: CHANNEL FX",
+                        Point::new(232, line),
+                        Alignment::Right,
+                        theme.ink,
+                    );
                 }
                 104..176 if self.effect == BeatEffect::Filter => {
                     self.filter_panel(&mut band, y, theme)
@@ -158,24 +192,25 @@ impl Panel {
                 104..152 => {
                     if self.effect == BeatEffect::Slicer {
                         band.label(
-                            "PER CYCLE",
+                            "LIT: PASS",
                             Point::new(155, 109),
                             Alignment::Center,
                             theme.ink,
                         );
                         band.label(
-                            "16 STEPS",
+                            "DARK: ATTENUATE",
                             Point::new(155, 128),
                             Alignment::Center,
                             theme.ink,
                         );
                     }
-                    let last = if self.effect == BeatEffect::Echo {
-                        "4 RETURN"
-                    } else {
-                        "4 SWEEP"
+                    let (first, last) = match self.effect {
+                        BeatEffect::Echo => ("2 SEND", "4 RETURN"),
+                        BeatEffect::Flanger => ("2 MIX", "4 SWEEP"),
+                        BeatEffect::Slicer => ("2 DEPTH", ""),
+                        BeatEffect::Filter => unreachable!(),
                     };
-                    for ((x, label), value) in [(42, "2 DEPTH"), (120, "3 FEEDBACK"), (198, last)]
+                    for ((x, label), value) in [(42, first), (120, "3 FEEDBACK"), (198, last)]
                         .into_iter()
                         .zip(self.values)
                         .take(if self.effect == BeatEffect::Slicer {
@@ -192,7 +227,7 @@ impl Panel {
                 152..176 => band.label(
                     match self.effect {
                         BeatEffect::Echo => "WHITE KEYS / ECHO SEND STEPS",
-                        BeatEffect::Slicer => "WHITE KEYS / PASS STEPS",
+                        BeatEffect::Slicer => "16 WHITE KEYS: TOGGLE STEPS",
                         BeatEffect::Flanger => "LFO SWEEP / ONE CYCLE",
                         BeatEffect::Filter => unreachable!(),
                     },
@@ -200,21 +235,19 @@ impl Panel {
                     Alignment::Center,
                     theme.ink,
                 ),
-                176..208 => (),
+                176..200 => (),
                 _ => {
                     let routed;
                     let status = match self.effect {
-                        BeatEffect::Filter if self.filter.pick.enabled => {
-                            "F3-F4 RHYTHM   ON / SEL BYPASS"
-                        }
-                        BeatEffect::Filter => "F3-F4 RHYTHM   OFF / SEL APPLY",
-                        BeatEffect::Slicer if self.slicer_enabled => "SLICER ON / SEL BYPASS",
-                        BeatEffect::Slicer => "SLICER OFF / SEL APPLY",
+                        BeatEffect::Filter if self.filter.pick.enabled => "ON / SEL BYPASS",
+                        BeatEffect::Filter => "OFF / SEL APPLY",
+                        BeatEffect::Slicer if self.slicer_enabled => "ON / SEL BYPASS",
+                        BeatEffect::Slicer => "OFF / SEL APPLY",
                         BeatEffect::Echo if !self.return_enabled => "RETURN MUTED / SEL ENABLE",
                         BeatEffect::Echo if self.echo_input_open => "SEND OPEN / SEL CLOSE",
                         BeatEffect::Echo => "SEND CLOSED / SEL OPEN",
                         BeatEffect::Flanger if self.target == Some(self.channel) => {
-                            "FLANGER ON / SEL BYPASS"
+                            "ON / SEL BYPASS"
                         }
                         BeatEffect::Flanger => match self.target {
                             Some(target) => {
@@ -226,13 +259,18 @@ impl Panel {
                             None => "SEL APPLY TO THIS CHANNEL",
                         },
                     };
-                    band.label(status, Point::new(120, 209), Alignment::Center, theme.ink);
                     band.label(
-                        "SELECT FX   PRESETS CH   HOME BACK",
-                        Point::new(120, 226),
-                        Alignment::Center,
-                        theme.ink,
+                        match self.effect {
+                            BeatEffect::Echo => "ECHO RETURN",
+                            BeatEffect::Flanger => "FLANGER OUT",
+                            BeatEffect::Slicer => "SLICER OUT / CYCLE",
+                            BeatEffect::Filter => "PCF OUT",
+                        },
+                        Point::new(4, 201),
+                        Alignment::Left,
+                        theme.accent,
                     );
+                    band.label(status, Point::new(236, 201), Alignment::Right, theme.ink);
                 }
             }
             lcd.write_rect_buffered(0, y, width, BAND as u16, band.pixels.as_flattened())
@@ -300,8 +338,9 @@ impl Panel {
                     FilterMode::LowPass => "LP",
                     FilterMode::BandPass => "BP",
                 };
-                let detail = heapless::format!(40; "G4/A4 {}   ALG DECAY {}ms", mode, f.decay_ms)
-                    .expect("filter legend");
+                let detail =
+                    heapless::format!(40; "BLACK 9/10: {}   ALG DECAY {}ms", mode, f.decay_ms)
+                        .expect("filter legend");
                 band.label(&detail, Point::new(120, 162), Alignment::Center, theme.ink);
             }
         }
@@ -310,10 +349,7 @@ impl Panel {
     fn key_state(&self, step: u8) -> (u8, bool) {
         let current = self.playhead == Some(step);
         if self.effect == BeatEffect::Filter {
-            return (
-                FILTER_PATTERNS[usize::from(self.filter.pick.rhythm)].accents[usize::from(step)],
-                current,
-            );
+            return (self.filter.pick.accent(step), current);
         }
         let active = if self.effect == BeatEffect::Flanger {
             current

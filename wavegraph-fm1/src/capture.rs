@@ -8,6 +8,7 @@ pub(super) const HEIGHT: usize = LAST_ROW as usize + 1;
 const CENTER: u8 = LAST_ROW / 2 + 1;
 pub(super) type Trace = [u8; WIDTH];
 pub(super) const FLAT: Trace = [CENTER; WIDTH];
+pub(super) const SLICER_SILENCE: Trace = [LAST_ROW; WIDTH];
 
 #[derive(Default)]
 pub(super) struct ScopeUpdates {
@@ -194,6 +195,51 @@ impl Capture {
         latest
     }
 
+    /// A rolling, unipolar peak envelope. The end phase is the position *after*
+    /// the final DAC frame. Every 15 columns cover one of the 16 Slicer steps.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "The phase is modular Q0.32, WIDTH bounds column arithmetic and row height is clamped."
+    )]
+    pub(super) fn push_slicer(
+        &mut self,
+        samples: &[i32],
+        end_phase: u32,
+        increment: u32,
+    ) -> Option<Trace> {
+        if samples.is_empty() {
+            return None;
+        }
+        // Filled is zero after reset. Otherwise it records the last bin plus
+        // one. A new cycle replaces each bin as its first frame actually plays.
+        let sweep = &mut self.primary;
+        let mut publish = sweep.filled == 0;
+        if publish {
+            sweep.samples.fill(0);
+        }
+        let mut phase = end_phase.wrapping_sub(increment.wrapping_mul(samples.len() as u32));
+        for &sample in samples {
+            let column = ((u64::from(phase) * WIDTH as u64) >> 32) as usize;
+            if sweep.filled != column + 1 {
+                sweep.samples[column] = 0;
+                sweep.filled = column + 1;
+                publish |= column.is_multiple_of(WIDTH / 16);
+            }
+            let peak = (sample.unsigned_abs() >> 8).min(i16::MAX as u32) as i16;
+            sweep.samples[column] = sweep.samples[column].max(peak);
+            phase = phase.wrapping_add(increment);
+        }
+        publish.then(|| {
+            sweep.samples.map(|peak| {
+                // Same fixed channel gain as the bipolar sweep, across its full height.
+                let height = ((i32::from(peak) * 42) >> 9).min(i32::from(LAST_ROW));
+                (i32::from(LAST_ROW) - height) as u8
+            })
+        })
+    }
+
     /// Start a second wrap-locked sweep once the first is at least half full.
     /// Both retain the same 1,200 consecutive frames and the same slide time scale.
     pub(super) fn push_bass(&mut self, samples: &[i32], cycle: Option<usize>) -> Option<Trace> {
@@ -297,6 +343,68 @@ mod tests {
         assert_eq!(sweep(1 << 22), sweep(1 << 17));
         assert_eq!(sweep(1 << 14)[..4], [85, 91, 107, CENTER]);
         assert_eq!(sweep(0), FLAT);
+    }
+
+    #[test]
+    fn slicer_peaks_follow_the_played_steps_across_blocks_and_replace_old_audio() {
+        let mut scope = Capture::new();
+        let increment = 1 << 24; // 256 audio frames per cycle, 16 per step.
+        let frames: [i32; 256] = core::array::from_fn(|i| match i / 16 % 4 {
+            0 => 0,
+            1 => -(1 << 17),
+            2 => 1 << 18,
+            _ => 1 << 19,
+        });
+        let mut end = 0_u32;
+        let mut latest = None;
+        for block in [
+            &frames[..5],
+            &frames[5..127],
+            &frames[127..223],
+            &frames[223..],
+        ] {
+            end =
+                end.wrapping_add(increment * u32::try_from(block.len()).expect("short test block"));
+            latest = scope.push_slicer(block, end, increment).or(latest);
+        }
+        let trace = latest.expect("full cycle");
+        for (step, bins) in trace.as_chunks::<15>().0.iter().enumerate() {
+            assert_eq!(*bins, [[191, 149, 107, 23][step % 4]; 15]);
+        }
+        assert_eq!(
+            scope.push_slicer(&[0; 256], 0, increment),
+            Some(SLICER_SILENCE)
+        );
+    }
+
+    #[test]
+    fn slicer_keeps_peak_within_one_bin_and_clears_missing_history_after_reset() {
+        let mut scope = Capture::new();
+        let increment = 1 << 20;
+        // Start precisely on step four. Only two frames are observed there.
+        let start = 4 << 28;
+        let end = start + 2 * increment;
+        let trace = scope
+            .push_slicer(&[-(1 << 19), 0], end, increment)
+            .expect("first observed bin");
+        assert_eq!(trace[60], 23);
+        assert!(
+            trace[..60]
+                .iter()
+                .chain(&trace[61..])
+                .all(|&y| y == LAST_ROW)
+        );
+        assert_eq!(scope.push_slicer(&[0], end + increment, increment), None);
+        // A new bank/channel, jump in the clock, or missed DMA starts fresh at
+        // its current phase. Unobserved steps stay at the silent baseline.
+        scope.reset();
+        let start = 11 << 28;
+        let trace = scope
+            .push_slicer(&[1 << 18], start + increment, increment)
+            .expect("new timeline after a reset");
+        assert_eq!(trace[165], 107);
+        assert_eq!(trace[60], LAST_ROW);
+        assert_eq!(scope.push_slicer(&[], start + increment, increment), None);
     }
 
     #[test]

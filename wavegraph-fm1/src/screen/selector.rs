@@ -1,6 +1,10 @@
 //! Picker rows composited over the live scope from flash-backed GRID glyphs.
 
-use super::{InstrumentStyle, lettering::GRID, style::RowColors};
+use super::{
+    InstrumentStyle,
+    lettering::{GRID, picker_row},
+    style::RowColors,
+};
 use crate::{
     fx::InsertKind,
     instrument::Part,
@@ -15,7 +19,7 @@ use fm1_rticx::{
     time::Clock,
 };
 
-// Leave room for a channel number, nine GRID glyphs (MONOSYNTH or WAVETABLE), and the selection arrow.
+// Leave room for a channel number, nine GRID glyphs and the selection arrow.
 const WIDTH: usize = 144;
 const ROW_HEIGHT: usize = 18;
 const HEIGHT: usize = Part::ALL.len() * ROW_HEIGHT;
@@ -27,15 +31,11 @@ pub(super) const BOTTOM: usize = TOP + HEIGHT;
 fn letter_ink(label: &[u8], x: usize, y: usize) -> bool {
     label
         .get(x / GRID.width)
-        .is_some_and(|&byte| GRID.glyph(byte).coverage(x % GRID.width, y) >= 2)
+        .is_some_and(|&byte| picker_row(byte, y) & (0x8000 >> (x % GRID.width)) != 0)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum Menu {
-    Channels {
-        parts: [Part; CHANNELS],
-        focus: Channel,
-    },
     Instruments(Part),
     Effects(InsertKind),
 }
@@ -43,7 +43,6 @@ pub(super) enum Menu {
 impl Menu {
     fn mask_rows(self) -> Range<usize> {
         let count = match self {
-            Self::Channels { .. } => CHANNELS,
             Self::Instruments(_) => Part::ALL.len(),
             Self::Effects(_) => InsertKind::ALL.len(),
         };
@@ -54,6 +53,7 @@ impl Menu {
 }
 
 pub(super) struct Selector {
+    channel_feedback: bool,
     menu: Option<Menu>,
     labels: [&'static [u8]; Part::ALL.len()],
     rows: [RowColors; 2],
@@ -68,6 +68,7 @@ impl Selector {
 
     pub(super) fn new() -> Self {
         Self {
+            channel_feedback: false,
             menu: None,
             labels: [&[]; Part::ALL.len()],
             rows: Self::GLOBAL,
@@ -85,7 +86,6 @@ impl Selector {
             self.rows = rows;
             for (row, y) in menu.mask_rows().step_by(ROW_HEIGHT).enumerate() {
                 let (name, active) = match menu {
-                    Menu::Channels { parts, focus } => (parts[row].name(), row == focus.index()),
                     Menu::Instruments(active) => {
                         let part = Part::ALL[row];
                         (part.name(), part == active)
@@ -104,8 +104,12 @@ impl Selector {
         true
     }
 
+    pub(super) fn set_channel_feedback(&mut self, visible: bool) {
+        self.channel_feedback = visible;
+    }
+
     pub(super) fn visible(&self) -> bool {
-        self.menu.is_some()
+        self.menu.is_some() || self.channel_feedback
     }
 
     pub(super) fn instrument(&self) -> Option<Part> {
@@ -173,7 +177,7 @@ impl Selector {
     }
 
     pub(super) fn pixel(&self, x: usize, y: usize, background: Rgb565) -> Rgb565 {
-        if !self.visible() || !(LEFT..RIGHT).contains(&x) || !(TOP..BOTTOM).contains(&y) {
+        if self.menu.is_none() || !(LEFT..RIGHT).contains(&x) || !(TOP..BOTTOM).contains(&y) {
             return background;
         }
         self.ink(x, y).unwrap_or(background)
@@ -195,7 +199,7 @@ impl Selector {
     }
 
     pub(super) fn overlay(&self, w: Window, pixels: &mut [[u8; 2]]) {
-        if !self.visible() {
+        if self.menu.is_none() {
             return;
         }
         for y in TOP.max(w.y)..BOTTOM.min(w.y + w.height) {
@@ -219,12 +223,86 @@ impl Selector {
         let local = y - rows.start;
         let index = local / ROW_HEIGHT;
         let text_y = (local % ROW_HEIGHT).wrapping_sub((ROW_HEIGHT - GRID.height) / 2);
-        let channels = matches!(menu, Menu::Channels { .. });
-        let left = if channels { 24 } else { 8 };
         let marked = text_y < GRID.height
-            && (letter_ink(self.labels[index], x.wrapping_sub(left), text_y)
-                || (active && letter_ink(b">", x.wrapping_sub(WIDTH - GRID.width), text_y))
-                || (channels && letter_ink(&b"1234"[index..=index], x.wrapping_sub(8), text_y)));
+            && (letter_ink(self.labels[index], x.wrapping_sub(8), text_y)
+                || (active && letter_ink(b">", x.wrapping_sub(WIDTH - GRID.width), text_y)));
         Some(if marked { row.ink } else { row.fill })
+    }
+}
+
+/// The channel picker uses the same GRID lettering and instrument colors as the other pickers.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) struct ChannelHud {
+    pub(super) focus: Channel,
+    pub(super) parts: [Part; CHANNELS],
+}
+
+impl ChannelHud {
+    pub(super) const AREA: Window = Window::new(
+        LEFT,
+        (crate::capture::WIDTH - CHANNELS * ROW_HEIGHT) / 2,
+        WIDTH,
+        CHANNELS * ROW_HEIGHT,
+    );
+
+    fn row(self, index: usize) -> (Part, bool, RowColors) {
+        let active = index == self.focus.index();
+        let theme = InstrumentStyle::for_part(self.parts[self.focus.index()]);
+        (self.parts[index], active, theme.row(active))
+    }
+
+    pub(super) async fn paint(
+        self,
+        lcd: &mut Display,
+        clock: &mut Clock,
+        strip: &mut [[u8; 2]],
+        previous: Option<Self>,
+    ) -> Result<(), Error> {
+        let mut lcd = lcd.as_async(clock)?;
+        let margin = (ROW_HEIGHT - GRID.height) / 2;
+        for i in 0..CHANNELS {
+            let (part, active, colors) = self.row(i);
+            if previous.is_some_and(|old| old.row(i) == (part, active, colors)) {
+                continue;
+            }
+            let row = Window::new(LEFT, Self::AREA.y + i * ROW_HEIGHT, WIDTH, ROW_HEIGHT);
+            let ink = colors.ink.to_be_bytes();
+            for w in row.strips(strip.len()) {
+                let pixels = &mut strip[..w.width * w.height];
+                pixels.fill(colors.fill.to_be_bytes());
+                for (dy, line) in pixels.chunks_exact_mut(WIDTH).enumerate() {
+                    let y = w.y - row.y + dy;
+                    if (margin..margin + GRID.height).contains(&y) {
+                        let glyph_y = y - margin;
+                        draw_letters(&mut line[8..], &b"1234"[i..=i], glyph_y, ink);
+                        draw_letters(&mut line[24..], part.name().as_bytes(), glyph_y, ink);
+                        if active {
+                            draw_letters(&mut line[WIDTH - GRID.width..], b">", glyph_y, ink);
+                        }
+                    }
+                }
+                lcd.write_rect_buffered(
+                    w.x as u16,
+                    w.y as u16,
+                    w.width as u16,
+                    w.height as u16,
+                    pixels.as_flattened(),
+                )
+                .await?;
+            }
+        }
+        lcd.flush().await
+    }
+}
+
+/// Set only the ink pixels from the precomputed 12-bit glyph scanlines.
+fn draw_letters(line: &mut [[u8; 2]], text: &[u8], y: usize, ink: [u8; 2]) {
+    for (cell, &byte) in line.chunks_exact_mut(GRID.width).zip(text) {
+        let mut bits = picker_row(byte, y);
+        while bits != 0 {
+            let x = 15 - bits.trailing_zeros() as usize;
+            cell[x] = ink;
+            bits &= bits - 1;
+        }
     }
 }

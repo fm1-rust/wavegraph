@@ -2,7 +2,19 @@
 
 WaveGraph gives the M-VAVE FM-1 four assignable mixer channels. It opens on
 the first [TB-303](../instruments/wavegraph-303/). Press PLAY to start this
-four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
+four-bar acid-house arrangement at 122 BPM. Hold **HOME** for a guide to the
+current controls.
+
+Why does **ALGORITHM** change presets? Think of the panel from left to right.
+Start with the whole rack. **PRESETS** chooses which of the four channels you
+play. One turn shows the instruments assigned to all four. Once
+you’re on a 303, **ALGORITHM** chooses that 303’s sound, from Deep House to
+Pump Panel. For a finer edit, turn **SELECT** to a dial and **ALGORITHM** to
+change its value. The four numbered knobs on the right go straight to the
+instrument controls. Hold **GLO** and those same knobs become the four channel
+faders. Let go and you’re back at the dial you were editing.
+
+![The first TB-303 on startup. One clockwise PRESETS click highlights channel 2 in the list of two TB-303s, a TR-808 and a TR-909.](assets/channel-focus.png)
 
 | Channel / USB MIDI | Instrument | Factory part |
 | --- | --- | --- |
@@ -12,7 +24,7 @@ four-bar acid-house arrangement at 122 BPM. PRESETS moves between channels.
 | 4 | [TR-909](../instruments/wavegraph-909/) | Four-on-the-floor kick, backbeat snare and clap, and offbeat closed hats. |
 
 All four patterns start enabled. To change a channel’s instrument, hold **EDIT**
-on its instrument screen or assign it in the GLO mixer. Each channel can host
+on its instrument screen or in either GLO mixer view. Each channel can host
 any instrument, including the [monosynth](../instruments/wavegraph-monosynth/),
 [M1-inspired organ](../instruments/wavegraph-organ/),
 [Hoover](../instruments/wavegraph-hoover/),
@@ -41,26 +53,58 @@ capture FIFO drops excess frames and local playback continues.
 
 ## Swap the instrument on one channel
 
-1. From an instrument’s main screen, turn **PRESETS** to the channel you want.
-   Hold **EDIT** for about **0.6 seconds**, then release it. A green frame
-   surrounds the display, **EDIT** blinks, and the white-on-black channel badge
-   covers the upper-left corner of the frame.
-2. Turn **PRESETS** to open the same alphabetical instrument list as the GLO
-   mixer. The highlighted row follows each click. The current instrument keeps
-   playing until the knob has been still for **200 ms**, then the highlighted
-   instrument takes over. If you overshoot, turn back before pausing.
-3. The list closes one second after the last click. The green frame stays on.
-   Play the keys or let the pattern run to hear your choice. Turn and pause
-   again to try another instrument on the same channel. The other channels keep
-   playing and the focused strip keeps its MIDI channel, fader, sends and ON/OFF state.
-4. **Tap EDIT** to keep the displayed instrument and exit. A tap during the
-   200 ms pause takes that choice immediately. The frame and blinking stop,
-   and **PRESETS** browses channels again.
+1. On the instrument’s main screen or in either GLO mixer view, turn **PRESETS**
+   to the destination channel. Hold **EDIT** for **0.6 seconds**, then release.
+   EDIT blinks. The instrument screen shows a green frame and the channel number.
+   In GLO, the header changes to **CH 1 / ASSIGN** (or the corresponding channel).
+2. Turn **PRESETS** through the alphabetical instrument list. Each click highlights
+   a name. After **200 ms** without a turn, the highlighted instrument takes over.
+   If you overshoot, turn back before pausing.
+3. Play the keys or let the pattern run. The list closes after one second and
+   EDIT keeps blinking. Turn PRESETS and pause again to try another instrument.
+   The destination stays fixed and the other channels keep playing.
+4. **Tap EDIT** to keep the displayed choice and return to the same instrument
+   screen, mixer overview or strip editor. Tapping during the 200 ms pause
+   takes the choice immediately. PRESETS now moves between channels again.
 
 ![Channel 1 with the TR-808 highlighted in the instrument list, then playing the TR-808 with the list closed and the green frame still visible](assets/instrument-swap.png)
 
 A short **EDIT** press from the ordinary instrument screen opens voice mode on
 FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampler.
+
+## Panel conventions for new pages
+
+A **channel** is one of the four playable strips. An **instrument** is the engine
+assigned to that strip, such as TB-303. A **sound** is a program within that
+engine, such as Deep House or Pump Panel. Use these names in control hints so a
+player can tell what will change before turning a knob.
+
+| Control | What a new page should do |
+| --- | --- |
+| **PRESETS** | Move keyboard and edit focus between channels. Keep the current page when the destination supports it. In channel FX, keep the selected slot. On a 303, show the destination’s sound before the player selects a dial. A focus change alone keeps each channel’s sound, mix and running pattern. |
+| **SELECT** | Move within the page, for example to another 303 dial, insert slot, parameter bank or Beat FX. Show which item owns the knobs. On an instrument with a fixed set of controls, label its local performance role, such as transpose. |
+| **ALGORITHM** | Change the selected item. With no finer selection on an instrument, this can recall a sound, choose a waveform or load a clip. On a selected 303 dial it changes that value. On a selected insert it changes that slot’s effect. Label the role with the musical noun the player needs. |
+| **Knobs 1–4** | Give direct access to the values on screen. In the mixer overview they always map to channel levels 1–4. On a selected strip, name the strip and its parameters. |
+| **FX** | Open Beat FX from an instrument. Another tap changes banks. Name both banks on screen and show which one the next tap opens. SELECT stays within the current bank. Browsing pages should leave the audio alone. |
+| **HOME, EDIT and GLO** | A HOME tap backs out and a HOME hold shows the current page’s guide. Keep assignment behind the explicit EDIT hold. GLO taps open the mixer from an instrument, while a held GLO gives temporary access to levels and mutes. Releasing a used hold consumes the tap. |
+
+Show the new channel on the first PRESETS click. The stock FM-1 patch picker
+inspired WaveGraph’s instrument-scope overlay. Dim the faceplate, center the four
+channel rows and use the focused instrument’s colors for the selected row. The
+list and large channel number share one timeout. On an editor or mixer page, update
+its own channel label or strip highlight. Keep shared artwork in place while
+the destination’s controls and waveform change.
+
+For example, turn **PRESETS** to channel 2. With its 303 faceplate open,
+**ALGORITHM** recalls Pump Panel. Turn **SELECT** to Cutoff and the same
+**ALGORITHM** knob now adjusts Cutoff. On the channel FX page, select slot 2
+and turn ALGORITHM to choose its effect. Turning PRESETS takes that editor to
+another channel. To replace the 303 itself, hold EDIT. The blinking assignment
+mode pins the destination and gives PRESETS the instrument list until exit.
+
+When adding a page, update its HOME guide and check the whole gesture during
+playback. A musician should be able to hold a note, mix another strip and return
+to the same control. Put mix-wide edits on a visibly global page.
 
 ## Controls
 
@@ -79,7 +123,7 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | SEQ | Open the current instrument’s pattern bank. SEQ or HOME returns to its instrument. |
 | Piano keys in the SEQ pattern view | The first eight white keys (F through the next F) select slots 1–8. The active slot flashes. |
 | REC | In SAMPLE mode, REC outside the clipboard records notes into the current sequence. With TAPE LOOP selected, REC arms or punches out an audio pass from an instrument or FX page. On SEQ, REC ends an active tape pass first, then records notes. |
-| Hold EDIT on any instrument scope | [Swap the instrument on this channel](#swap-the-instrument-on-one-channel). While EDIT blinks, turn PRESETS and pause for 200 ms to audition. Tap EDIT to keep the displayed choice and exit. |
+| Hold EDIT on an instrument scope or in either GLO mixer view | [Swap the instrument on this channel](#swap-the-instrument-on-one-channel). While EDIT blinks, turn PRESETS and pause for 200 ms to audition. Tap EDIT to keep the displayed choice and exit. |
 | EDIT on an FM, Hoover, organ, Super Saw or wavetable scope | Open the voice mode page. Turn SELECT to choose Poly, Chord or Unison. In Chord, turn ALGORITHM to choose the displayed chord. SEL advances one mode and knob 1 also edits the chord. EDIT or HOME returns to the scope. |
 | EDIT in SEQ | Open or close the step editor. KNOB 1 moves the cursor and KNOB 2 selects a bar. Play a key to write at the cursor. |
 | SEL held in the step editor | Tap a key to erase, or press EDIT to restore the factory step. |
@@ -87,8 +131,8 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | KNOB 2 in the pattern bank | Browse the bars of the selected clip while stopped. While playing, the view follows the audio playhead. |
 | SEL in the pattern bank | Mute/unmute the displayed pattern. The other patterns and master clock continue. |
 | SELECT in the pattern bank | Turn clockwise for the tempo page, then use KNOB 3 for 30–300 BPM in 1 BPM steps. Turn SELECT back or press the lit HOME button to return to the pattern. |
-| PRESETS encoder | Cycle channels 1–4. The new channel number appears in white on black in the upper-left corner for 1.5 seconds on the instrument and its pages, including FX, ENV, LFO, ARP and SEQ. New notes go to that channel. Held keys keep theirs. |
-| Piano keys outside the pattern view | At the default octave, the TB-303 plays F2 to G4 and the other chromatic instruments play F3 to G5. The first four white keys trigger drums on the 808 and the first six on the 909. Each pressed key lights up. |
+| PRESETS encoder | Each detent moves to the next channel immediately. On the instrument screen, the selected row and large channel number show the destination. Both clear together 750 ms after the last detent. New notes go to that channel. Held keys keep theirs. |
+| Piano keys in ordinary play | At the default octave, the TB-303 plays F2 to G4 and the other chromatic instruments play F3 to G5. The first four white keys trigger drums on the 808 and the first six on the 909. Each pressed key lights up. |
 | OCT− / OCT+ | Lower or raise the piano roll by one octave, up to three either way. The setting follows you across presets and pages. Held keys keep their pitch. The button for the active direction blinks slowly at one octave, blinks faster at two and stays lit at three. |
 | ALGORITHM encoder | Change mono waveform, switch organ House/Analog harmonic recipes, load a 303 sound preset with channel inserts and Beat FX settings, select a wavetable bank, load the next FM or Hoover program, or choose a sampler clip. While a 303 dial or waveform switch is selected, ALGORITHM adjusts that control. |
 | SELECT encoder on the scope | Transpose the monosynth, FM, Hoover, organ, Super Saw, wavetable or sampler by ±12 semitones, or cycle through the eight 303 knobs and its SAW/SQR switch. |
@@ -103,33 +147,37 @@ FM, Hoover, M1 Organ, Super Saw and Wavetable, or sample-region editing on Sampl
 | Knobs 1–4 on the 303 | Adjust Cutoff, Resonance, Env Mod and Decay, including while ALGORITHM edits another knob. |
 | HOME while editing a 303 control | Clear the selection and turn off the HOME lamp. ALGORITHM browses sound presets again. |
 | MASTER | Set the volume of the stereo mix (independent of the mixer faders). |
-| GLO | Open or close the four-channel mixer. GLO stays lit while the mixer is visible. |
-| EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard). Knob 3 selects SAMPLE or [TAPE LOOP](#layer-a-live-tape-loop). REC arms capture. |
+| Tap GLO | Open or close the four-channel mixer. From either FX bank, it opens the master FX rack. |
+| Hold GLO on a scope or supported editor | Open the [momentary mixer](#momentary-mixer). Knobs 1–4 set channel levels. The first four white keys toggle the corresponding strips. Release GLO to return. |
+| HOME | Tap to go back one level. Hold for 0.6 seconds to see the controls for the current page. Release to dismiss the guide and stay on the same page. |
+| Tap EDIT in GLO | Open [PCM CLIPBOARD](#sample-a-chord-into-the-clipboard). Knob 3 selects SAMPLE or [TAPE LOOP](#layer-a-live-tape-loop). REC arms capture. |
 | SEL in the GLO overview or channel edit | Toggle the focused channel’s audio. Each strip shows ON or OFF. SEL lights when the focused channel is enabled. |
 | Knobs 1–4 in the GLO overview | Set channel faders 1–4 independently. |
 | SELECT in mixer | Open channel edit and move between the four strips. The selected strip is highlighted. |
 | Knobs 1–3 in channel edit | Set the fader, reverb send and delay send on the highlighted channel. |
-| PRESETS in channel edit | Browse and immediately assign an instrument to the highlighted channel. |
+| PRESETS in GLO overview or channel edit | Move keyboard and mixer focus to another strip. Hold EDIT to assign an instrument to the focused strip. |
 | HOME in channel edit | Return to the mixer overview. Press HOME again to return to the instrument. |
-| FX on an instrument | Open the channel’s two insert slots and live post-FX scope. Turn SELECT to pick a slot and PRESETS to assign an effect. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
+| FX on an instrument | Open Beat FX on the focused channel. Tap FX again for Channel FX. Subsequent FX taps alternate between the two named banks. |
+| Channel FX | Edit the channel’s two insert slots and sends. Turn SELECT to pick a slot and ALGORITHM to choose its effect. PRESETS switches channel and keeps the slot selected. For 3-BAND EQ, knobs 1–3 adjust low, mid and high by ±12 dB. Press SEL to bypass the selected effect. HOME returns to the sends, where knobs 2 and 3 set reverb and delay. |
 | Knobs 1–4 with CHORUS selected | Set rate, depth, wet-path tone and wet/dry mix. Both taps fold into the mono strip. |
-| EDIT from channel FX or GLO’s FX rack | Open Beat FX for the focused instrument, including when an insert or rack device is selected. Knob 1 sets BEATS for every synced effect. Turn SELECT for Echo, Flanger, Slicer or PCF and PRESETS for the channel. |
+| Beat FX | Turn SELECT for Echo, Flanger, Slicer or PCF. Turn PRESETS for the channel. Knob 1 sets the beat division shared by the four effects. |
+| EDIT within the FX banks | Also switches banks. From the master rack it opens Beat FX. |
 | Knobs 1–4 with FLANGER selected in a channel insert slot | Set LFO rate, sweep depth, feedback and wet/dry mix. Full feedback sends 75% of the delayed signal back into the line. At 50% mix the dry signal and moving delay tap have equal weight. |
 | GLO then FX, or FX then GLO | Open the global rack. SELECT highlights a device. HOME clears the highlight, then returns to the page that opened the rack. |
-| FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the current instrument’s FX. |
+| FX or GLO in the global rack | FX returns to the mixer, keeping the selected strip if you entered from channel edit. GLO returns to the FX bank that opened the rack, or Beat FX if you entered from the mixer. |
 | SEL in a global device or 303 insert | Toggle that device. The SEL lamp shows its enabled state. |
-| ALGORITHM in FX | Switch the full/half post-rack output gain. |
+| ALGORITHM on the master FX overview | Turn left for half output (−6 dB) or right for full output (0 dB). If a device is selected, tap HOME first. |
 | SEL button (instrument view) | Switch the scope between the selected voice (VCA for mono, ORG for organ, SRC for FM and 303, OSC for Super Saw and wavetable, KIT for either drum machine) and the post-MASTER DAC mix. |
 | Both OCTAVE buttons | Press together to return the piano roll to its default octave. Hold both for two seconds to enter USB download mode. |
 
-For **HOOVER**, press GLO, choose a channel with SELECT and assign HOOVER with PRESETS. Press GLO again to play. Use the four knobs for cutoff, pitch sweep, PWM depth and chorus rate. Press ENV to see the shared pitch/filter/amp contour. Turn SELECT or press SEL to cycle through times T1–T4, levels L1–L3 plus resonance, DCO pulse/saw/sub waveforms plus sub level, and filter/PWM/noise settings. Dominator opens with a low wind-up and sweeps about five semitones above the played note. Hold the key to hear it settle onto pitch, or lift early to catch the rev on its way up. On the scope, ALGORITHM recalls Dominator, Fast Hoover, What The and Twin Peak in that order. To replay a Hoover chord or phrase at another pitch, [sample it into the clipboard](#sample-a-chord-into-the-clipboard).
+For **HOOVER**, turn PRESETS to the destination channel on the instrument screen. Hold EDIT until it blinks, turn PRESETS to **HOOVER**, then tap EDIT to play. Use the four knobs for cutoff, pitch sweep, PWM depth and chorus rate. Press ENV to see the shared pitch/filter/amp contour. Turn SELECT or press SEL to cycle through times T1–T4, levels L1–L3 plus resonance, DCO pulse/saw/sub waveforms plus sub level, and filter/PWM/noise settings. Dominator opens with a low wind-up and sweeps about five semitones above the played note. Hold the key to hear it settle onto pitch, or lift early to catch the rev on its way up. On the scope, **ALG PATCH** shows the sound chosen with ALGORITHM. Its bank runs from Dominator to Fast Hoover, What The and Twin Peak. To replay a Hoover chord or phrase at another pitch, [sample it into the clipboard](#sample-a-chord-into-the-clipboard).
 
 For a stereo audition from the factory rack, assign HOOVER to channel 3 or 4. These strips start with empty insert slots. The Hoover's built-in chorus reaches the headphones and USB capture in stereo on a clean strip. The channel fader and master controls act on both returns. A serial channel insert, Beat Flanger, Slicer or Pattern Filter takes the mono sum while it processes the Hoover. The sampler clipboard, tape and reverb/delay sends also take the mono sum.
 
 ![Fast Hoover playing a chord on the FM-1 rack panel](assets/hoover.png)
 
-To play FM, press GLO, turn SELECT to a channel, turn PRESETS to **FM SYNTH**,
-then press GLO to play. ALGORITHM recalls **Tine EP**, **Glass Bell** or
+To play FM, choose a channel with PRESETS on the instrument screen. Hold EDIT,
+turn PRESETS to **FM SYNTH**, then tap EDIT. Turn ALGORITHM at **ALG PATCH** to recall **Tine EP**, **Glass Bell** or
 **Wire Bass**, including its knob values and three envelopes. The
 scope's two numbered boxes show operator 2 feeding operator 1. In SEQ the FM
 starts with the organ's eight chord clips and has its own edits and slot selection.
@@ -178,7 +226,7 @@ beat at 100/128 send. Devil Drive uses downbeat echoes and a 56/128-depth
 Slicer, with two short cuts in each 16-cell cycle. The Slicer follows the
 existing BEATS division (3/4 by default); turn it to 4 for a one-bar gate,
 noting that this changes the shared Echo and Flanger timing as well.
-To change these grids, press EDIT from FX. Echo masks apply during transport
+To change these grids, press FX from the instrument and select Echo or Slicer. Echo masks apply during transport
 playback; live notes use the full send. No preset forcibly opens the shared
 Echo input, enables its return, or commandeers the assignable Flanger.
 The bank cursor survives GLO instrument changes, alongside the channel's FX.
@@ -247,7 +295,8 @@ From idle, turn SELECT clockwise to reach Attack, OD, Muffler, the **SAW/SQR**
 slide switch and then the six original dials. One click counterclockwise
 selects waveform. Turn ALGORITHM left for saw or right for square.
 
-The selected control gets an oxide-red rectangle and HOME lights up.
+The control highlighted in oxide red is the ALGORITHM target. Selecting a
+dial lights HOME and shows **ALG SET / HOME** below **Bass Line**.
 ALGORITHM adjusts that control, and the display beside the logo shows its value
 even while you turn a numbered encoder. Press HOME to finish and see the preset
 number and name again. Tuning covers
@@ -281,7 +330,7 @@ notes from MIDI, the sequencer and the arpeggiator.
 
 ## Channel modulation
 
-The faceplate, knobs, sequencer and both insert units use the assigned instrument’s colors. The same scope palette follows the signal from the instrument page to the post-insert, pre-fader tap on FX. On the FX overview, PRESETS moves between channels. Once SELECT picks an insert, PRESETS changes that slot’s effect. HOME returns to channel browsing.
+The faceplate, knobs, sequencer and both insert units use the assigned instrument’s colors. The same scope palette follows the signal from the instrument page to the post-insert, pre-fader tap on Channel FX. PRESETS moves between channels throughout channel FX. Turn SELECT to highlight an insert, then ALGORITHM to browse its effect types. Turn PRESETS to compare the same slot on another channel. Tap HOME to return to the sends.
 
 Each channel runs its own control-rate LFO. Depth scales a bipolar sweep around the current knob setting. Changing the destination or bypassing the LFO restores that setting, including edits made during the sweep.
 
@@ -312,16 +361,15 @@ spectrum and envelope comparison would be more informative than a single
 house-music recording.
 
 The organ's dark charcoal panel with lime accents and a cyan readout takes
-visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. The PRESETS
-list is inspired by the FM-1's stock patch-selector overlay. A bright outline
-and dark fill mark the selected row over the dimmed instrument page. The scope
-and controls stay live while browsing channels. The list closes one second after the
-last turn.
+visual inspiration from the [KORG Collection M1 V2 UI][korg-m1]. Turn PRESETS
+to play another channel. The four-channel list appears over the dimmed
+waveform. An arrow and the destination instrument’s highlight color mark the
+selected row.
 
 ## Super Saw
 
-Press **GLO**, turn **SELECT** to highlight a strip, then turn **PRESETS** to
-**SUPER SAW**, the entry after TR-808. Press **GLO** again to play it.
+On the instrument screen, turn **PRESETS** to the destination channel. Hold
+**EDIT**, turn **PRESETS** to **SUPER SAW**, then tap **EDIT** to play it.
 The strip keeps its MIDI channel, level and sends. Each assigned instance has
 four independently gated voices and its own panel settings. Each note has seven
 oscillators, a pitch-tracking high-pass, a resonant low-pass and both envelopes.
@@ -349,8 +397,8 @@ attack. Lengthening AMP release also lets you hear the filter close after key-up
 
 ## Wavetable
 
-Press **GLO**, turn **SELECT** to highlight a channel and turn **PRESETS** to
-**WAVETABLE**, one detent past **SUPER SAW**. Press **GLO** again to play it.
+On the instrument screen, choose the channel with **PRESETS**. Hold **EDIT**,
+turn **PRESETS** to **WAVETABLE**, then tap **EDIT**.
 **ALGORITHM** switches between two 64-frame programs. Each remembers its
 scan settings and position envelope for as long as the instrument occupies the strip.
 
@@ -391,7 +439,9 @@ covers the scan engine and the sources of both banks.
 Hold a key and turn Knob 3 to hear the sustain level change. Release the key
 and turn Knob 4 to shorten or extend the tail. The graph and readouts also
 respond while the keyboard is idle. Press ENV again to return to the scope.
-PRESETS moves to the next channel’s ENV page. Each channel recalls its own settings.
+PRESETS moves to the next channel’s ENV page. The channel label stays visible
+so you can tell two copies of the same instrument apart. Each channel recalls
+its own settings.
 
 | Knob | Parameter | Monosynth range (initial) | Organ range (initial) |
 | --- | --- | --- | --- |
@@ -442,9 +492,9 @@ the audio voice. [Robin Whittle’s circuit description][accent-sweep]
 ## TR-808 instrument view
 
 Turn PRESETS to channel three to play the factory 808. To put another 808
-on any channel, press GLO, turn SELECT to highlight its strip, and turn
-PRESETS to **TR-808**. The strip keeps its MIDI channel, fader, sends and
-sequence mute. Press HOME twice to return to the instrument.
+on any channel, choose its strip with PRESETS in GLO. Hold EDIT, turn PRESETS
+to **TR-808**, then tap EDIT. The strip keeps its MIDI channel, fader, sends
+and sequence mute. Tap GLO to open the instrument.
 
 The four red, orange, amber and yellow switches show the actual voices in that strip. A strike depresses the cap and lights
 the lens. The lamp dims through the tail and goes dark when the voice stops.
@@ -474,6 +524,8 @@ The six key lamps follow this kit in either scope mode. Each lamp flashes at
 the attack and glows dimly through the tail. A closed hat cuts off an open hat
 immediately.
 
+![TR-909 instrument view with the gray model name above the waveform and the orange closed-hat lamp lit](assets/tr-909.png)
+
 Press PLAY to watch the pattern, or trigger the lamps and voices from the
 panel or USB MIDI with the transport stopped. The six physical pads keep their
 assignments across octave changes. SEQ opens the drum pattern and HOME returns
@@ -490,8 +542,8 @@ to the same live view.
 
 ## Chromatic sampler
 
-Press **GLO**, turn **SELECT** to highlight a strip, turn **PRESETS** to
-**SAMPLER**, then press **GLO** to play. A new strip starts on **AMEN BRK**.
+On the instrument screen, choose a channel with **PRESETS**. Hold **EDIT**,
+turn **PRESETS** to **SAMPLER**, then tap **EDIT** to play. A new strip starts on **AMEN BRK**.
 Turn **ALGORITHM** one click for **MIN7 STAB**, then **RAVE RISE**, **AIRHORN**,
 **LASER ZAP**, **RAVE STAB** and the shared **CLIPBOARD**. Each strip plays four independent,
 velocity-sensitive sampler voices from the panel, MIDI or sequencer. The
@@ -569,9 +621,10 @@ The SEQ pattern picker keeps its normal eight bank keys.
 ### Sample a chord into the clipboard
 
 1. From the Hoover instrument screen, press **GLO**, then **EDIT**. If you
-   still have the factory rack, use **SELECT** in **GLO** to highlight a strip
-   and turn **PRESETS** to assign **HOOVER** before pressing **EDIT**. Check
-   the source channel and instrument on the **PCM CLIPBOARD** page. You can
+   still have the factory rack, first choose a strip with **PRESETS** in **GLO**.
+   Hold **EDIT**, turn **PRESETS** to **HOOVER**, and tap **EDIT** to finish.
+   Tap **EDIT** again to open the clipboard. Check the source channel and
+   instrument on the **PCM CLIPBOARD** page. You can
    turn **PRESETS** here to choose another channel before arming.
 2. Knob **1** sets **LENGTH** (one beat or one, two or four bars). Knob **2**
    sets **ROOT**, the key that will replay the take at its original pitch and
@@ -590,10 +643,10 @@ The SEQ pattern picker keeps its normal eight bank keys.
 
 - **Sampler already assigned.** Stay on **PCM CLIPBOARD** and turn **PRESETS**
   to the sampler channel. Press **SEL** (**USE CLIPBOARD**), then **HOME**.
-- **Need a sampler.** Press **EDIT** to return to the mixer. Highlight a
-  different strip with **SELECT** and turn **PRESETS** to **SAMPLER**. Press
-  **GLO** to open its instrument screen, then turn **ALGORITHM** one click
-  counterclockwise from **AMEN BRK** to **CLIPBOARD**.
+- **Need a sampler.** Press **EDIT** to return to the mixer. Choose a
+  different strip with **PRESETS**. Hold **EDIT**, turn **PRESETS** to
+  **SAMPLER**, then tap **EDIT**. Press **GLO** to open its instrument screen,
+  then turn **ALGORITHM** one click counterclockwise from **AMEN BRK** to **CLIPBOARD**.
 
 Play **D4** to hear the example chord as recorded, or **D5** to hear it an
 octave higher in half the time. A sampler strip can play four copies at once.
@@ -651,7 +704,7 @@ For MIX, mute that sampler strip before arming the next pass.
 
 ## Pattern banks
 
-Press **SEQ**, turn **PRESETS** to the instrument you want, and press one of the
+Press **SEQ**, turn **PRESETS** to the channel you want, and press one of the
 eight lit white keys. **F, G, A, B, C, D, E, F** select the numbered slots from left
 to right, even after an octave change. The pressed key and its on-screen button
 blink off and back on once to acknowledge the press. While stopped,
@@ -881,11 +934,12 @@ Turn SELECT clockwise to edit that strip, then turn it either way to move
 between strips. The highlighted row shows which strip Knobs 1–3 will edit.
 All four strips use the same dark palette for every instrument assignment.
 
-Turn PRESETS while a strip is highlighted to browse instruments alphabetically
-by their displayed names. Each detent applies the new assignment immediately.
-Any slot can run any of the ten instruments, including four independent
-TB-303s. The slot keeps its MIDI channel, activator, fader, sends and sequence mute.
-The new processor starts from its factory settings.
+PRESETS moves focus in both the **GLO / LEVELS** overview and the **CH 1 / STRIP**
+editor. To replace an instrument, hold EDIT until **CH 1 / ASSIGN** appears
+with your channel number, browse with PRESETS, then tap EDIT to finish.
+Any slot can run any of the ten instruments, including four independent TB-303s.
+The strip keeps its MIDI channel, activator, fader, sends, inserts and sequence
+mute. Reassigning a 303 also recalls that strip’s last 303 preset.
 
 | Factory mix (128 = unity) | 303 bass | 303 harmony | TR-808 | TR-909 |
 | --- | ---: | ---: | ---: | ---: |
@@ -898,6 +952,26 @@ Lowering a track fader reduces the new signal it feeds to either effect.
 Existing tails continue to play. Faders run from mute to about +6 dB. Sends
 run from zero to unity. MASTER sets the listening volume independently.
 
+### Momentary mixer
+
+Hold **GLO** on the instrument scope, ENV, LFO, ARP, channel FX, voice-mode or
+sampler editor. **GLO / LIVE MIX** appears after **350 ms**. Turning a numbered
+knob or pressing one of the first four white keys while holding GLO activates
+the mixer immediately, so a fader move or mute lands on the beat.
+
+| While holding GLO | Action |
+| --- | --- |
+| Knobs 1–4 | Change the levels of channels 1–4. |
+| First four white keys (F, G, A, B) | Toggle channels 1–4. A lit key means that channel is on. |
+| SEL | Toggle the focused channel. Its lamp follows that strip’s on/off state. |
+| Other piano keys | Play the focused instrument. Notes held before entering retain their original release. |
+| PLAY/STOP | Start or stop the transport while the mixer stays visible. |
+| Release GLO | Return to the same page, focused channel and selected control. |
+
+Tap GLO on an instrument for the full mixer. Tap GLO from either FX bank, or
+press GLO and FX together, to open the master rack. REC exits the momentary
+mixer and performs its usual action. From SEQ, GLO opens the full mixer.
+
 ### Global effects
 
 Press **FX** from GLO, or **GLO** from an instrument’s FX page. Both open the
@@ -905,6 +979,11 @@ same four-row rack. Turn SELECT to highlight a device and use the numbered
 knobs from left to right. SEL bypasses the selected device and HOME leaves
 the selection. The line across the rack separates the parallel send returns
 from the two inserts applied to the whole mix.
+
+On the master rack overview, **ALGORITHM** sets post-rack output gain. Turn
+left for **−6 dB** (half amplitude), or right for **0 dB** (full amplitude).
+The footer shows the applied gain. From a highlighted device, tap **HOME**
+once to reach the overview. The physical MASTER knob still sets listening volume.
 
 | Device | Knob 1 | Knob 2 | Knob 3 | Knob 4 |
 | --- | --- | --- | --- | --- |
@@ -925,20 +1004,39 @@ feeds a separate sample-peak limiter with an initial −1 dBFS ceiling and
 80 ms release. The GR readout shows their combined gain reduction in dB.
 A 1:1 ratio leaves the limiter available on its own.
 
-![GLO mixer during playback with channel 2 focused and OFF, alongside the master rack with the compressor selected](assets/glo-master-fx.png)
+![Mixer with channel 2 focused and OFF alongside the master rack with its compressor selected](assets/glo-master-fx.png)
 
 ### Beat FX
 
-From any instrument, press **FX** then **EDIT**. EDIT also opens Beat FX from
-the GLO FX rack. The page follows the focused instrument’s colors, with its
+Press **FX** on an instrument to open **Beat FX**. Echo is selected on first use.
+Tap **FX** again for **Channel FX**, and again to get back to the Beat FX you
+were using. Each bank remembers its selection. **PRESETS** chooses the channel
+on both pages. The active bank follows the focused instrument’s colors, with its
 channel number in white on black at the upper left. **Knob 1 always sets BEATS.**
 The large fraction at the top center is shared by every Beat FX and every
 channel. The master BPM appears directly below it. At 120 BPM, 1 means
 500 ms and 3/4 means 375 ms. Turn SELECT to switch effects, PRESETS to focus
 a channel and HOME to return. The 808 has four groups of colored step keys and
-the 909 has ivory caps with amber lamps. On Echo and Slicer the lamps show the
-programmed steps and the underline follows the playhead, including across rests.
-On Flanger the light follows the sweep while the keyboard plays the instrument.
+the 909 has ivory caps with amber lamps. The underline follows the playhead
+even when the step above it is dark.
+
+**Play the white keys like a drum machine.** Keys 1–16 address steps 1–16
+in the current channel’s pattern. On Echo a lit step feeds the delay, on
+Slicer it passes the channel at full level, and on PCF it triggers the filter
+envelope. Each effect keeps its own pattern. On Flanger the keys play notes
+and the playhead follows the continuous sweep.
+
+The waveform at the bottom follows the selected processor. Echo shows the wet
+return shared by the four sends. Close the send after a hit and you can still
+see its repeats. Flanger and PCF show the focused strip immediately after
+that processor. A downstream Slicer can cut the audible strip while the PCF
+trace still shows the filter ringing. Slicer shows the actual output after
+its gate, before the fader. Its trace spans one complete 16-step cycle, with
+one peak per column. The other effects show a short audio waveform. Echo has
+its own fixed display gain so you can watch quiet repeats decay. Changing
+pages only moves the observation point.
+
+![The same TB-303 on the Beat FX and Channel FX tabs. Each screen names the other bank beside the FX tap hint.](assets/fx-banks.png)
 
 ![TR-808 Echo with four groups of colored step keys and TR-909 Slicer with ivory keys, amber lamps and a playhead under the current step](assets/beat-fx-drums.png)
 
@@ -958,7 +1056,8 @@ On Echo, the **16 white keys** toggle the focused channel’s sixteen send steps
 Start with every step lit. Turn up Depth and turn off all but the first step
 to echo the downbeat. All dry audio keeps playing and the repeats ring over
 the closed steps. Stopping the sequencer suspends the step mask for live playing.
-Opening Echo selects BEAT timing for the shared delay.
+Browsing to Echo leaves the delay clock alone. Turning an Echo knob, pressing
+SEL or toggling one of its send steps selects BEAT timing for the shared delay.
 
 For an echo throw, start with **SEND CLOSED**. Press **SEL** just before the
 hit you want to catch, then press it again. The dry mix carries on and the
@@ -978,19 +1077,26 @@ pattern fits inside one quarter note. Each channel keeps its own pattern,
 depth and bypass, so all four can run together. Slicing takes place after
 the channel inserts, Beat Flanger and PCF, before the fader and sends.
 
+| Punching in extra steps on a TB-303 | Holding an organ note through alternating steps |
+| --- | --- |
+| ![Playing 303 with Slicer enabled. White-key edits change the gates while the bottom trace follows the audio.](assets/slicer-live.gif) | ![The M1 organ sounds through the eight lit steps. The scope below shows eight bursts separated by silence.](assets/slicer-cycle.png) |
+
 #### Play the pattern-controlled filter
 
-Press **PLAY**, then **FX → EDIT**. Turn **SELECT** to **PCF** and **PRESETS**
+Press **PLAY**, then **FX** from the instrument. Turn **SELECT** to **PCF** and **PRESETS**
 to a 303 or drum channel. Set **BEATS** to **4** for a one-bar rhythm.
-Tap the first white key for **QUARTERS**, then the second for **OFFBEAT**.
-Each key enables the filter on that strip and auditions the new rhythm at
-the current playhead. The notes and the other strips keep their place.
+Tap the first black key for **QUARTERS**, then the second for **OFFBEAT**.
+With that rhythm running, tap a white key to add or remove a trigger exactly
+where you want it. The notes and the other strips keep their place.
 
-| White keys, left to right | F3 | G3 | A3 | B3 | C4 | D4 | E4 | F4 |
+| Black keys, left to right | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Filter rhythm | Quarters | Offbeat | Eighths | Sixteenths | Backbeat | Tresillo | Gallop | Pickup |
 
-The next two white keys select **low-pass** (G4) and **band-pass** (A4).
+Black keys 9 and 10 select **low-pass** and **band-pass**.
+Turning off a step and turning it back on restores the original accent. A new
+trigger on a factory rest plays at full strength. Recalling a rhythm with a black
+key restores its original accents. Each channel keeps its own edits.
 Key positions stay fixed across octave changes. Turn **ALGORITHM** to shorten
 or lengthen the filter envelope (10–2,000 ms). Each lit step opens the filter
 by its programmed accent. A wider lamp marks a stronger accent, and a dark
@@ -1002,8 +1108,8 @@ Each strip starts bypassed and retains its own rhythm, mode and tone settings.
 
 Press PLAY with pattern 01 on both 303s. In bar four, listen for the upper
 303 sliding from B to E and then answering on G. The slide hardens and the G
-returns to the softer curve. To watch it, select channel 2, press FX and
-turn SELECT to slot 1. Its Shape dial follows the phrase.
+returns to the softer curve. To watch it, select channel 2, tap FX twice from the instrument for Channel FX,
+and turn SELECT to slot 1. Its Shape dial follows the phrase.
 
 Both factory 303 channels have their own **SAT** in slot 1, followed by
 **SIDECHAIN** in slot 2. Knobs 1–4 on the saturator set
@@ -1014,7 +1120,7 @@ your setting for one beat. The lower 303 stays on its own setting throughout.
 
 ### Hear the kick duck the bass
 
-Select a factory 303 channel, open FX and turn SELECT to slot 2,
+Select a factory 303 channel, tap FX twice for Channel FX and turn SELECT to slot 2,
 **SIDECHAIN**. Press PLAY. Knob 1 starts
 on **909 KICK**, the isolated kick before its fader. Keep it selected and
 turn knob 2 from 0% to 100%. At 0% the insert keeps its makeup gain, so you
@@ -1031,13 +1137,13 @@ the ducking subside. **909 KIT** includes hats and claps in the detector.
 accents. Only the 303 is processed. The factory setting is 75% depth at
 180 Hz, with a 2 ms attack and 90 ms recovery for full-depth moves.
 
-The channel FX scope taps the selected instrument after its inserts and before
-its fader and shared sends. It keeps the same vertical gain while you adjust
+The Channel FX scope shows the selected strip after its inserts and Beat FX,
+just before its fader and sends. It keeps the same vertical gain while you adjust
 depth, bypass the compressor or switch to the send controls. To flange the
 compressed bass, replace slot 1's saturator with **FLANGER** and keep slot 2's
 sidechain. Each slot keeps its own delay line.
 
-![Channel FX racks showing the TB-303 compressor and flanger alongside the TR-808’s empty inserts, each with its live waveform](assets/channel-fx.png)
+![Channel FX on the TB-303 with its saturator and sidechain compressor, alongside the TR-808’s empty insert slots. Both scopes show their own strip.](assets/channel-fx.png)
 
 Each assigned 303 keeps its own key, depth, crossover and bypass. Named external sources sum all matching
 channels before their faders. With two 909s assigned, a kick from either kit
@@ -1045,17 +1151,19 @@ can duck every 303. With 303 SELF selected, each 303 keys from its own signal.
 
 ## UI patterns
 
-Turn SELECT to enter a drilldown from an overview and highlight the item it
-acts on. Light HOME while the drilldown is open. HOME returns one level and
-clears the drilldown highlight. In GLO this leaves the mixer open with all four
-meters live, and a second HOME press returns to the instrument. In SEQ, HOME
-returns from tempo, live recording or step editing to the channel’s pattern.
+Tap **HOME** to back out one level. From a GLO strip this brings back all four
+faders. Tap again to return to the instrument. From the SEQ tempo, recording
+or step editor, HOME returns to the channel’s pattern.
 
-PRESETS browses channels in ordinary views. In GLO channel edit it opens the
-instrument list and assigns the highlighted instrument immediately. From the
-instrument screen, hold EDIT to use the same list with a 200 ms pause before
-each assignment. In both views the list closes one second after the last turn.
-See [Swap the instrument on one channel](#swap-the-instrument-on-one-channel).
+Hold **HOME** for **0.6 seconds** for a compact guide to the current page.
+Release it to resume on the same control. The transport and held notes
+continue while the guide is visible.
+
+**PRESETS** normally chooses the channel. In the explicit EDIT instrument
+picker it chooses an instrument for the fixed channel. **ALGORITHM** chooses
+a sound, waveform or sample on the instrument scope, or the effect type
+for a selected insert on channel FX. The 303’s selected control takes over ALGORITHM until HOME
+clears the selection.
 
 ## Building your own FM-1 app
 
@@ -1155,10 +1263,13 @@ and releasing a note within a single snapshot interval can coalesce both edges.
 [cpu1-demo]: https://github.com/fm1-rust/fm1-rust/pull/84
 [cpu1-sram]: https://github.com/charlesvestal/fm1-x0x/issues/10
 
-The default build applies FX gain edits at the next available block. To exercise
+The default build applies master output gain edits at the next available block. To exercise
 the late-block fallback on the board, build with
 `./wavegraph-fm1/build.sh --features late-block-probe`. In that build, press
-PLAY, enter **FX**, hold **SAVE**, and turn **ALGORITHM** one detent. This holds
+PLAY and tap **GLO**, then **FX**, to open the master rack with no device
+selected. Turn **ALGORITHM** right to establish full output and wait for the
+**0 dB** footer. Hold **SAVE** and turn **ALGORITHM** one detent left for
+half output. The change from full to half triggers the probe and holds
 the edited job until ALNK0 writes a silent half. The worker then
 returns the expired slot. On the next refill CPU0 discards it and issues a
 fresh job. In an otherwise clean run **SILENCES** rises by two, **DISCARDS**
@@ -1194,7 +1305,7 @@ The hot 303 preset reserves 16-fold output headroom before converting to Q23.
 Its channel inserts sit between the synth and the channel fader, so both
 post-fader sends hear the shaped acid line. The GLO faders and sends apply
 to live and sequenced notes.
-FX's ALGORITHM encoder retains the async `EditQueue` to switch the output
+The master rack overview uses the async `EditQueue` to switch the output
 gain program between blocks, with an acknowledgement once DMA accepts the
 first block under that route.
 
@@ -1221,10 +1332,12 @@ The monochrome UI fonts come from the public-domain X.Org misc-fixed faces in
 upstream atlas pixels for upper flash. The firmware uses the same upstream
 glyph mappings and metrics for layout.
 
-The instrument, channel and effect pickers use Orbitron Bold, as do the
-TB-303, TR-808, TR-909 and JP-8080 panels. The model marks and temporary
-channel digits are rasterized on the host at their LCD sizes. Dynamic labels
-use packed two-bit glyphs, and the shared dashboard grid uses a 12 × 16 atlas.
+The channel, instrument and effect pickers use Orbitron Bold, as do the
+TB-303, TR-808, TR-909 and JP-8080 panels. The model marks and channel digits
+are rasterized on the host at their LCD sizes. The build also packs each
+12-pixel scanline of a picker glyph into a single word. At draw time the
+selected instrument supplies the ink and background colors. Other dynamic
+labels use the original two-bit coverage from the 12 × 16 grid atlas.
 The panel blends grayscale coverage into its RGB565 strip.
 The generator and Open Font License are in `assets/panel-type/`.
 
@@ -1234,9 +1347,11 @@ narrow phosphor pulse crosses the trace once per quarter note, starting at
 the left edge with the kick. It follows the audio master clock across tempo
 changes and clears on STOP. The live scope compares the old and new trace and
 pulse in six-column strips for the basses, organ and Super Saw, 24-column
-strips for the drum kits and 12-column strips for mono and wavetable. It restores the grid and composites the new ink
-and preset list in the same LCD write. A jump between notes leaves the clean
-rows between them alone. A changed trace or label wakes the display, and
+strips for the drum kits and 12-column strips for mono and wavetable. During
+channel selection, the waveform stays live behind the four-row list. When
+the list and number close, the faceplate returns to full brightness with the
+current sweep. A jump between notes leaves the clean rows between them alone.
+A changed trace or label wakes the display, and
 changes during painting coalesce into the next frame. Startup, panel, audio
 and scope tasks on CPU0 each own a sender for that single redraw wake. Only
 time-driven animations use a 20 ms fallback. Static pages wait for a change.
@@ -1244,7 +1359,7 @@ Page clears and solid bands use the BSP’s async rectangle fill. It sets one
 panel window and stages the color once, then SPI1 repeats the strip while the
 display task yields.
 Sequencer labels and pattern buttons, drum faceplates and controls, and the
-temporary channel badge use the same interrupt-driven writer.
+channel list use the same interrupt-driven writer.
 Display DMA runs below audio and panel scanning. To change the lettering, edit `assets/wavegraph.png`
 or `assets/fm1.png` and run
 `python3 wavegraph-fm1/assets/pack_logo.py` with Pillow installed.

@@ -101,6 +101,7 @@ fn knocks(mix: &mut [f32]) {
 fn main() {
     println!("cargo:rerun-if-changed=assets/bumper.rs");
     println!("cargo:rerun-if-changed=assets/fonts.rs");
+    println!("cargo:rerun-if-changed=assets/panel-type/grid.raw");
     println!("cargo:rerun-if-changed=assets/boot_timing.rs");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("none") {
         let out = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo build directory"));

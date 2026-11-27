@@ -121,6 +121,12 @@ pub(super) const TR909: InstrumentStyle = InstrumentStyle {
         rgb(5, 15, 9),
     ),
 };
+// Orange print and brighter orange lamps on the 909's individual instrument face.
+pub(super) const TR909_FACE: InstrumentStyle = InstrumentStyle {
+    accent: rgb(20, 20, 0),
+    peak: rgb(28, 32, 2),
+    ..TR909
+};
 // Midnight blue with amber legends and a cyan trace.
 pub(super) const JP8080: InstrumentStyle = InstrumentStyle {
     stripes: Stripes::Fine,

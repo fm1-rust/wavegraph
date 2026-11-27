@@ -36,6 +36,7 @@ pub struct Performance {
 pub struct Settings {
     tracks: [Track; CHANNELS],
     nav: Navigation,
+    quick_mix: bool,
     mixer: Mixer,
     seq: Sequencer,
     fx: Fx,
@@ -46,6 +47,7 @@ impl Settings {
     const INITIAL: Self = Self {
         tracks: Track::rack(Navigation::INITIAL.assignments),
         nav: Navigation::INITIAL,
+        quick_mix: false,
         mixer: Mixer::INITIAL,
         seq: Sequencer::INITIAL,
         fx: Fx::INITIAL,
@@ -57,6 +59,7 @@ impl Settings {
         let track = self.tracks[channel.index()];
         Labels {
             channel,
+            quick_mix: self.quick_mix,
             clip_options: self.nav.clip_request.options,
             beat_steps: if self.nav.view == View::BeatFx(crate::fx::BeatEffect::Slicer) {
                 self.nav.slicer_steps[channel.index()]
@@ -89,7 +92,7 @@ impl Settings {
             wave: track.wave_program(),
             envelope_target: track.envelope_target,
             poly_keys: track.poly_keys,
-            preset_since: self.nav.preset_since,
+            preset_since: self.nav.picker_feedback.map(|feedback| feedback.since),
             preset_role: self.nav.preset_role(),
             view: self.nav.view,
             inserts: track.inserts,
@@ -150,6 +153,7 @@ impl Settings {
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Labels {
+    pub(super) quick_mix: bool,
     pub(super) beat_steps: wavegraph_fx::StepPattern,
     pub(super) clip_options: crate::clipboard::Options,
     pub(super) channel: Channel,
@@ -273,13 +277,13 @@ pub struct Frame {
 
 #[fm1_rticx::app(dispatchers = [SOFT0, SOFT1, SOFT2])]
 mod app {
-    use super::render::{RenderBlock, Renderer};
+    use super::render::{RenderBlock, Renderer, ScopeClock};
     use wavegraph_fm1_core::{Driver, OutputHealth, Refilled, peer};
     wavegraph_fm1_core::dsp_worker!(static DSP: Renderer);
     use super::{Frame, Labels, Motion, Performance, Settings, Timing};
     use crate::{
         bumper::Bumper,
-        capture::{Capture, FLAT, Scale, ScopeUpdates},
+        capture::{Capture, FLAT, SLICER_SILENCE, Scale, ScopeUpdates},
         inserts::ChannelInserts,
         instrument::{
             AudioProcess, BUS_COUNT, DRY_HEADROOM, FxMixer, FxNode, Instrument, Master, Node, Note,
@@ -289,10 +293,8 @@ mod app {
         midi_out::OutputQueue,
         mixer::Mixer,
         overload::Overloads,
-        panel::{
-            CHANNELS, Channel, EditButton, Navigation, PageButton, PresetRole, View,
-            pattern_press_lamp,
-        },
+        panel::{CHANNELS, Channel, EditButton, Navigation, PageButton, View, pattern_press_lamp},
+        quick_mix::{self, HoldButton, MUTE_KEYS},
         screen::Screen,
         sequencer::{DrumKits, SeqPage, Sequencer, edit::EDITS, pattern::Slot},
     };
@@ -329,7 +331,9 @@ mod app {
     const PIANO_KEYS: usize = PianoKey::COUNT as usize;
 
     pub struct PanelFrame {
-        strip_enabled: [bool; CHANNELS],
+        echo_step_edited: bool,
+        quick_mix: bool,
+        faders: [(bool, u8); CHANNELS],
         scan: Scan,
         seq: Sequencer,
         nav: Navigation,
@@ -370,7 +374,7 @@ mod app {
 
     pub struct ScopeBlock {
         samples: Option<[i32; OUTPUT_FRAMES]>,
-        bass_cycle: Option<usize>,
+        clock: ScopeClock,
         labels: Option<Labels>,
         gap: bool,
     }
@@ -382,6 +386,7 @@ mod app {
         leds: (Leds, [bool; CHANNELS]),
         frame: Frame,
         battery_low: bool,
+        help_visible: bool,
         overloads: Overloads,
         timing: Timing,
         stream: Option<Playback>,
@@ -554,6 +559,7 @@ mod app {
                     labels: Settings::INITIAL.labels(false),
                 },
                 battery_low: false,
+                help_visible: false,
                 overloads: Overloads::default(),
                 timing: Timing {
                     boot,
@@ -599,7 +605,10 @@ mod app {
                     leds,
                     octave_since: None,
                     edit_button: EditButton::default(),
-                    strip_enabled: Mixer::INITIAL.0.map(|s| s.enabled),
+                    home_button: HoldButton::Idle,
+                    quick_mix: HoldButton::Idle,
+                    faders: Mixer::INITIAL,
+                    echo_step_edited: false,
                     pattern_pressed_at: None,
                 },
                 input: Input {
@@ -647,7 +656,7 @@ mod app {
 
     // The upper seven keys share an LED line with the velocity probe. End its
     // 100 µs column slot on time even when the audio graph is rendering.
-    #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing, battery_low])]
+    #[task(binds = TIMER5, priority = 5, shared = [leds, motion, timing, battery_low, help_visible])]
     struct Panel {
         draw_wake: Sender<'static, (), 1>,
         timer: Timer5,
@@ -659,7 +668,10 @@ mod app {
         leds: Leds,
         octave_since: Option<u32>,
         edit_button: EditButton,
-        strip_enabled: [bool; CHANNELS],
+        home_button: HoldButton,
+        quick_mix: HoldButton,
+        faders: Mixer,
+        echo_step_edited: bool,
         pattern_pressed_at: Option<u32>,
     }
 
@@ -697,9 +709,9 @@ mod app {
                     self.seq.back();
                 }
             }
+            let tick = ticks();
+            let home = self.home_tap(&scan, tick);
             let page = [
-                (Button::Home, PageButton::Home),
-                (Button::Glo, PageButton::Glo),
                 (Button::Fx, PageButton::Fx),
                 (Button::Env, PageButton::Env),
                 (Button::Lfo, PageButton::Lfo),
@@ -709,17 +721,25 @@ mod app {
             .into_iter()
             .find(|(button, _)| scan.pressed(*button))
             .map(|(_, page)| page);
-            let tick = ticks();
-            let wait_for_hold = page.is_none()
-                && self.nav.view == View::Scope
-                && self.nav.instrument_swap.is_none();
+            let other_page =
+                page.is_some() || scan.pressed(Button::Edit) || scan.pressed(Button::Rec);
+            let release_glo = scan.released(Button::Glo);
+            // The last detent may share a sweep with GLO-up. Finish it on the fader.
+            let finishing_mix = self.quick_mix.active() && release_glo && !other_page && !home;
+            let glo = if scan.is_down(Button::Glo) || release_glo {
+                self.glo_page(&scan, tick, other_page)
+            } else {
+                None
+            };
+            let page = glo.or(page).or_else(|| home.then_some(PageButton::Home));
+            let quick_mix = finishing_mix || self.quick_mix.active();
+            let wait_for_hold = page.is_none() && self.nav.can_swap();
             let edit = self.edit_button.update(
                 wait_for_hold,
                 scan.pressed(Button::Edit),
                 scan.is_down(Button::Edit),
                 tick,
             );
-            let home = scan.pressed(Button::Home);
             let previous_view = self.nav.view;
             let previous_channel = self.nav.focus;
             let previous_insert_slot = self.nav.insert_slot();
@@ -732,22 +752,19 @@ mod app {
                 self.nav.turn(0, presets);
                 presets = 0;
             }
-            if !matches!(self.nav.view, View::MasterFx(_))
-                && ((scan.pressed(Button::Glo) && scan.is_down(Button::Fx))
-                    || (scan.pressed(Button::Fx) && scan.is_down(Button::Glo)))
-            {
-                self.nav.press(PageButton::GlobalFx);
-            } else if let Some(button) = page.or(edit)
+            if let Some(button) = page.or(edit)
                 && !(home && self.seq.back())
             {
                 self.nav.press(button);
             }
             let select = scan.encoder_delta(Encoder::Select);
-            if !home && (select != 0 || presets != 0) {
+            if !home && !quick_mix && (select != 0 || presets != 0) {
                 self.nav.turn(select, presets);
             }
-            self.nav
-                .turn_algorithm(scan.encoder_delta(Encoder::Algorithm));
+            let algorithm = scan.encoder_delta(Encoder::Algorithm);
+            if !quick_mix {
+                self.nav.turn_algorithm(algorithm);
+            }
             // Keep the detent time in the navigation snapshot even if the scan queue is full.
             let channel_changed = self.nav.focus != previous_channel;
             if home
@@ -755,61 +772,21 @@ mod app {
                 || self.nav.view != previous_view
                 || self.nav.insert_slot() != previous_insert_slot
             {
-                self.nav.preset_since = None;
+                self.nav.picker_feedback = None;
             }
-            self.nav.poll_presets(
+            self.nav.poll_pickers(
                 tick,
-                !home
-                    && presets != 0
-                    && (channel_changed || self.nav.preset_role() != PresetRole::Channel),
+                !home && !quick_mix && presets != 0,
+                !home && !quick_mix && algorithm != 0,
             );
-            // Retain each activator edge even if this scan cannot be queued.
-            if self.nav.view.is_mixer() && scan.pressed(Button::Sel) {
-                self.strip_enabled[self.nav.focus.index()] ^= true;
+            // Retain absolute faders and mutes even if the input task misses this scan.
+            if quick_mix || self.nav.view.is_mixer() {
+                self.mix(&scan, quick_mix);
             }
             if self.nav.view == View::Clipboard {
-                self.nav.clip_request.options.turn(
-                    scan.encoder_delta(Encoder::Knob1),
-                    scan.encoder_delta(Encoder::Knob2),
-                );
-                self.nav.clip_request.options.turn_tape(
-                    scan.encoder_delta(Encoder::Knob3),
-                    scan.encoder_delta(Encoder::Knob4),
-                    scan.encoder_delta(Encoder::Algorithm),
-                );
+                self.clipboard_knobs(&scan);
             }
-            let pressed_rec = scan.pressed(Button::Rec);
-            let tape_busy = pressed_rec
-                && self.nav.view == View::Sequencer
-                && self.nav.clip_request.options.tape
-                && self.shared().motion.lock(|m| {
-                    matches!(
-                        m.clipboard.state,
-                        crate::clipboard::State::Armed
-                            | crate::clipboard::State::Recording
-                            | crate::clipboard::State::Dubbing
-                    )
-                });
-            // Keep REC available while performing on an instrument or its FX.
-            // SEQ takes it back for note entry once the tape pass is finished.
-            let capture_rec = self.nav.view == View::Clipboard
-                || (self.nav.clip_request.options.tape
-                    && (self.nav.view != View::Sequencer || tape_busy));
-            if pressed_rec && capture_rec {
-                if self.nav.view == View::Clipboard
-                    && self.nav.clip_request.options.tape
-                    && scan.is_down(Button::Sel)
-                    && !self.seq.transport.playing()
-                {
-                    self.nav.clip_request.clear();
-                } else {
-                    let source = self.nav.focus;
-                    self.nav
-                        .clip_request
-                        .press(source, self.nav.assignments[source.index()]);
-                }
-            }
-            let rec = pressed_rec && !capture_rec;
+            let rec = scan.pressed(Button::Rec) && !self.record_clipboard(&scan);
             if rec && self.nav.view != View::Sequencer {
                 self.nav.press(PageButton::Seq);
             }
@@ -817,33 +794,9 @@ mod app {
                 self.seq.toggle_page();
             }
             if self.nav.view == View::Sequencer {
-                if channel_changed && self.seq.page == Some(SeqPage::Record) {
-                    self.seq.back();
-                }
-                self.seq.channel = self.nav.focus;
-                if rec {
-                    self.seq.record();
-                } else if scan.pressed(Button::Edit) {
-                    if self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel) {
-                        if let Some(at) = self.seq.edit_address(self.nav.part(), None) {
-                            EDITS.restore(at);
-                            self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
-                            self.seq.full = false;
-                        }
-                    } else {
-                        self.seq.step_edit();
-                    }
-                }
-                if self.seq.page == Some(SeqPage::Step) {
-                    self.seq.turn_cursor(scan.encoder_delta(Encoder::Knob1));
-                }
-                self.seq
-                    .turn_bar(self.nav.part(), scan.encoder_delta(Encoder::Knob2));
-                if scan.pressed(Button::Sel) && self.seq.page != Some(SeqPage::Step) {
-                    self.seq.toggle_track();
-                }
+                self.edit_sequence(&scan, rec, channel_changed);
             }
-            if !home {
+            if !home && !quick_mix {
                 self.seq.turn(
                     scan.encoder_delta(Encoder::Select),
                     scan.encoder_delta(Encoder::Knob3),
@@ -889,7 +842,7 @@ mod app {
             );
             self.leds.set(
                 Button::Glo,
-                self.nav.view.is_mixer() || matches!(self.nav.view, View::MasterFx(_)),
+                quick_mix || self.nav.view.is_mixer() || matches!(self.nav.view, View::MasterFx(_)),
             );
             self.leds.set(
                 Button::Fx,
@@ -940,34 +893,11 @@ mod app {
                     &mut self.nav.filter_picks[channel.index()],
                 );
             } else if let Some(pattern) = self.nav.beat_pattern_mut() {
-                Self::beat_keys(&mut self.leds, &scan, pattern);
+                let changed = Self::beat_keys(&mut self.leds, &scan, pattern);
+                self.echo_step_edited |=
+                    changed && self.nav.view == View::BeatFx(crate::fx::BeatEffect::Echo);
             } else if self.seq.page == Some(SeqPage::Pattern) {
-                let tick = ticks();
-                if channel_changed {
-                    self.pattern_pressed_at = None;
-                }
-                for (key, slot) in Slot::KEYS {
-                    if scan.pressed(PianoKey::new(key).expect("physical bank key")) {
-                        self.seq.choose(assignment.part, slot);
-                        self.pattern_pressed_at = Some(tick);
-                    }
-                }
-                let press_lamp = pattern_press_lamp(&mut self.pattern_pressed_at, tick);
-                self.seq.pressed_key_dark = press_lamp == Some(false);
-                let requested = self.seq.slot(channel, assignment.part);
-                let active = if self.seq.transport.playing() {
-                    self.shared().motion.lock(|m| m.banks[channel.index()].slot)
-                } else {
-                    requested
-                };
-                for (key, slot) in Slot::KEYS {
-                    let lamp = match (slot == requested, press_lamp) {
-                        (true, Some(lamp)) => lamp,
-                        _ => slot != active || (now & (1 << 22)) == 0,
-                    };
-                    self.leds
-                        .set(PianoKey::new(key).expect("physical bank key"), lamp);
-                }
+                self.pattern_keys(&scan, channel_changed, now);
             } else {
                 self.pattern_pressed_at = None;
                 self.seq.pressed_key_dark = false;
@@ -981,6 +911,9 @@ mod app {
                     }
                 }
                 for key in PianoKey::all().filter(|&key| scan.is_down(key)) {
+                    if quick_mix && MUTE_KEYS.contains(&key.index()) {
+                        continue;
+                    }
                     let number = 53 + key.index();
                     if slices && number != 60 && !crate::assets::PAD_NOTES.contains(&number) {
                         continue;
@@ -997,12 +930,20 @@ mod app {
                     }
                 }
             }
+            if quick_mix {
+                for (i, index) in MUTE_KEYS.into_iter().enumerate() {
+                    let key = PianoKey::new(index).expect("physical mute key");
+                    self.leds.set(key, self.faders.0[i].enabled);
+                }
+            }
             if !self.scans.is_full() {
                 let _ = self.scans.try_send(PanelFrame {
-                    strip_enabled: self.strip_enabled,
+                    echo_step_edited: core::mem::take(&mut self.echo_step_edited),
+                    quick_mix,
+                    faders: self.faders.0.map(|strip| (strip.enabled, strip.level)),
                     scan,
                     seq: self.seq,
-                    nav: self.nav,
+                    nav: quick_mix::display(self.nav, quick_mix),
                     pads: self.piano.pads,
                     held: self.piano.held.clone(),
                 });
@@ -1011,26 +952,232 @@ mod app {
     }
 
     impl Panel {
+        // Leave page-specific controls in flash; the velocity scan runs from SRAM.
         #[inline(never)]
-        fn filter_keys(leds: &mut Leds, scan: &Scan, pick: &mut crate::fx::FilterPick) {
-            pick.enabled ^= scan.pressed(Button::Sel);
-            // Update the selection before lighting either bank of keys.
-            let keys = (0u8..)
-                .zip(crate::fx::STEP_KEYS)
-                .take(10)
-                .map(|(i, k)| (i, PianoKey::new(k).expect("physical white key")));
-            for (i, key) in keys.clone() {
-                if scan.pressed(key) {
-                    pick.press(i);
+        fn pattern_keys(&mut self, scan: &Scan, channel_changed: bool, now: u32) {
+            let channel = self.nav.focus;
+            let assignment = self.nav.assignments[channel.index()];
+            let tick = ticks();
+            if channel_changed {
+                self.pattern_pressed_at = None;
+            }
+            for (key, slot) in Slot::KEYS {
+                if scan.pressed(PianoKey::new(key).expect("physical bank key")) {
+                    self.seq.choose(assignment.part, slot);
+                    self.pattern_pressed_at = Some(tick);
                 }
             }
-            for (i, key) in keys {
-                leds.set(key, pick.lit(i));
+            let press_lamp = pattern_press_lamp(&mut self.pattern_pressed_at, tick);
+            self.seq.pressed_key_dark = press_lamp == Some(false);
+            let requested = self.seq.slot(channel, assignment.part);
+            let active = if self.seq.transport.playing() {
+                self.shared().motion.lock(|m| m.banks[channel.index()].slot)
+            } else {
+                requested
+            };
+            for (key, slot) in Slot::KEYS {
+                let lamp = match (slot == requested, press_lamp) {
+                    (true, Some(lamp)) => lamp,
+                    _ => slot != active || (now & (1 << 22)) == 0,
+                };
+                self.leds
+                    .set(PianoKey::new(key).expect("physical bank key"), lamp);
             }
         }
 
         #[inline(never)]
-        fn beat_keys(leds: &mut Leds, scan: &Scan, pattern: &mut wavegraph_fx::StepPattern) {
+        fn clipboard_knobs(&mut self, scan: &Scan) {
+            self.nav.clip_request.options.turn(
+                scan.encoder_delta(Encoder::Knob1),
+                scan.encoder_delta(Encoder::Knob2),
+            );
+            self.nav.clip_request.options.turn_tape(
+                scan.encoder_delta(Encoder::Knob3),
+                scan.encoder_delta(Encoder::Knob4),
+                scan.encoder_delta(Encoder::Algorithm),
+            );
+        }
+
+        // REC arbitration and per-page editing run outside the SRAM scan loop.
+        #[inline(never)]
+        fn record_clipboard(&mut self, scan: &Scan) -> bool {
+            let tape_busy = self.nav.view == View::Sequencer
+                && self.nav.clip_request.options.tape
+                && self.shared().motion.lock(|m| {
+                    matches!(
+                        m.clipboard.state,
+                        crate::clipboard::State::Armed
+                            | crate::clipboard::State::Recording
+                            | crate::clipboard::State::Dubbing
+                    )
+                });
+            // Keep REC available while performing on an instrument or its FX.
+            // SEQ takes it back for note entry once the tape pass is finished.
+            let capture_rec = self.nav.view == View::Clipboard
+                || (self.nav.clip_request.options.tape
+                    && (self.nav.view != View::Sequencer || tape_busy));
+            if capture_rec {
+                if self.nav.view == View::Clipboard
+                    && self.nav.clip_request.options.tape
+                    && scan.is_down(Button::Sel)
+                    && !self.seq.transport.playing()
+                {
+                    self.nav.clip_request.clear();
+                } else {
+                    let source = self.nav.focus;
+                    self.nav
+                        .clip_request
+                        .press(source, self.nav.assignments[source.index()]);
+                }
+            }
+            capture_rec
+        }
+
+        #[inline(never)]
+        fn edit_sequence(&mut self, scan: &Scan, rec: bool, channel_changed: bool) {
+            if channel_changed && self.seq.page == Some(SeqPage::Record) {
+                self.seq.back();
+            }
+            self.seq.channel = self.nav.focus;
+            if rec {
+                self.seq.record();
+            } else if scan.pressed(Button::Edit) {
+                if self.seq.page == Some(SeqPage::Step) && scan.is_down(Button::Sel) {
+                    if let Some(at) = self.seq.edit_address(self.nav.part(), None) {
+                        EDITS.restore(at);
+                        self.seq.edit_revision = self.seq.edit_revision.wrapping_add(1);
+                        self.seq.full = false;
+                    }
+                } else {
+                    self.seq.step_edit();
+                }
+            }
+            if self.seq.page == Some(SeqPage::Step) {
+                self.seq.turn_cursor(scan.encoder_delta(Encoder::Knob1));
+            }
+            self.seq
+                .turn_bar(self.nav.part(), scan.encoder_delta(Encoder::Knob2));
+            if scan.pressed(Button::Sel) && self.seq.page != Some(SeqPage::Step) {
+                self.seq.toggle_track();
+            }
+        }
+
+        #[inline(never)]
+        fn home_tap(&mut self, scan: &Scan, tick: u32) -> bool {
+            let down = scan.is_down(Button::Home);
+            if !down && !scan.released(Button::Home) {
+                return false;
+            }
+            let visible = self.home_button.active();
+            // Another gesture owns its action. Held notes may keep ringing under the guide.
+            let interrupted = Button::ALL
+                .into_iter()
+                .any(|b| b != Button::Home && scan.is_down(b))
+                || Encoder::ALL.into_iter().any(|e| scan.encoder_delta(e) != 0)
+                || PianoKey::all().any(|key| scan.pressed(key));
+            let tap = if interrupted {
+                self.home_button = HoldButton::Idle;
+                false
+            } else {
+                self.home_button
+                    .tap(scan.pressed(Button::Home), down, false, tick, 60)
+            };
+            let showing = self.home_button.active();
+            if showing != visible {
+                self.shared().help_visible.lock(|flag| *flag = showing);
+                let _ = self.draw_wake.try_send(());
+            }
+            tap
+        }
+
+        #[inline(never)]
+        fn glo_page(&mut self, scan: &Scan, tick: u32, other_page: bool) -> Option<PageButton> {
+            let pressed = scan.pressed(Button::Glo);
+            let down = scan.is_down(Button::Glo);
+            // The first button can already have opened the rack. The second
+            // completes the chord there too, keeping its return page intact.
+            if (pressed && scan.is_down(Button::Fx)) || (down && scan.pressed(Button::Fx)) {
+                self.quick_mix = HoldButton::Idle;
+                return Some(PageButton::GlobalFx);
+            }
+            if other_page || !quick_mix::available(&self.nav) {
+                self.quick_mix = HoldButton::Idle;
+                return (pressed && !other_page).then_some(PageButton::Glo);
+            }
+            let used = down
+                && !self.quick_mix.active()
+                && (scan.pressed(Button::Sel)
+                    || Encoder::ALL.into_iter().any(|e| scan.encoder_delta(e) != 0)
+                    || MUTE_KEYS.into_iter().any(|index| {
+                        scan.pressed(PianoKey::new(index).expect("physical mute key"))
+                    }));
+            self.quick_mix
+                .tap(pressed, down, used, tick, 35)
+                .then_some(PageButton::Glo)
+        }
+
+        #[inline(never)]
+        fn mix(&mut self, scan: &Scan, momentary: bool) {
+            let focus = self.nav.focus;
+            let mute_edges = if momentary {
+                MUTE_KEYS
+                    .map(|index| scan.pressed(PianoKey::new(index).expect("physical mute key")))
+            } else {
+                [false; CHANNELS]
+            };
+            quick_mix::mutes(
+                &mut self.faders,
+                focus,
+                scan.pressed(Button::Sel),
+                mute_edges,
+            );
+            if !momentary && self.nav.view == View::Channel {
+                self.faders
+                    .turn_knobs(focus, [scan.encoder_delta(Encoder::Knob1), 0, 0, 0]);
+            } else {
+                self.faders.turn_faders(
+                    [
+                        Encoder::Knob1,
+                        Encoder::Knob2,
+                        Encoder::Knob3,
+                        Encoder::Knob4,
+                    ]
+                    .map(|encoder| scan.encoder_delta(encoder)),
+                );
+            }
+        }
+
+        #[inline(never)]
+        fn filter_keys(leds: &mut Leds, scan: &Scan, pick: &mut crate::fx::FilterPick) {
+            pick.enabled ^= scan.pressed(Button::Sel);
+            // Recall first so white keys in the same scan edit the newly selected pattern.
+            let black = (0u8..)
+                .zip(crate::fx::FILTER_BANK_KEYS)
+                .map(|(i, key)| (i, PianoKey::new(key).expect("physical black key")));
+            for (i, key) in black.clone() {
+                if scan.pressed(key) {
+                    pick.press_black(i);
+                }
+            }
+            for (i, key) in black {
+                leds.set(key, pick.black_lit(i));
+            }
+            for (step, index) in (0u8..).zip(crate::fx::STEP_KEYS) {
+                let key = PianoKey::new(index).expect("physical white key");
+                if scan.pressed(key) {
+                    pick.toggle_step(step);
+                }
+                leds.set(key, pick.accent(step) != 0);
+            }
+        }
+
+        #[inline(never)]
+        fn beat_keys(
+            leds: &mut Leds,
+            scan: &Scan,
+            pattern: &mut wavegraph_fx::StepPattern,
+        ) -> bool {
+            let previous = *pattern;
             for (step, index) in (0u8..).zip(crate::fx::STEP_KEYS) {
                 let key = PianoKey::new(index).expect("physical white key");
                 if scan.pressed(key) {
@@ -1038,6 +1185,7 @@ mod app {
                 }
                 leds.set(key, pattern.active(step));
             }
+            *pattern != previous
         }
 
         // Only a fresh key edge needs note routing and a possible sixteenth edit.
@@ -1118,7 +1266,9 @@ mod app {
     impl Input {
         fn apply_panel(&mut self, frame: PanelFrame) {
             let PanelFrame {
-                strip_enabled,
+                echo_step_edited,
+                quick_mix,
+                faders,
                 scan,
                 seq,
                 nav,
@@ -1128,11 +1278,18 @@ mod app {
             let channel = nav.focus;
             let view = nav.view;
             self.settings.nav = nav;
+            self.settings.quick_mix = quick_mix;
+            // A grid press may have happened in a dropped scan. Apply it before
+            // this frame's controls, so a subsequent master FREE command still wins.
+            self.settings.fx.clocked_delay |= echo_step_edited;
             self.settings.seq = seq;
             let tracks = &mut self.settings.tracks;
             for channel in Channel::ALL {
                 let i = channel.index();
-                self.settings.mixer.0[i].enabled = strip_enabled[i];
+                (
+                    self.settings.mixer.0[i].enabled,
+                    self.settings.mixer.0[i].level,
+                ) = faders[i];
                 self.settings.fx.filters[i].pick = nav.filter_picks[i];
                 let assignment = nav.assignments[i];
                 if tracks[i].assignment != assignment {
@@ -1174,8 +1331,10 @@ mod app {
                 View::VoiceMode => self.settings.tracks[channel.index()]
                     .polyphony
                     .edit(select, algorithm, sel, knobs[0]),
-                View::Mixer => self.settings.mixer.turn_faders(knobs),
-                View::Channel => self.settings.mixer.turn_knobs(channel, knobs),
+                View::Channel => self
+                    .settings
+                    .mixer
+                    .turn_knobs(channel, [0, knobs[1], knobs[2], 0]),
                 View::Lfo => {
                     self.settings.tracks[channel.index()]
                         .lfo
@@ -1208,14 +1367,20 @@ mod app {
                     track.turn_algorithm(view, nav.bass_control(), algorithm);
                     track.edit_panel(view, select, knobs, sel);
                 }
-                View::MasterFx(None) | View::Sequencer => (),
+                View::Mixer | View::MasterFx(None) | View::Sequencer => (),
             }
             if let Some(master) = scan.master() {
                 self.settings.master = master;
             }
-            if matches!(view, View::Fx | View::MasterFx(_)) && algorithm != 0 {
-                self.shared().desired_gain.lock(|gain| *gain = !*gain);
-                let _ = self.edit_wake.try_send(());
+            if view == View::MasterFx(None) && algorithm != 0 {
+                let half = algorithm < 0;
+                if self
+                    .shared()
+                    .desired_gain
+                    .lock(|gain| core::mem::replace(gain, half) != half)
+                {
+                    let _ = self.edit_wake.try_send(());
+                }
             }
         }
 
@@ -1453,14 +1618,14 @@ mod app {
                                 .try_send(ScopeBlock {
                                     samples: visible.then(|| {
                                         if settings.source_tap() {
-                                            block.source
+                                            block.source()
                                         } else {
                                             core::array::from_fn(|i| output.block()[i][0])
                                         }
                                     }),
                                     labels: labels_changed
                                         .then(|| settings.labels(block.half_gain)),
-                                    bass_cycle: block.bass_cycle,
+                                    clock: block.scope_clock,
                                     gap,
                                 })
                                 .is_ok()
@@ -1575,6 +1740,9 @@ mod app {
                             || old.channel != labels.channel
                             || old.focus != labels.focus
                             || old.voice_tap != labels.voice_tap
+                            || (labels.view == View::BeatFx(crate::fx::BeatEffect::Slicer)
+                                && (old.fx.beats != labels.fx.beats
+                                    || old.seq.transport != labels.seq.transport))
                     });
                     self.previous = Some(labels);
                 }
@@ -1589,23 +1757,36 @@ mod app {
                 if block.gap || source_changed {
                     self.capture.reset();
                 }
-                let trace = block.samples.as_ref().and_then(|samples| {
-                    if bass_scope {
-                        self.capture.push_bass(samples, block.bass_cycle)
-                    } else {
-                        let scale = if voice_scope
-                            && matches!(labels.focus, Part::Wavetable | Part::Hoover | Part::Fm)
-                        {
-                            Scale::Auto
-                        } else {
-                            Scale::Fixed
-                        };
-                        self.capture.push(samples, scale)
-                    }
-                });
+                let trace = block
+                    .samples
+                    .as_ref()
+                    .and_then(|samples| match block.clock {
+                        ScopeClock::Slicer(clock) => {
+                            self.capture
+                                .push_slicer(samples, clock.position(), clock.increment())
+                        }
+                        ScopeClock::Voice { bass_cycle } if bass_scope => {
+                            self.capture.push_bass(samples, bass_cycle)
+                        }
+                        ScopeClock::Voice { .. } => {
+                            let scale = if voice_scope
+                                && matches!(labels.focus, Part::Wavetable | Part::Hoover | Part::Fm)
+                            {
+                                Scale::Auto
+                            } else {
+                                Scale::Fixed
+                            };
+                            self.capture.push(samples, scale)
+                        }
+                    });
                 if changed || trace.is_some() {
                     let dirty = self.shared().frame.lock(|frame| {
-                        let next = trace.or_else(|| source_changed.then_some(FLAT));
+                        let next = trace.or_else(|| {
+                            source_changed.then(|| match block.clock {
+                                ScopeClock::Slicer(_) => SLICER_SILENCE,
+                                ScopeClock::Voice { .. } => FLAT,
+                            })
+                        });
                         let new_trace = next.is_some_and(|t| t != frame.trace);
                         if let Some(t) = next {
                             frame.trace = t;
@@ -1744,7 +1925,7 @@ mod app {
         }
     }
 
-    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing, battery_low])]
+    #[async_task(priority = 1, shared = [frame, overloads, motion, bumper, timing, battery_low, help_visible])]
     struct Draw {
         updates: Receiver<'static, (), 1>,
         port: Option<Cpu0<DisplayPort>>,
@@ -1783,6 +1964,16 @@ mod app {
                         return;
                     }
                     Some(100u32)
+                } else if self.shared().help_visible.lock(|flag| *flag) {
+                    let labels = self.shared().frame.lock(|f| f.labels);
+                    if screen
+                        .help(&mut lcd, &mut self.clock, &labels)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    None
                 } else {
                     let frame = self.shared().frame.lock(|f| *f);
                     let severity = self.shared().overloads.lock(|log| log.severity(ticks()));

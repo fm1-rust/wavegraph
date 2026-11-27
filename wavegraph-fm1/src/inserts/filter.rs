@@ -1,7 +1,7 @@
 //! Retrigger a strip's filter on the same sixteen cells shown by the Beat FX playhead.
 
 use crate::fx::FilterSettings;
-use wavegraph_fx::{FILTER_PATTERNS, PatternFilter, Slicer};
+use wavegraph_fx::{PatternFilter, Slicer};
 use wavegraph_lfo::Phase;
 use wavegraph_sample::I24;
 
@@ -47,11 +47,10 @@ impl ClockedFilter {
         if restart {
             self.last_step = None;
         }
-        let pattern = &FILTER_PATTERNS[usize::from(self.settings.pick.rhythm)];
         for sample in samples {
             let step = Slicer::step_at(phase.position());
             if self.last_step != Some(step) {
-                self.dsp.trigger(pattern.accents[usize::from(step)]);
+                self.dsp.trigger(self.settings.pick.accent(step));
                 self.last_step = Some(step);
             }
             *sample = self.dsp.tick(*sample);

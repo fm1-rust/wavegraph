@@ -295,6 +295,7 @@ pub(super) async fn clipboard(
     pixels: &mut [[u8; 2]],
     labels: &Labels,
     status: crate::clipboard::Status,
+    previous_focus: Option<crate::instrument::Part>,
 ) -> Result<(), Error> {
     use crate::clipboard::State;
     let colors = super::mixer::RackColors::GLOBAL;
@@ -375,7 +376,18 @@ pub(super) async fn clipboard(
     ];
     let mut display = lcd.as_async(clock)?;
     for y in (0..SIZE).step_by(BAND) {
-        let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, super::mixer::BACKGROUND);
+        let width = if let Some(old) = previous_focus {
+            let sampler_hint_changed = !tape
+                && (old == crate::instrument::Part::Sampler)
+                    != (labels.focus == crate::instrument::Part::Sampler);
+            if !(32..48).contains(&y) && !(sampler_hint_changed && (208..224).contains(&y)) {
+                continue;
+            }
+            160 // Source name and sampler hint both fit left of the tape controls.
+        } else {
+            SIZE
+        };
+        let mut band = Band::new(pixels, 0, y, width, BAND as u16, super::mixer::BACKGROUND);
         band.title(
             if tape { "TAPE LOOP" } else { "PCM CLIPBOARD" },
             Point::new(8, 8),
@@ -432,7 +444,7 @@ pub(super) async fn clipboard(
             );
         }
         display
-            .write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+            .write_rect_buffered(0, y, width, BAND as u16, band.pixels.as_flattened())
             .await?;
     }
     display.flush().await

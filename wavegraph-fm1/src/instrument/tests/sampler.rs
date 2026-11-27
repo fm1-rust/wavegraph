@@ -19,7 +19,7 @@ fn tape_prints_post_fx_and_loops_on_the_sample_while_other_strips_play() -> Resu
         tracks[0].voice.gate.note = Some(note(45, 115));
         tracks[1].voice.gate.note = Some(note(55, 104));
         let mut fx = Fx::INITIAL;
-        fx.filters[0].pick.press(3);
+        fx.filters[0].pick.press_black(3);
         engine.set_fx(fx);
         engine.sequences = [false; CHANNELS];
         let mut mixer = Mixer::DRY;

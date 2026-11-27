@@ -1,7 +1,7 @@
 //! Two serial, independently assignable inserts per mixer strip.
 
 use crate::{
-    fx::{BassFx, INSERT_SLOTS, Insert, InsertKind, KeySource},
+    fx::{BassFx, BeatEffect, INSERT_SLOTS, Insert, InsertKind, KeySource},
     instrument::{DRY_HEADROOM, Message, Part},
     panel::{CHANNELS, Channel},
 };
@@ -64,8 +64,8 @@ impl Processor {
 }
 
 /// Each source supplies its full signal and isolated kick. The first four
-/// outputs feed the strip faders. After the external key mix, the last outlet
-/// carries post-fader Hoover stereo width when a clean Hoover is routed.
+/// outputs feed the strip faders. After the external key mix, the fifth outlet
+/// carries post-fader Hoover stereo width. The sixth can observe an in-place Beat FX stage.
 pub(super) struct ChannelInserts {
     parts: [Part; CHANNELS],
     controls: [[Insert; INSERT_SLOTS]; CHANNELS],
@@ -190,17 +190,19 @@ impl Process<Message, I24> for ChannelInserts {
     }
 
     fn outlets(&self) -> &[Port] {
-        &[Port::Signal; CHANNELS + 1]
+        &[Port::Signal; CHANNELS + 2]
     }
 
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, I24>) {
         // Routing and panel controls arrive together at the block boundary.
         let mut beat = None;
+        let mut inspect = None;
         let mut filter_clock = wavegraph_lfo::Phase::default();
         let mut restart_filters = false;
         let mut changed = [[false; INSERT_SLOTS]; CHANNELS];
         for event in cx.events {
             match event.message {
+                Message::InspectBeat(effect, channel) => inspect = Some((effect, channel)),
                 Message::HooverLevels(levels) => {
                     for (i, (&old, &new)) in self.hoover_levels.iter().zip(&levels).enumerate() {
                         if old == 0 && new > 0 {
@@ -336,13 +338,20 @@ impl Process<Message, I24> for ChannelInserts {
                 *sample = self.beat_flanger.tick(*sample);
             }
         }
-        for ((filter, slicer), strip) in self
+        if let Some((BeatEffect::Flanger, channel)) = inspect {
+            detector[1].copy_from_slice(strips[channel.index()]);
+        }
+        for (i, ((filter, slicer), strip)) in self
             .filters
             .iter_mut()
             .zip(&mut self.slicers)
             .zip(&mut *strips)
+            .enumerate()
         {
             filter.process(strip, filter_clock, restart_filters);
+            if inspect == Some((BeatEffect::Filter, Channel::ALL[i])) {
+                detector[1].copy_from_slice(strip);
+            }
             slicer.process_in_place(strip);
         }
         if self.hoover_levels != [0; CHANNELS] {
@@ -378,7 +387,7 @@ mod tests {
         });
         let mut input = [I24::default(); 128];
         let silence = input;
-        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 2];
         for warmup in [true, false] {
             if !warmup {
                 input[3] = I24::new_unchecked(1 << 20);
@@ -407,7 +416,7 @@ mod tests {
         let mut eq = InsertKind::Eq.initial(Part::Mono);
         let input = [I24::new_unchecked(100_000); 128];
         let silence = [I24::default(); 128];
-        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 2];
 
         // Put the EQ in channel 2's second slot. Equal gain in every band
         // has a known transfer even before the crossover filters settle.
@@ -460,7 +469,7 @@ mod tests {
             I24::new_unchecked(if i % 32 < 16 { 1 << 20 } else { -(1 << 20) })
         });
         let silent = [I24::default(); 128];
-        let mut outputs = [[I24::default(); 128]; CHANNELS + 1];
+        let mut outputs = [[I24::default(); 128]; CHANNELS + 2];
         let mut saturator = Saturator::new();
         let mut phaser = Phaser::new(44_118).expect("sample rate");
         for block in 0..4 {

@@ -34,4 +34,24 @@ pub(super) fn write_atlases(out: &Path) {
     write_font!(FONT_6X10);
     write_font!(FONT_7X13_BOLD);
     write_font!(FONT_9X15_BOLD);
+
+    // One native u16 load supplies all twelve picker pixels of a GRID scanline.
+    // The original renderer draws ink for coverage 2 or 3 (the high bit of
+    // each two-bit pixel). Keep bit 15 at the left for a straight row blit.
+    const GRID: &[u8; 95 * 16 * 3] = include_bytes!("panel-type/grid.raw");
+    let rows: Vec<u16> = GRID
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|line| {
+            let mut ink = 0_u16;
+            for x in 0..12 {
+                if line[x / 4] & [0x80, 0x20, 0x08, 0x02][x % 4] != 0 {
+                    ink |= 0x8000 >> x;
+                }
+            }
+            ink
+        })
+        .collect();
+    fs::write(out.join("picker-rows.rs"), format!("&{rows:?}")).expect("write picker glyph rows");
 }

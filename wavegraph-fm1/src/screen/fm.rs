@@ -60,7 +60,7 @@ impl Panel {
                 band.rect(Point::new(93, 4), Size::new(87, 31), GREEN);
                 band.rect(Point::new(94, 5), Size::new(85, 29), LCD);
                 band.label(
-                    ["PROGRAM 01", "PROGRAM 02", "PROGRAM 03"][usize::from(fm.program)],
+                    ["ALG PATCH 01", "ALG PATCH 02", "ALG PATCH 03"][usize::from(fm.program)],
                     Point::new(99, 7),
                     Left,
                     INK,

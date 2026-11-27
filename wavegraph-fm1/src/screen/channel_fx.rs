@@ -7,6 +7,7 @@ use super::{
 use crate::{
     firmware::Labels,
     fx::{INSERT_SLOTS, Insert, KeySource},
+    panel::Channel,
 };
 use core::{ops::Range, str};
 use fm1_graphics::embedded_graphics::{
@@ -18,10 +19,11 @@ use fm1_rticx::{
     time::Clock,
 };
 
-pub(super) const SCOPE: Range<u16> = 112..224;
+pub(super) const SCOPE: Range<u16> = 128..224;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct Controls {
+    channel: Channel,
     inserts: [Insert; INSERT_SLOTS],
     selected: Option<u8>,
     sends: [u8; 2],
@@ -45,6 +47,7 @@ impl Rack {
     ) -> Result<(), Error> {
         let strip = labels.mixer.0[labels.channel.index()];
         let controls = Controls {
+            channel: labels.channel,
             inserts: labels.inserts,
             selected: labels.insert_slot,
             sends: [strip.reverb, strip.delay],
@@ -58,76 +61,82 @@ impl Rack {
         for y in (0..SCOPE.start).chain(SCOPE.end..SIZE).step_by(BAND) {
             if let Some(old) = previous {
                 let dirty = match y {
-                    0..16 => old.half_gain != controls.half_gain,
-                    16..56 => {
+                    0..16 => old.channel != controls.channel,
+                    16..32 => {
+                        old.channel != controls.channel || old.half_gain != controls.half_gain
+                    }
+                    32..72 => {
                         old.inserts[0] != controls.inserts[0] || old.selected != controls.selected
                     }
-                    56..96 => {
+                    72..112 => {
                         old.inserts[1] != controls.inserts[1] || old.selected != controls.selected
                     }
-                    96..112 => old.selected != controls.selected,
+                    112..128 => old.selected != controls.selected,
                     _ => old.selected != controls.selected || old.sends != controls.sends,
                 };
                 if !dirty {
                     continue;
                 }
             }
-            // A trim change updates the header without erasing the overload lamp.
-            let width = if y < 16 && !entering { SIZE - 12 } else { SIZE };
+            let width = if previous.is_some_and(|old| y < 32 && old.half_gain == controls.half_gain)
+            {
+                super::lettering::BADGE.width as u16
+            } else {
+                SIZE
+            };
             let mut band = Band::new(pixels, 0, y, width, BAND as u16, theme.face)
                 .with_panel_type(super::lettering::panel_type(labels.focus));
             match y {
-                0..16 => {
-                    let title = heapless::format!(24; "CH{} / {} FX", labels.channel.index() + 1, labels.focus.name())
-                        .expect("channel and instrument title");
-                    band.title(&title, Point::new(8, 1), theme.ink);
+                0..32 => {
+                    band.fx_tabs(labels.channel, labels.view, theme);
+                    band.title(labels.focus.name(), Point::new(29, 17), theme.ink);
                     band.label(
                         if controls.half_gain {
                             "OUT HALF"
                         } else {
                             "OUT FULL"
                         },
-                        Point::new(222, 3),
+                        Point::new(232, 19),
                         Alignment::Right,
                         theme.ink,
                     );
                 }
-                16..56 => insert(
+                32..72 => insert(
                     &mut band,
-                    16,
+                    32,
                     "1",
                     controls.inserts[0],
                     controls.selected == Some(0),
                     theme,
                 ),
-                56..96 => insert(
+                72..112 => insert(
                     &mut band,
-                    56,
+                    72,
                     "2",
                     controls.inserts[1],
                     controls.selected == Some(1),
                     theme,
                 ),
-                96..112 => {
-                    band.title("POST FX", Point::new(8, 97), theme.accent);
+                112..128 => {
+                    band.title("POST FX", Point::new(5, 113), theme.accent);
                     band.label(
                         if controls.selected.is_some() {
-                            "PRESETS FX"
+                            "ALGO FX TYPE"
                         } else {
                             "PRE-FADER"
                         },
-                        Point::new(65, 99),
+                        Point::new(60, 115),
                         Alignment::Left,
                         theme.ink,
                     );
                     band.rect(
-                        Point::new(0, 111),
+                        Point::new(0, 127),
                         Size::new(u32::from(SIZE), 1),
                         theme.muted,
                     );
                     band.label(
-                        "EDIT BEAT FX",
-                        Point::new(231, 99),
+                        "TAP FX: BEAT FX",
+                        Point::new(235, 115),
                         Alignment::Right,
                         theme.ink,
                     );
@@ -140,14 +149,14 @@ impl Rack {
                         (theme.ink, "HOME SENDS")
                     };
                     band.label(label, Point::new(9, 228), Alignment::Left, ink);
-                    for ((x, name), value) in [(87, "2 REV"), (165, "3 DLY")]
+                    for ((x, name), value) in [(81, "2 REV"), (158, "3 ECHO")]
                         .into_iter()
                         .zip(controls.sends)
                     {
                         band.label(name, Point::new(x, 228), Alignment::Left, ink);
                         band.label(
                             str::from_utf8(&percent(value)).expect("ASCII percent"),
-                            Point::new(x + 30, 228),
+                            Point::new(x + 40, 228),
                             Alignment::Left,
                             ink,
                         );

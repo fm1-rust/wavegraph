@@ -5,7 +5,7 @@ use crate::assets::fonts::{FONT_6X10, FONT_7X13_BOLD};
 use crate::{
     firmware::Labels,
     mixer::{MAX_LEVEL, SEGMENTS, Strip, UNITY},
-    panel::{CHANNELS, View},
+    panel::{CHANNELS, Channel, PresetRole, View},
     scope::Window,
 };
 use core::{convert::Infallible, str};
@@ -104,11 +104,55 @@ struct ChannelStrip {
     selected: bool,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum MixerMode {
+    Overview,
+    Strip(Channel),
+    Assign(Channel),
+    Quick,
+}
+
+impl MixerMode {
+    fn title(self) -> &'static str {
+        match self {
+            Self::Quick => "GLO / LIVE MIX",
+            Self::Overview => "GLO / LEVELS",
+            Self::Strip(ch) => [
+                "CH 1 / STRIP",
+                "CH 2 / STRIP",
+                "CH 3 / STRIP",
+                "CH 4 / STRIP",
+            ][ch.index()],
+            Self::Assign(ch) => [
+                "CH 1 / ASSIGN",
+                "CH 2 / ASSIGN",
+                "CH 3 / ASSIGN",
+                "CH 4 / ASSIGN",
+            ][ch.index()],
+        }
+    }
+
+    fn hints(self) -> [&'static str; 2] {
+        match self {
+            Self::Overview => [
+                "K1-4 LEVELS   PRESETS CHANNEL",
+                "SELECT STRIP   SEL ON/OFF   HOLD HOME ?",
+            ],
+            Self::Strip(_) => [
+                "K1 LEVEL  K2 REVERB  K3 DELAY",
+                "PRESETS CH   HOLD EDIT ASSIGN   HOME <",
+            ],
+            Self::Assign(_) => ["PRESETS INSTRUMENT   PAUSE TO AUDITION", "EDIT DONE"],
+            Self::Quick => ["K1-4 LEVELS   WHITE 1-4 MUTE", "RELEASE GLO TO RETURN"],
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Surface {
     strips: Option<[ChannelStrip; CHANNELS]>,
     peaks: [u8; CHANNELS],
-    editing: bool,
+    mode: Option<MixerMode>,
 }
 
 impl Surface {
@@ -130,13 +174,28 @@ impl Surface {
         peaks: [u8; CHANNELS],
     ) -> Result<(), Error> {
         let editing = labels.view == View::Channel;
+        let mode = if labels.quick_mix {
+            MixerMode::Quick
+        } else if matches!(labels.preset_role, PresetRole::Audition(_)) {
+            MixerMode::Assign(labels.channel)
+        } else if editing {
+            MixerMode::Strip(labels.channel)
+        } else {
+            MixerMode::Overview
+        };
+        let mode_changed = self.strips.is_none() || self.mode != Some(mode);
         let mut lcd = lcd.as_async(clock)?;
-        if self.strips.is_none() {
+        if mode_changed {
             for y in (0..TOP).step_by(BAND) {
                 let mut band =
                     Band::new(pixels, 0, y, SIZE, (TOP - y).min(BAND as u16), BACKGROUND);
-                band.title("GLO / MIXER", Point::new(8, 5), palette::WHITE);
-                for (x, label) in CENTERS.into_iter().zip(["2 REV", "3 DLY"]) {
+                band.title(mode.title(), Point::new(8, 5), palette::WHITE);
+                let sends = if matches!(mode, MixerMode::Strip(_)) {
+                    ["2 REV", "3 DLY"]
+                } else {
+                    ["REV", "DLY"]
+                };
+                for (x, label) in CENTERS.into_iter().zip(sends) {
                     band.label(label, Point::new(x, 9), Alignment::Center, LABEL);
                 }
                 band.compose(selector);
@@ -181,16 +240,12 @@ impl Surface {
                 .await?;
             }
         }
-        if self.strips.is_none() || self.editing != editing {
+        if mode_changed {
             let footer = TOP + STRIP_HEIGHT * CHANNELS as u16;
             for y in (footer..SIZE).step_by(BAND) {
                 let mut band =
                     Band::new(pixels, 0, y, SIZE, (SIZE - y).min(BAND as u16), BACKGROUND);
-                let (top, bottom) = if editing {
-                    ("PRESETS ASSIGN   EDIT PCM", "SEL ON/OFF   HOME BACK")
-                } else {
-                    ("K1-4 FADERS   SELECT EDIT", "SEL ON/OFF   FX RACK")
-                };
+                let [top, bottom] = mode.hints();
                 for (hint, at) in [(top, 216), (bottom, 228)] {
                     band.label(
                         hint,
@@ -207,7 +262,7 @@ impl Surface {
         lcd.flush().await?;
         self.strips = Some(strips);
         self.peaks = peaks;
-        self.editing = editing;
+        self.mode = Some(mode);
         Ok(())
     }
 }
@@ -398,6 +453,21 @@ impl<'a> Band<'a> {
                 ),
                 Size::new(10, u32::from(METER_HEIGHT)),
                 fill,
+            );
+        }
+    }
+
+    pub(super) fn fx_tabs(&mut self, channel: Channel, view: View, theme: &InstrumentStyle) {
+        super::badge::draw(self, channel, Point::zero());
+        let beat = matches!(view, View::BeatFx(_));
+        for (left, name, active) in [(28, "BEAT FX", beat), (118, "CHANNEL FX", !beat)] {
+            let colors = theme.row(active);
+            self.rect(Point::new(left, 1), Size::new(88, 14), colors.fill);
+            self.label(
+                name,
+                Point::new(left + 44, 3),
+                Alignment::Center,
+                colors.ink,
             );
         }
     }

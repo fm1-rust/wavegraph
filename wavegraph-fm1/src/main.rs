@@ -46,6 +46,8 @@ mod overload;
 #[cfg(any(target_os = "none", test))]
 mod panel;
 #[cfg(any(target_os = "none", test))]
+mod quick_mix;
+#[cfg(any(target_os = "none", test))]
 mod sampler;
 #[cfg(any(target_os = "none", test))]
 mod scope;
