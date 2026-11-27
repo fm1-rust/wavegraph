@@ -2995,7 +2995,10 @@ mod tests {
         keys.nav.focus = Channel::Three;
         keys.press(bass);
         keys.release(c.number);
-        assert_eq!(keys.gates().map(|g| g.note), [Some(a), Some(g), Some(bass)]);
+        assert_eq!(
+            keys.gates().map(|g| g.note),
+            [Some(a), Some(g), Some(note(43, 96))]
+        );
         keys.release(g.number);
         assert_eq!(keys.poly_keys()[0].note, Some(e));
         assert_eq!(keys.gates()[1].note, Some(e));
@@ -3020,17 +3023,17 @@ mod tests {
         keys.press(note(65, 95)); // F4 on the organ.
         keys.nav.turn(0, 1);
         keys.shift_octave(-1);
-        keys.press(note(77, 105)); // F5 plays F4 on the 303.
+        keys.press(note(77, 105)); // F5 plays F3 on the 303 with OCT−.
         assert_eq!(
             keys.gates().map(|gate| gate.note),
-            [Some(note(65, 80)), Some(note(65, 95)), Some(note(65, 105))]
+            [Some(note(65, 80)), Some(note(65, 95)), Some(note(53, 105))]
         );
         keys.release(65);
         assert_eq!(keys.poly_keys()[0].note, Some(note(69, 90)));
         keys.release(53);
         assert_eq!(
             keys.gates().map(|gate| gate.note),
-            [None, Some(note(69, 90)), Some(note(65, 105))]
+            [None, Some(note(69, 90)), Some(note(53, 105))]
         );
         keys.release(77);
         keys.release(57);
@@ -4537,7 +4540,7 @@ mod tests {
         assert_eq!(
             &*controls.events(controls, bass, old),
             &[at(BassMessage::NoteOn {
-                note: 53,
+                note: 41,
                 accent: false,
                 slide: false,
             })]
@@ -4549,7 +4552,7 @@ mod tests {
         assert_eq!(
             &*controls.events(controls, bass, old),
             &[at(BassMessage::NoteOn {
-                note: 72,
+                note: 60,
                 accent: true,
                 slide: true,
             })]
@@ -4579,7 +4582,7 @@ mod tests {
                 at(BassMessage::PedalDrive(1.0)),
                 at(BassMessage::Waveform(wavegraph_303::Waveform::Square)),
                 at(BassMessage::NoteOn {
-                    note: 60,
+                    note: 48,
                     accent: true,
                     slide: false
                 }),
@@ -5271,7 +5274,7 @@ mod tests {
             );
             keys.panel(&[], &piano.held, &tracks);
             keys.snapshot(Channel::One, &mut tracks[0]);
-            assert_eq!(tracks[0].voice.gate.note, Some(note(53, 99)));
+            assert_eq!(tracks[0].voice.gate.note, Some(note(41, 99)));
             let before = piano.held.clone();
             piano.event(Channel::Two, tracks[1].assignment, MidiAction::Off(53));
             keys.panel(&before, &piano.held, &tracks);

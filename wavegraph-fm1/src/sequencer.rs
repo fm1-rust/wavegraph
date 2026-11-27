@@ -1322,7 +1322,10 @@ mod tests {
         let note = |number, velocity| Note { number, velocity };
         let bass = addr(Channel::One, Part::Bass);
         let kit = addr(Channel::Four, Part::Tr909);
-        assert!(edits.write(bass, note(91, 79), false));
+        let played = crate::keys::Piano::<1>::new()
+            .press(bass.channel, Assignment::new(bass.part), note(53, 79))
+            .expect("leftmost 303 key");
+        assert!(edits.write(bass, played, false));
         assert!(edits.write(kit, note(51, 88), false));
         assert!(edits.write(kit, note(36, 90), true));
         let mut player = PatternPlayer::new((3200, 1));
@@ -1356,8 +1359,8 @@ mod tests {
         assert!(edits.write(bass, note(92, 114), false));
         block(&mut player, 5200, 1);
         for (frame, message) in [
-            (0, MidiMessage::On(note(91, 79))),
-            (240, MidiMessage::Off(91)),
+            (0, MidiMessage::On(note(41, 79))),
+            (240, MidiMessage::Off(41)),
             (5120, MidiMessage::On(note(92, 114))),
         ] {
             assert!(

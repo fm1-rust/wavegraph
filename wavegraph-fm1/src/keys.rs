@@ -140,8 +140,13 @@ impl<const KEYS: usize> Piano<KEYS> {
             let drum = part.pads().get(pad)?;
             [36, 38, 39, 42, 46, 51][*drum as usize]
         } else {
+            let octave = if part == Part::Bass {
+                self.octave.saturating_sub(1)
+            } else {
+                self.octave
+            };
             key.number
-                .saturating_add_signed(self.octave.saturating_mul(12))
+                .saturating_add_signed(octave.saturating_mul(12))
                 .min(127)
         };
         Some(Note {
