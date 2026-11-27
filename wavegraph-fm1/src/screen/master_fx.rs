@@ -191,7 +191,7 @@ impl Row {
 
 #[derive(Default)]
 pub(super) struct Rack {
-    previous: Option<(Fx, Option<Device>)>,
+    previous: Option<(Fx, Option<Device>, bool)>,
     gr_db: u8,
 }
 
@@ -205,22 +205,22 @@ impl Rack {
         lcd: &mut Display,
         clock: &mut Clock,
         pixels: &mut [[u8; 2]; BAND * WIDTH],
-        state: (Fx, Option<Device>),
+        state: (Fx, Option<Device>, bool),
         reduction: u8,
     ) -> Result<(), Error> {
         let db = gr_db(reduction);
         if self.previous == Some(state) && self.gr_db == db {
             return Ok(());
         }
-        let (fx, selected) = state;
+        let (fx, selected, half_gain) = state;
         let editing = selected.is_some();
         let rows = Device::ALL.map(|d| Row::new(d, fx, selected));
-        let dirty = self
-            .previous
-            .map(|(old, focus)| Device::ALL.map(|d| Row::new(d, old, focus) != rows[d as usize]));
+        let dirty = self.previous.map(|(old, focus, _)| {
+            Device::ALL.map(|d| Row::new(d, old, focus) != rows[d as usize])
+        });
         let footer_changed = self
             .previous
-            .is_none_or(|(_, focus)| focus.is_some() != editing);
+            .is_none_or(|(_, focus, half)| focus.is_some() != editing || half_gain != half);
         let mut lcd = lcd.as_async(clock)?;
         for y in (0..SIZE).step_by(BAND) {
             let row = match y {
@@ -253,7 +253,11 @@ impl Rack {
                 } else {
                     (
                         "SELECT DEVICE   EDIT BEAT FX",
-                        "FX MIXER     GLO CHANNEL FX",
+                        if half_gain {
+                            "ALGO OUT  -6dB"
+                        } else {
+                            "ALGO OUT   0dB"
+                        },
                     )
                 };
                 band.label(top, Point::new(120, 211), Alignment::Center, POINTER);

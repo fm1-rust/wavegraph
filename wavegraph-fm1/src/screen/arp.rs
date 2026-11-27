@@ -1,7 +1,7 @@
 //! Per-instrument arpeggiator panel and a one-octave monitor of outgoing notes.
 
 use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
-use crate::{arp::Controls, firmware::Labels};
+use crate::{arp::Controls, firmware::Labels, panel::Channel};
 use core::fmt::Write;
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
@@ -17,6 +17,7 @@ use wavegraph_arp::{Division, Mode};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 struct State {
+    channel: Channel,
     controls: Controls,
     bpm: u16,
     note: Option<u8>,
@@ -38,6 +39,7 @@ impl Panel {
         (colors, entering): (&InstrumentStyle, bool),
     ) -> Result<(), Error> {
         let state = State {
+            channel: labels.channel,
             controls: labels.arp,
             bpm: labels.seq.transport.bpm,
             note,
@@ -69,7 +71,7 @@ impl Panel {
         let mut lcd = lcd.as_async(clock)?;
         for y in (0..SIZE).step_by(BAND) {
             let dirty = previous.is_none_or(|old| match y {
-                0..32 => false,
+                0..32 => state.channel != old.channel && (8..24).contains(&y),
                 32..48 => state.bpm != old.bpm,
                 48..136 => c != old.controls.config,
                 136..200 => note != old.note,
@@ -78,7 +80,12 @@ impl Panel {
             if !dirty {
                 continue;
             }
-            let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, colors.face)
+            let (x, width) = if previous.is_some() && y < 32 {
+                (196, 25)
+            } else {
+                (0, SIZE)
+            };
+            let mut band = Band::new(pixels, x, y, width, BAND as u16, colors.face)
                 .with_panel_type(super::lettering::panel_type(labels.focus));
             match y {
                 0..48 => {
@@ -149,7 +156,7 @@ impl Panel {
                     );
                 }
             }
-            lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+            lcd.write_rect_buffered(x, y, width, BAND as u16, band.pixels.as_flattened())
                 .await?;
         }
         self.previous = Some(state);

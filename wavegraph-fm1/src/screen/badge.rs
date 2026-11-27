@@ -18,12 +18,6 @@ use fm1_rticx::{
 };
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(super) enum Mode {
-    Channel,
-    InstrumentSwap(Swap),
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Swap {
     pub(super) channel: Channel,
     pub(super) live: Part,

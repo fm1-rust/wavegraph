@@ -60,7 +60,9 @@ fn later_insert_picker_choice_wins_after_a_skipped_preset_snapshot() {
     let mut track = Track::factory(Channel::One, nav.assignments[0]);
     nav.turn_algorithm(5); // Acid Pluck selects saturation + phaser; this snapshot is dropped.
     nav.press(PageButton::Fx);
-    nav.turn(2, 1); // Select its second insert, then advance Phaser -> Flanger.
+    nav.press(PageButton::Fx);
+    nav.turn(2, 0); // Select its second insert.
+    nav.turn_algorithm(1); // Advance Phaser -> Flanger.
     assert_eq!(nav.insert_kinds[0][1], InsertKind::Flanger);
 
     track.sync_panel(nav.bass_presets[0], nav.insert_kinds[0]);
@@ -111,7 +113,7 @@ fn instrument_reassignment_retains_the_cursor_and_edited_channel_effects() {
     let cursor = track.bass_preset;
 
     nav.press(PageButton::Glo);
-    nav.turn(1, 0); // Mixer -> this channel's instrument picker.
+    nav.turn(1, 0); // Open the focused strip.
     for part in [Part::Mono, Part::Bass] {
         select_instrument(&mut nav, part);
         track.reassign(Channel::Two, nav.assignments[1]);

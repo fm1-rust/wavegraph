@@ -1,7 +1,7 @@
 //! Voice mode selector for the four-voice instruments.
 
 use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
-use crate::firmware::Labels;
+use crate::{firmware::Labels, panel::Channel};
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
     text::Alignment,
@@ -18,7 +18,7 @@ pub(super) async fn paint(
     pixels: &mut [[u8; 2]; BAND * WIDTH],
     labels: &Labels,
     theme: &InstrumentStyle,
-    entering: bool,
+    previous: Option<(Channel, VoiceMode)>,
 ) -> Result<(), Error> {
     let (face, ink, accent) = (theme.face, theme.ink, theme.accent);
     let (selected, value) = match labels.mode {
@@ -28,10 +28,13 @@ pub(super) async fn paint(
     };
     let mut lcd = lcd.as_async(clock)?;
     for y in (0..SIZE).step_by(BAND) {
-        if !entering && !(64..168).contains(&y) {
-            continue;
-        }
-        let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, face);
+        let (x, width) = match previous {
+            Some((channel, _)) if channel != labels.channel && (8..24).contains(&y) => (204, 25),
+            Some((_, old)) if old != labels.mode && (64..168).contains(&y) => (0, SIZE),
+            Some(_) => continue,
+            None => (0, SIZE),
+        };
+        let mut band = Band::new(pixels, x, y, width, BAND as u16, face);
         match y {
             0..48 => {
                 band.label(
@@ -90,7 +93,7 @@ pub(super) async fn paint(
             }
             _ => (),
         }
-        lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+        lcd.write_rect_buffered(x, y, width, BAND as u16, band.pixels.as_flattened())
             .await?;
     }
     Ok(())

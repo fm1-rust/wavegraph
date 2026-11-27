@@ -7,7 +7,7 @@ use crate::{
     bass::{Control, Controls, Knob, PresetSelection, presets::PRESETS},
     bumper::Cue,
     envelope::{EnvelopeControls, EnvelopeTarget},
-    fx::{Device, FilterSettings, Fx, INSERT_SLOTS, Insert, InsertKind},
+    fx::{BeatEffect, Device, FilterSettings, Fx, INSERT_SLOTS, Insert, InsertKind},
     keys::HitLog,
     keys::PolyKey,
     lfo::{KnobOffset, Route},
@@ -1172,6 +1172,7 @@ pub(super) enum Message {
     DrumLamps([DrumLamp; 6]),
     Insert(Channel, Part),
     ChannelInserts(Channel, [Insert; INSERT_SLOTS]),
+    InspectBeat(BeatEffect, Channel),
     BeatFlanger(Channel, FlangerControls, wavegraph_lfo::PhaseControl),
     BeatFilter(Channel, FilterSettings),
     FilterClock(wavegraph_lfo::PhaseControl, bool),
@@ -1661,9 +1662,11 @@ fn unpack_events<M>(
 /// The contiguous, post-insert signals immediately upstream of the faders.
 pub(super) const STRIP_BUS: usize = 8;
 pub(super) const DRY_HEADROOM: u8 = 3;
-const REVERB_RETURN: usize = 16;
-const DELAY_RETURN: usize = 17;
-const MASTER_BUS: usize = 18;
+// An optional observation outlet shares the former render-slot scope storage.
+pub(super) const SCOPE_BUS: usize = 13;
+const REVERB_RETURN: usize = 17;
+const DELAY_RETURN: usize = 18;
+const MASTER_BUS: usize = 19;
 pub(super) const BUS_COUNT: usize = MASTER_BUS + 4;
 
 /// An isolated post-insert strip, or the live faders plus shared effects.
@@ -1762,32 +1765,49 @@ pub(super) fn capture_master<const N: usize>(
 impl Channel {
     #[allow(
         clippy::arithmetic_side_effects,
+        reason = "The four channel indices are 0 through 3."
+    )]
+    fn scope_bus(self, view: View) -> usize {
+        match view {
+            View::BeatFx(BeatEffect::Echo) => DELAY_RETURN,
+            View::BeatFx(BeatEffect::Filter | BeatEffect::Flanger) => SCOPE_BUS,
+            View::Fx | View::BeatFx(BeatEffect::Slicer) => STRIP_BUS + self.index(),
+            _ => self.source_bus(),
+        }
+    }
+
+    #[allow(
+        clippy::arithmetic_side_effects,
         reason = "Three times signed Q23 fits in i32."
     )]
-    pub(super) fn copy_scope<const N: usize>(
-        self,
-        part: Part,
-        view: View,
-        buses: &[[I24; N]; BUS_COUNT],
-        out: &mut [i32; N],
-    ) {
-        // Give drum transients and the detuned saws headroom on the display.
-        // Apply this gain only to the selected strip's scope tap.
-        let bus = if view == View::Fx {
-            STRIP_BUS + self.index()
-        } else {
-            self.source_bus()
-        };
-        let scale = |s: I24| match part {
+    fn scope_gain(part: Part, view: View, s: I24) -> i32 {
+        // The isolated wet return is quieter than the strip. Fixed gains show the tail decaying.
+        if let View::BeatFx(effect) = view {
+            return if effect == BeatEffect::Echo {
+                s.inner()
+            } else {
+                s.inner() >> 3
+            };
+        }
+        match part {
             Part::Tr909 => s.inner() >> 4,
             Part::Tr808 => s.inner() >> 3,
             Part::Sampler => s.inner() >> 2,
             Part::Bass | Part::Wavetable if view == View::Fx => s.inner() >> 3,
             Part::Supersaw => (s.inner() * 3) >> 3,
             _ => s.inner(),
-        };
-        for (dst, &sample) in out.iter_mut().zip(&buses[bus]) {
-            *dst = scale(sample);
+        }
+    }
+
+    pub(super) fn capture_scope<const N: usize>(
+        self,
+        part: Part,
+        view: View,
+        buses: &mut [[I24; N]; BUS_COUNT],
+    ) {
+        let bus = self.scope_bus(view);
+        for i in 0..N {
+            buses[SCOPE_BUS][i] = I24::new_unchecked(Self::scope_gain(part, view, buses[bus][i]));
         }
     }
 
@@ -1798,9 +1818,7 @@ impl Channel {
         view: View,
         buses: &[[I24; N]; BUS_COUNT],
     ) -> [i32; N] {
-        let mut samples = [0; N];
-        self.copy_scope(part, view, buses, &mut samples);
-        samples
+        buses[self.scope_bus(view)].map(|s| Self::scope_gain(part, view, s))
     }
 }
 
@@ -1816,13 +1834,14 @@ impl Programs {
             1, 1, 0, 2, // CALL channel 2 -> 2, 3
             1, 2, 0, 2, // CALL channel 3 -> 4, 5
             1, 3, 0, 2, // CALL channel 4 -> 6, 7
-            1, 7, 8, 5, 0, 1, 2, 3, 4, 5, 6, 7, // CALL inserts -> strips 8..11, key 12
-            1, 4, 4, 3, 8, 9, 10, 11, // CALL mixer -> dry 13, reverb send 14, delay send 15
-            1, 5, 1, 1, 14, // CALL reverb -> 16
-            1, 6, 1, 1, 15, // CALL delay -> 17
-            1, 8, 8, 2, 13, 16, 17, 1, 3, 5, 7,
-            12, // CALL stereo master: dry, returns, four pedal taps and Hoover side -> 18,19
-            2, 18, 64, 2, 19, 64, // GAIN optional output trim on both channels -> 20,21
+            1, 7, 8, 6, 0, 1, 2, 3, 4, 5, 6,
+            7, // CALL inserts -> strips 8..11, side 12, scope 13
+            1, 4, 4, 3, 8, 9, 10, 11, // CALL mixer -> dry 14, reverb send 15, delay send 16
+            1, 5, 1, 1, 15, // CALL reverb -> 17
+            1, 6, 1, 1, 16, // CALL delay -> 18
+            1, 8, 8, 2, 14, 17, 18, 1, 3, 5, 7,
+            12, // CALL stereo master: dry, returns, four pedal taps and Hoover side -> 19,20
+            2, 19, 64, 2, 20, 64, // GAIN optional output trim on both channels -> 21,22
         ];
         const FULL_LEN: usize = ROUTE.len() - 6;
         Ok(Self([
@@ -1848,6 +1867,7 @@ impl Programs {
             offsets: [KnobOffset::default(); CHANNELS],
             recorder: crate::clipboard::Recorder::new(rate),
             recording_request: crate::clipboard::Request::INITIAL,
+            inspect_beat: None,
             previous_take: None,
             programs: self,
             patch: self.0[0].bind_nodes(nodes)?,
@@ -1890,6 +1910,7 @@ pub(super) struct Instrument<'a> {
     pub(super) recorder: crate::clipboard::Recorder,
     pub(super) recording_request: crate::clipboard::Request,
     previous_take: Option<crate::clipboard::Take>,
+    pub(super) inspect_beat: Option<(BeatEffect, Channel)>,
     programs: &'a Programs,
     patch: Patch<'a, 'a, Message, I24, 8, AudioProcess<'a>>,
     pub(super) half_gain: bool,
@@ -1897,7 +1918,7 @@ pub(super) struct Instrument<'a> {
     previous_mixer: Option<Mixer>,
     pub(super) beat_steps: [StepPattern; CHANNELS],
     pub(super) slicer_steps: [StepPattern; CHANNELS],
-    beat_phase: wavegraph_lfo::Phase,
+    pub(super) beat_phase: wavegraph_lfo::Phase,
     beat_rate: u32,
     echo_gates: u8,
     previous_bpm: u16,
@@ -2080,8 +2101,15 @@ impl Instrument<'_> {
         mut wire: impl FnMut(Channel, Event<MidiMessage>),
     ) -> Result<&'b [I24; N], Error> {
         let downbeat = self.transport.playing() && self.player.transport_changed(self.transport);
-        // Per strip: assignment, slots, slicer and filter. Also flanger, filter clock, stereo faders.
-        let mut inserts = Vec::<_, { 4 * CHANNELS + 3 }>::new();
+        // Per strip: assignment, slots, slicer and filter. Also flanger, filter clock, stereo faders and scope.
+        let mut inserts = Vec::<_, { 4 * CHANNELS + 4 }>::new();
+        if let Some((effect @ (BeatEffect::Flanger | BeatEffect::Filter), channel)) =
+            self.inspect_beat
+        {
+            inserts
+                .push(at(Message::InspectBeat(effect, channel)))
+                .map_err(|_| Error::Capacity)?;
+        }
         let clock = BeatClock {
             beats: self.fx.beats,
             bpm: self.transport.bpm,
@@ -2564,9 +2592,9 @@ mod tests {
     };
     use wavegraph_fx::{Delay, Reverb, SidechainDucker};
 
-    const DRY_BUS: usize = 13;
-    const REVERB_SEND: usize = 14;
-    const DELAY_SEND: usize = 15;
+    const DRY_BUS: usize = 14;
+    const REVERB_SEND: usize = 15;
+    const DELAY_SEND: usize = 16;
     const BASS_INSERT: usize = STRIP_BUS + Channel::Three.index();
     const FX_WITHOUT_DYNAMICS: Fx = Fx {
         dynamics_enabled: false,
@@ -2574,12 +2602,15 @@ mod tests {
     };
 
     fn select_instrument(nav: &mut Navigation, target: Part) {
+        use crate::panel::PageButton;
+        nav.press(PageButton::HoldEdit);
         nav.turn(
             0,
             target
                 .picker_index()
                 .saturating_sub(nav.part().picker_index()),
         );
+        nav.press(PageButton::Edit);
     }
 
     #[test]
@@ -4133,12 +4164,16 @@ mod tests {
             }
             let mut fx = Fx::INITIAL;
             fx.beats = wavegraph_fx::BeatDivision::from_ratio(1, 16).expect("sixteenth of a beat");
-            fx.filters[0].pick.press(0);
-            fx.filters[0].pick.press(9);
+            fx.filters[0].pick.press_black(0);
+            fx.filters[0].pick.toggle_step(1);
+            let mut accents = FILTER_PATTERNS[0].accents;
+            accents[1] = 127;
+            fx.filters[0].pick.press_black(9);
             assert_eq!(fx.filters[0].pick.mode, FilterMode::BandPass);
             rack.sequences = [false; CHANNELS];
             rack.transport.bpm = 120;
             let mut reference = PatternFilter::new(32_768).expect("audio sample rate");
+            rack.inspect_beat = Some((BeatEffect::Filter, Channel::One));
             reference.set_controls(fx.filters[0].controls());
             let mut buses = [[I24::default(); 37]; BUS_COUNT];
             let mut phase = 0u32;
@@ -4153,8 +4188,13 @@ mod tests {
                     }
                     9 => {
                         // A different rhythm auditions immediately, partway through cell four.
-                        fx.filters[0].pick.press(3);
+                        fx.filters[0].pick.press_black(3);
+                        accents = FILTER_PATTERNS[3].accents;
                         last_step = None;
+                    }
+                    12 => {
+                        fx.filters[0].pick.toggle_step(8);
+                        accents[8] = 0;
                     }
                     16 => rack.transport.toggle(),
                     20 => rack.transport.bpm = 60,
@@ -4170,13 +4210,13 @@ mod tests {
                 let expected = buses[0].map(|sample| {
                     let step = (phase >> 28) as usize;
                     if last_step != Some(step) {
-                        let rhythm = usize::from(fx.filters[0].pick.rhythm);
-                        reference.trigger(FILTER_PATTERNS[rhythm].accents[step]);
+                        reference.trigger(accents[step]);
                         last_step = Some(step);
                     }
                     phase = phase.wrapping_add(if block < 20 { 1 << 22 } else { 1 << 21 });
                     reference.tick(sample)
                 });
+                assert_eq!(buses[SCOPE_BUS], expected);
                 assert_eq!(buses[STRIP_BUS], expected, "block {block}");
                 assert_eq!(Some(usize::from(rack.beat_step())), last_step);
                 for channel in [Channel::Two, Channel::Three, Channel::Four] {
@@ -4199,7 +4239,7 @@ mod tests {
                 track.assignment.generation += 1;
                 fx.filters[i]
                     .pick
-                    .press(u8::try_from(i).expect("one rhythm per strip"));
+                    .press_black(u8::try_from(i).expect("one rhythm per strip"));
                 fx.slicers[i].enabled = true;
                 fx.slicers[i].depth = 0;
             }
@@ -4240,7 +4280,20 @@ mod tests {
             // 128 frames per cell. All four gates can start alongside Flanger
             // and both slot/assignment messages for every channel on this block.
             for step in 0..18u8 {
+                // Both intermediate nodes must be visible before the downstream gate closes.
+                let node = if step % 2 == 0 {
+                    BeatEffect::Flanger
+                } else {
+                    BeatEffect::Filter
+                };
+                rack.inspect_beat = Some((node, Channel::Two));
                 rack.render(tracks, &mut buses)?;
+                assert_eq!(buses[SCOPE_BUS], buses[Channel::Two.source_bus()]);
+                let view = View::BeatFx(BeatEffect::Slicer);
+                assert_eq!(
+                    Channel::Two.scope_samples(Part::Mono, view, &buses),
+                    buses[STRIP_BUS + 1].map(|v| v.inner() >> 3)
+                );
                 assert_eq!(rack.beat_step(), step & 15);
                 for channel in Channel::ALL {
                     let i = channel.index();
@@ -4353,6 +4406,10 @@ mod tests {
                 buses[DELAY_RETURN].map(I24::inner),
                 captured.map(|s| s << 8)
             );
+
+            // The shared return includes the previous pass even while the echo input is closed.
+            Channel::Four.capture_scope(Part::Tr909, View::BeatFx(BeatEffect::Echo), &mut buses);
+            assert_eq!(buses[SCOPE_BUS].map(I24::inner), captured.map(|s| s << 8));
 
             fx.edit_beat(Channel::One, BeatEffect::Echo, [0; 4], 0, true);
             rack.set_fx(fx);

@@ -50,19 +50,29 @@ impl Mask {
     }
 
     pub fn glyph(self, byte: u8) -> Self {
-        self.frame(usize::from(
-            if (32..127).contains(&byte) {
-                byte
-            } else {
-                b'?'
-            } - 32,
-        ))
+        self.frame(glyph_index(byte))
     }
 
     pub fn coverage(self, x: usize, y: usize) -> u8 {
         let i = y * self.width + x;
         (self.bytes[i / 4] >> (6 - 2 * (i % 4))) & 3
     }
+}
+
+fn glyph_index(byte: u8) -> usize {
+    usize::from(
+        if (32..127).contains(&byte) {
+            byte
+        } else {
+            b'?'
+        } - 32,
+    )
+}
+
+/// Twelve thresholded GRID pixels on a glyph scanline, starting at bit 15.
+pub(super) fn picker_row(byte: u8, y: usize) -> u16 {
+    const ROWS: &[u16] = flash_asset!(u16, include!(concat!(env!("OUT_DIR"), "/picker-rows.rs")));
+    ROWS[glyph_index(byte) * GRID.height + y]
 }
 
 pub(super) fn blend(pixel: &mut [u8; 2], ink: Rgb565, coverage: u8) {

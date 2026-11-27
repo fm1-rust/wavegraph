@@ -30,25 +30,51 @@ impl BeatEffect {
 /// Physical white keys from F3 to G5, independent of the keyboard octave.
 pub(super) const STEP_KEYS: [u8; 16] = [0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26];
 
-/// Retained by the panel scanner so a rhythm press survives a dropped scan.
+/// Eight rhythm memories, then low-pass and band-pass on the first ten black keys.
+pub(super) const FILTER_BANK_KEYS: [u8; 10] = [1, 3, 5, 8, 10, 13, 15, 17, 20, 22];
+
+/// Retained by the panel scanner so a pattern edit survives a dropped scan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct FilterPick {
+    edits: wavegraph_fx::StepPattern,
     pub(super) rhythm: u8,
     pub(super) mode: FilterMode,
     pub(super) enabled: bool,
 }
 
 impl FilterPick {
+    const UNEDITED: wavegraph_fx::StepPattern = wavegraph_fx::StepPattern::from_bits(0);
+
     pub(super) const INITIAL: Self = Self {
+        edits: Self::UNEDITED,
         rhythm: 0,
         mode: FilterMode::LowPass,
         enabled: false,
     };
 
-    pub(super) fn press(&mut self, key: u8) {
+    pub(super) fn toggle_step(&mut self, step: u8) {
+        self.edits.toggle(step);
+    }
+
+    pub(super) fn accent(self, step: u8) -> u8 {
+        let original =
+            wavegraph_fx::FILTER_PATTERNS[usize::from(self.rhythm)].accents[usize::from(step)];
+        if self.edits.active(step) {
+            if original == 0 { 127 } else { 0 }
+        } else {
+            original
+        }
+    }
+
+    pub(super) fn edited(self) -> bool {
+        self.edits != Self::UNEDITED
+    }
+
+    pub(super) fn press_black(&mut self, key: u8) {
         match key {
             0..=7 => {
                 self.rhythm = key;
+                self.edits = Self::UNEDITED;
                 self.enabled = true;
             }
             8 => self.mode = FilterMode::LowPass,
@@ -57,8 +83,7 @@ impl FilterPick {
         }
     }
 
-    #[cfg(target_os = "none")]
-    pub(super) fn lit(self, key: u8) -> bool {
+    pub(super) fn black_lit(self, key: u8) -> bool {
         match key {
             8 => self.mode == FilterMode::LowPass,
             9 => self.mode == FilterMode::BandPass,
@@ -433,7 +458,8 @@ impl Fx {
         match effect {
             BeatEffect::Filter => self.filters[channel.index()].edit(knobs, algorithm),
             BeatEffect::Echo => {
-                self.clocked_delay = true;
+                // Opening the bank or changing focus preserves a free-running rack delay.
+                self.clocked_delay |= sel || knobs != [0; 4];
                 // Depth is the focused strip's existing post-fader send.
                 self.feedback = self
                     .feedback
@@ -594,20 +620,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn filter_step_edits_restore_factory_accents_and_recall_clears_the_edits() {
+        for (rhythm, preset) in (0u8..).zip(wavegraph_fx::FILTER_PATTERNS) {
+            let mut pick = FilterPick::INITIAL;
+            pick.press_black(rhythm);
+            assert!(pick.black_lit(rhythm));
+            for step in 0..16 {
+                let original = preset.accents[usize::from(step)];
+                assert_eq!(pick.accent(step), original);
+                pick.toggle_step(step);
+                assert!(pick.edited());
+                assert_eq!(pick.accent(step), if original == 0 { 127 } else { 0 });
+                pick.toggle_step(step);
+                assert_eq!(pick.accent(step), original);
+                assert!(!pick.edited());
+            }
+            pick.enabled = false;
+            pick.toggle_step(15);
+            pick.press_black(9);
+            assert!(pick.edited());
+            assert!(!pick.enabled);
+            assert!(pick.black_lit(9));
+            pick.press_black(rhythm);
+            assert!(!pick.edited());
+            assert!(pick.enabled);
+            assert!(pick.black_lit(9));
+            assert_eq!(pick.accent(15), preset.accents[15]);
+        }
+
+        let mut keys = STEP_KEYS.to_vec();
+        keys.extend(FILTER_BANK_KEYS);
+        keys.sort_unstable();
+        assert!(keys.into_iter().eq((0..27).filter(|key| *key != 25)));
+    }
+
+    #[test]
     fn filter_rhythm_keys_enable_only_the_selected_strip_and_keep_its_tone() {
         use crate::panel::{Channel, Navigation};
         let mut nav = Navigation::INITIAL;
         let mut fx = Fx::INITIAL;
         for rhythm in 0..8 {
-            nav.filter_picks[2].press(rhythm);
+            nav.filter_picks[2].press_black(rhythm);
             assert_eq!(nav.filter_picks[2].rhythm, rhythm);
             assert!(nav.filter_picks[2].enabled);
         }
-        nav.filter_picks[2].press(9);
+        nav.filter_picks[2].press_black(9);
         nav.filter_picks[2].enabled = false;
-        nav.filter_picks[2].press(8);
+        nav.filter_picks[2].press_black(8);
         assert!(!nav.filter_picks[2].enabled);
-        nav.filter_picks[2].press(7);
+        nav.filter_picks[2].press_black(7);
         fx.filters[2].pick = nav.filter_picks[2];
         fx.edit_beat(Channel::Three, BeatEffect::Filter, [1, 2, -8, 10], 3, false);
         let controls = fx.filters[2].controls();
@@ -666,6 +727,44 @@ mod tests {
             STEP_KEYS.map(|k| (53 + k) % 12),
             [5, 7, 9, 11, 0, 2, 4, 5, 7, 9, 11, 0, 2, 4, 5, 7]
         );
+    }
+
+    #[test]
+    fn browsing_echo_preserves_free_delay_until_an_echo_control_is_used() {
+        use crate::panel::Channel;
+
+        let mut free = Fx::INITIAL;
+        free.edit(Device::Delay, [12, 0, 0, -1], false);
+        assert!(!free.clocked_delay);
+        let mut fx = free;
+        for channel in Channel::ALL {
+            fx.edit_beat(channel, BeatEffect::Echo, [0; 4], 0, false);
+            // ALGORITHM has no assignment on Beat Echo.
+            fx.edit_beat(channel, BeatEffect::Echo, [0; 4], 1, false);
+        }
+        assert_eq!(fx, free);
+        assert!(
+            fx.return_events(Some(free), Device::Delay, 122, 121)
+                .is_empty()
+        );
+
+        for (knobs, sel) in [
+            ([1, 0, 0, 0], false),
+            ([0, 1, 0, 0], false),
+            ([0, 0, 1, 0], false),
+            ([0, 0, 0, 1], false),
+            ([0; 4], true),
+        ] {
+            let mut fx = free;
+            fx.edit_beat(Channel::One, BeatEffect::Echo, knobs, 0, sel);
+            assert!(fx.clocked_delay);
+            assert_eq!(fx.time_ms, free.time_ms);
+            assert!(
+                fx.return_events(Some(free), Device::Delay, 122, 122)
+                    .iter()
+                    .any(|event| matches!(event.message, Message::Fx(FxMessage::BeatTime(_))))
+            );
+        }
     }
 
     #[test]

@@ -35,6 +35,7 @@ const TOP: usize = 48;
 const WIDTH: usize = 12;
 const HEIGHT: usize = 160;
 const HALF: usize = HEIGHT / 2;
+pub(super) const ROLL_ROWS: core::ops::Range<u16> = TOP as u16..(TOP + HEIGHT) as u16;
 fn drum_label(v: Voice) -> &'static str {
     match v {
         Voice::Kick => "KICK",
@@ -311,7 +312,7 @@ struct BankButton {
 }
 
 pub(super) struct Grid {
-    previous: Option<(Slot, u8, bool, u32, bool)>,
+    previous: Option<(crate::panel::Channel, Slot, u8, bool, u32, bool)>,
     cursor: Option<u8>,
     buttons: [Option<BankButton>; SLOTS],
     head: Option<u8>,
@@ -495,7 +496,7 @@ impl Grid {
             .filter(|_| bank.slot == slot && bank.bar == bar)
             .map(|p| p.step % 16);
         let enabled = seq.enabled[seq.channel.index()];
-        let key = (slot, bar, enabled, seq.edit_revision, house_m7);
+        let key = (seq.channel, slot, bar, enabled, seq.edit_revision, house_m7);
         let changed = self.previous != Some(key);
         let mut lcd = lcd.as_async(clock)?;
         if seq.page == Some(SeqPage::Pattern) {

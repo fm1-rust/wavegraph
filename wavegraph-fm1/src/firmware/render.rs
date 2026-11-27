@@ -2,7 +2,7 @@
 use super::{Motion, Performance, Settings};
 use crate::{
     bumper::Cue,
-    instrument::{BUS_COUNT, Instrument, STRIP_BUS, write_master},
+    instrument::{BUS_COUNT, Instrument, SCOPE_BUS, STRIP_BUS, write_master},
     midi_out::Batch,
     mixer::Meter,
     panel::{Assignment, CHANNELS, Channel, Navigation, View},
@@ -12,6 +12,13 @@ use wavegraph_arp::Chord;
 use wavegraph_sample::I24;
 
 const _: () = assert!(OUTPUT_FRAMES == 128);
+
+/// Timing for the selected observation tap, captured by the DSP alongside its audio.
+#[derive(Clone, Copy)]
+pub(super) enum ScopeClock {
+    Voice { bass_cycle: Option<usize> },
+    Slicer(wavegraph_lfo::Phase),
+}
 
 pub(super) struct RenderBlock {
     pub(super) settings: Settings,
@@ -24,9 +31,8 @@ pub(super) struct RenderBlock {
     pub(super) hold: bool,
     // CPU0 borrows the selected master until it returns this slot to CPU1.
     buses: &'static mut [[I24; OUTPUT_FRAMES]; BUS_COUNT],
-    pub(super) source: [i32; OUTPUT_FRAMES],
     pub(super) motion: Motion,
-    pub(super) bass_cycle: Option<usize>,
+    pub(super) scope_clock: ScopeClock,
     pub(super) midi: Batch,
     pub(super) work: u32,
     pub(super) issued_at: u32,
@@ -62,15 +68,18 @@ impl RenderBlock {
             capture_source: false,
             hold: false,
             buses,
-            source: [0; OUTPUT_FRAMES],
             motion: Motion::default(),
-            bass_cycle: None,
+            scope_clock: ScopeClock::Voice { bass_cycle: None },
             midi: Batch::default(),
             work: 0,
             issued_at: 0,
             ready_at: 0,
             stack_free: None,
         }
+    }
+
+    pub(super) fn source(&self) -> [i32; OUTPUT_FRAMES] {
+        self.buses[SCOPE_BUS].map(I24::inner)
     }
 
     pub(super) fn snapshot(&mut self, current: &Performance) {
@@ -144,6 +153,10 @@ impl Renderer {
             self.applied_revision = Some(block.settings_revision);
         }
         graph.cue = block.cue;
+        graph.inspect_beat = match nav.view {
+            View::BeatFx(effect) if block.capture_source => Some((effect, nav.focus)),
+            _ => None,
+        };
         if let Some(session) = block.usb_session {
             block.midi.begin(session);
         }
@@ -161,10 +174,15 @@ impl Renderer {
             .expect("fixed patch");
         let i = nav.focus.index();
         if block.capture_source {
-            nav.focus
-                .copy_scope(nav.part(), nav.view, block.buses, &mut block.source);
+            nav.focus.capture_scope(nav.part(), nav.view, block.buses);
         }
-        block.bass_cycle = graph.bass_cycles[i];
+        block.scope_clock = if nav.view == View::BeatFx(crate::fx::BeatEffect::Slicer) {
+            ScopeClock::Slicer(graph.beat_phase)
+        } else {
+            ScopeClock::Voice {
+                bass_cycle: graph.bass_cycles[i],
+            }
+        };
         if settings_changed {
             for i in 0..CHANNELS {
                 if self.assignments[i] != nav.assignments[i] {
@@ -224,7 +242,7 @@ impl Renderer {
 
 impl Settings {
     pub(super) fn source_tap(&self) -> bool {
-        self.nav.view == View::Fx
+        matches!(self.nav.view, View::Fx | View::BeatFx(_))
             || (matches!(self.nav.view, View::Scope | View::SampleEdit)
                 && self.tracks[self.nav.focus.index()].voice_tap)
     }

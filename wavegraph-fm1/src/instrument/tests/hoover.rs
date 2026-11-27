@@ -48,7 +48,7 @@ fn hoover_stereo_follows_the_strip_fader_trim_and_mono_effects() -> Result<(), E
             match effect {
                 0 => tracks[0].inserts[0] = InsertKind::Saturator.initial(Part::Hoover),
                 1 => fx.slicers[0].enabled = true,
-                2 => fx.filters[0].pick.press(1),
+                2 => fx.filters[0].pick.press_black(1),
                 _ => fx.flanger_target = Some(Channel::One),
             }
             rack.set_fx(fx);

@@ -52,20 +52,17 @@ impl Panel {
         theme: &InstrumentStyle,
     ) -> Result<(), Error> {
         // The 808 controls repaint from x=114. Keep the whole title tile to their left.
-        let (mask, split) = if part == Part::Tr808 {
-            (super::lettering::TR808, 46)
+        let (mask, ink) = if part == Part::Tr808 {
+            (super::lettering::TR808, theme.ink)
         } else {
-            (super::lettering::TR909, 51)
+            (super::lettering::TR909, Rgb565::new(10, 20, 10))
         };
         let width = mask.width as u16;
+        let ink = selector.shade(ink);
+        let background = selector.shade(theme.face);
         for y in (0..32).step_by(8) {
-            let mut band = Band::new(strip, 0, y, width, 8, selector.shade(theme.face));
-            band.mask(
-                Point::zero(),
-                mask,
-                split,
-                [theme.ink, theme.accent].map(|c| selector.shade(c)),
-            );
+            let mut band = Band::new(strip, 0, y, width, 8, background);
+            band.mask(Point::zero(), mask, 0, [ink; 2]);
             lcd.write_rect(10, y + 1, width, 8, band.pixels).await?;
         }
         Ok(())
@@ -90,7 +87,7 @@ impl Panel {
             Voice::Kick => ("KICK", ""),
             Voice::Snare => ("SNARE", ""),
             Voice::Clap => ("CLAP", ""),
-            Voice::ClosedHat => ("CLOSED", "HAT"),
+            Voice::ClosedHat => ("CLSD", "HAT"),
             Voice::OpenHat => ("OPEN", "HAT"),
             Voice::Ride => ("RIDE", ""),
         };
@@ -221,6 +218,7 @@ impl Panel {
 /// Percussion contours follow individual strikes, independent of key release.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) struct Envelope {
+    channel: Channel,
     values: [u8; 4],
     lamps: [DrumLamp; 6],
 }
@@ -234,7 +232,11 @@ impl Envelope {
         } else {
             [kick, snare, clap, 0]
         };
-        Self { values, lamps }
+        Self {
+            channel: labels.channel,
+            values,
+            lamps,
+        }
     }
 
     pub(super) async fn paint(
@@ -268,16 +270,20 @@ impl Envelope {
         for y in (0..SIZE).step_by(super::BAND) {
             let row = usize::from(y.saturating_sub(48) / 40);
             let control = (48..208).contains(&y).then(|| controls.get(row)).flatten();
-            if old.is_some_and(|old| {
-                control.is_none_or(|&(_, voice)| {
-                    old.values[row] == self.values[row]
-                        && old.lamps[voice as usize] == self.lamps[voice as usize]
+            let header_dirty = y < 24 && old.is_some_and(|old| old.channel != self.channel);
+            if !header_dirty
+                && old.is_some_and(|old| {
+                    control.is_none_or(|&(_, voice)| {
+                        old.values[row] == self.values[row]
+                            && old.lamps[voice as usize] == self.lamps[voice as usize]
+                    })
                 })
-            }) {
+            {
                 continue;
             }
-            let mut band =
-                Band::new(pixels, 0, y, SIZE, super::BAND as u16, theme.face).with_panel_type(true);
+            let (x, width) = if header_dirty { (196, 28) } else { (0, SIZE) };
+            let mut band = Band::new(pixels, x, y, width, super::BAND as u16, theme.face)
+                .with_panel_type(true);
             if y < 48 {
                 band.title(
                     if is_808 { "TR-808 ENV" } else { "TR-909 ENV" },
@@ -343,7 +349,7 @@ impl Envelope {
                     theme.ink,
                 );
             }
-            lcd.write_rect_buffered(0, y, SIZE, super::BAND as u16, band.pixels.as_flattened())
+            lcd.write_rect_buffered(x, y, width, super::BAND as u16, band.pixels.as_flattened())
                 .await?;
         }
         lcd.flush().await

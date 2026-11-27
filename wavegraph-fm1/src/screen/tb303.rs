@@ -354,6 +354,22 @@ impl Panel {
             )
             .await?;
         }
+        let editing = state.selected.is_some();
+        if old.is_some_and(|s| s.selected.is_some()) != editing {
+            let y = SCOPE_TOP - 10;
+            // Leave the scope divider on the last row of the faceplate.
+            let mut hint = Band::new(pixels, 0, 0, 90, 9, paper).with_panel_type(true);
+            if editing {
+                hint.label(
+                    "ALG SET / HOME",
+                    Point::new(45, 0),
+                    Alignment::Center,
+                    glass,
+                );
+            }
+            hint.overlay_at(selector, 145, y);
+            lcd.write_rect(145, y, 90, 9, hint.pixels).await?;
+        }
         if old.is_none_or(|s| state.readout_changed(s)) {
             let mut text = String::new();
             let (heading, value) = readout(state, &mut text);

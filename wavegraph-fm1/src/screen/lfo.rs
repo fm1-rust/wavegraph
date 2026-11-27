@@ -1,6 +1,6 @@
 //! Channel modulation panel. Only rows whose controls changed are transferred.
 use super::{BAND, InstrumentStyle, WIDTH, mixer::Band};
-use crate::{firmware::Labels, lfo::Controls};
+use crate::{firmware::Labels, lfo::Controls, panel::Channel};
 use core::fmt::Write;
 use fm1_graphics::embedded_graphics::{
     prelude::{Point, Size},
@@ -19,7 +19,7 @@ pub(super) async fn paint(
     pixels: &mut [[u8; 2]; BAND * WIDTH],
     labels: &Labels,
     theme: &InstrumentStyle,
-    previous: Option<Controls>,
+    previous: Option<(Channel, Controls)>,
 ) -> Result<(), Error> {
     let c = labels.lfo;
     let shape = match c.shape() {
@@ -49,9 +49,14 @@ pub(super) async fn paint(
     let mut lcd = lcd.as_async(clock)?;
     for y in (0..SIZE).step_by(BAND) {
         let row = usize::from(y.saturating_sub(40) / 32);
-        if previous.is_some_and(|p| {
-            y < 40
-                || match row {
+        let (x, width) = if let Some((channel, p)) = previous {
+            if y < 40 {
+                if channel == labels.channel || !(8..24).contains(&y) {
+                    continue;
+                }
+                (196, 25) // The four-character channel label ends at x220.
+            } else {
+                let unchanged = match row {
                     0 => p.shape() == c.shape(),
                     1 => {
                         p.sync == c.sync
@@ -61,12 +66,19 @@ pub(super) async fn paint(
                     2 => p.depth == c.depth,
                     3 => p.target(labels.focus).route == c.target(labels.focus).route,
                     4 => p.sync == c.sync,
-                    _ => p.enabled == c.enabled,
+                    5 => p.enabled == c.enabled,
+                    _ => true,
+                };
+                let row_band = y.saturating_sub(40) % 32;
+                if unchanged || row_band >= 16 {
+                    continue;
                 }
-        }) {
-            continue;
-        }
-        let mut band = Band::new(pixels, 0, y, SIZE, BAND as u16, theme.face)
+                (110, 120) // Only the right-aligned value changes on a control row.
+            }
+        } else {
+            (0, SIZE)
+        };
+        let mut band = Band::new(pixels, x, y, width, BAND as u16, theme.face)
             .with_panel_type(super::lettering::panel_type(labels.focus));
         if y < 40 {
             let title = heapless::format!(20; "{} LFO", labels.focus.name()).expect("short title");
@@ -88,7 +100,7 @@ pub(super) async fn paint(
                 theme.selected.fill,
             );
         }
-        lcd.write_rect_buffered(0, y, SIZE, BAND as u16, band.pixels.as_flattened())
+        lcd.write_rect_buffered(x, y, width, BAND as u16, band.pixels.as_flattened())
             .await?;
     }
     Ok(())

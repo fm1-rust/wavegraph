@@ -19,10 +19,8 @@ impl Screen {
             return Ok(());
         }
         if !matches!(previous, Some(Page::HooverEnvelope(..))) {
+            // The invalidated full-width plot paints every pixel on entry.
             self.change_view(STYLE);
-            lcd.as_async(clock)?
-                .fill_rect(0, 0, SIZE, SIZE, STYLE.background.into_storage())
-                .await?;
         }
         // Display time in panel units so short segments stay legible.
         let [a, b, c, r] = p.times.map(|t| usize::from(t) + 3);
@@ -68,6 +66,7 @@ impl Screen {
                 [p.pulse_wave, p.saw_wave, p.sub_wave, p.sub_level],
             ),
         };
+        self.text.text(8, 12, labels.channel.label(), STRIPE);
         self.text.text(0, 13, names, STRIPE);
         for (i, v) in values.into_iter().enumerate() {
             self.text.number(i * 5, 14, 3, u32::from(v), LCD);
@@ -101,15 +100,16 @@ pub(super) async fn header(
             STRIPE,
         );
         band.rect(Point::new(98, 5), Size::new(105, 24), LCD);
+        band.label("ALG PATCH", Point::new(105, 6), Alignment::Left, ink);
         band.label(
             wavegraph_hoover::Patch::PRESETS[usize::from(labels.voice.waveform)].0,
-            Point::new(105, 12),
+            Point::new(105, 17),
             Alignment::Left,
             ink,
         );
         band.label(
-            ["1", "2", "3", "4"][labels.channel.index()],
-            Point::new(195, 12),
+            labels.channel.label(),
+            Point::new(198, 6),
             Alignment::Right,
             ink,
         );
