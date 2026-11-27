@@ -569,7 +569,7 @@ impl Fx {
         events
     }
 
-    pub(super) fn master_events(self, previous: Option<Self>) -> Vec<Event<Message>, 4> {
+    pub(super) fn master_events(self, previous: Option<Self>) -> Vec<Event<Message>, 5> {
         let mut events = Vec::new();
         let controls = |fx: Self| {
             [

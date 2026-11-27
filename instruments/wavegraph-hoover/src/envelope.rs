@@ -52,6 +52,9 @@ impl Envelope {
     pub(crate) fn idle(self) -> bool {
         self.stage == Stage::Idle
     }
+    pub(crate) fn held_level(&self) -> Option<f32> {
+        (self.stage == Stage::Hold).then_some(self.value)
+    }
     pub(crate) fn releasing(self) -> bool {
         self.stage == Stage::Release
     }

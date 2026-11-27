@@ -3,8 +3,10 @@
 #![doc = include_str!("../README.md")]
 
 mod envelope;
-use envelope::{Envelope, Timing};
-use wavegraph_core::{Port, Process, ProcessContext, midi::Note, polyphony::Keyboard};
+mod voice;
+use envelope::Timing;
+use voice::{Frame, Modulation, Tone, Voice};
+use wavegraph_core::{Event, Port, Process, ProcessContext, midi::Note, polyphony::Keyboard};
 pub use wavegraph_core::{Tuning, polyphony::VoiceMode};
 use wavegraph_fx::{Chorus, ChorusControls};
 use wavegraph_sample::FromSample;
@@ -39,8 +41,10 @@ pub struct Patch {
     pub noise: u8,
     /// Base low-pass cutoff.
     pub cutoff: u8,
-    /// Positive pitch sweep depth. Full depth spans two octaves.
+    /// Positive pitch sweep depth. At full depth the attack starts two octaves low.
     pub sweep: u8,
+    /// Envelope level at the played pitch (64–127). Higher levels overshoot the key.
+    pub pitch_reference: u8,
     /// Common pulse and chopped-saw PWM depth.
     pub pwm: u8,
     /// Ensemble speed. Zero bypasses both wet paths.
@@ -62,11 +66,22 @@ impl Patch {
         noise: 1,
         cutoff: 77,
         sweep: 127,
+        pitch_reference: 127,
         pwm: 127,
         chorus: 92,
     };
-    /// Playable rave lead, factory envelope comparison and a two-peak poly pad.
-    pub const PRESETS: [(&'static str, Self); 3] = [
+    /// Rave lead with a low wind-up, a fast upward sweep and a long key-up glide.
+    pub const DOMINATOR: Self = Self {
+        times: [20, 29, 49, 40],
+        levels: [24, 127, 87],
+        pitch_reference: 87,
+        pulse_wave: 0,
+        cutoff: 72,
+        ..Self::HOOVER
+    };
+    /// Dominator, Fast Hoover, the factory envelope comparison and a two-peak poly pad.
+    pub const PRESETS: [(&'static str, Self); 4] = [
+        ("DOMINATOR", Self::DOMINATOR),
         ("FAST HOOVER", Self::HOOVER),
         (
             "WHAT THE",
@@ -81,6 +96,7 @@ impl Patch {
                 times: [25, 51, 64, 55],
                 levels: [117, 32, 103],
                 sweep: 18,
+                pitch_reference: 127,
                 pwm: 91,
                 chorus: 54,
                 cutoff: 90,
@@ -96,6 +112,14 @@ impl Patch {
             },
         ),
     ];
+
+    fn chorus_controls(self) -> ChorusControls {
+        ChorusControls {
+            rate: self.chorus,
+            enabled: self.chorus != 0,
+            ..ChorusControls::MKS50
+        }
+    }
 }
 
 /// Sample-offset controls for inlet zero.
@@ -116,194 +140,43 @@ pub enum Message {
     VoiceMode(VoiceMode),
 }
 
-fn triangle(phase: u32) -> f32 {
-    let hi = (phase >> 16) as u16;
-    let folded = if hi < 32768 { hi } else { !hi };
-    f32::from(folded) / 16384.0 - 1.0
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Voice {
-    note: Note,
-    phase: u32,
-    step: u32,
-    env: Envelope,
-    filter: [f32; 4],
-    low: f32,
-    gain: f32,
-}
-impl Voice {
-    const EMPTY: Self = Self {
-        note: Note {
-            number: 0,
-            velocity: 0,
-        },
-        phase: 0,
-        step: 0,
-        env: Envelope::IDLE,
-        filter: [0.0; 4],
-        low: 0.0,
-        gain: 0.0,
-    };
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss
-    )]
-    #[allow(clippy::too_many_arguments)]
-    fn sample(
-        &mut self,
-        t: &Timing,
-        width: f32,
-        sweep: f32,
-        cutoff: f32,
-        period: f32,
-        noise: f32,
-        patch: &Patch,
-    ) -> f32 {
-        let level = self.env.sample(t);
-        // Accumulate the two-octave sub, then derive both DCO waves from it.
-        let step = self.step as f32 * (1.0 - sweep * (1.0 - level)) * 0.25;
-        self.phase = self.phase.wrapping_add(step as u32);
-        let phase = self.phase.wrapping_shl(2);
-        let ramp = f32::from((phase >> 16) as u16) / 65536.0;
-        let duty = match patch.pulse_wave {
-            1 => 0.5,
-            2 => 0.25,
-            3 => width * 0.5,
-            _ => 0.0,
-        };
-        let pulse = if ramp >= 1.0 - duty {
-            1.0 - duty
-        } else {
-            -duty
-        };
-        // Saw 3 gates the rising ramp late in each half-cycle. At zero PW
-        // its gate stays open and it becomes the ordinary saw (Roland p.21).
-        let gate = |shift: u32, duty: f32| {
-            f32::from((phase.wrapping_shl(shift) >> 16) as u16) >= 65536.0 * (1.0 - duty)
-        };
-        let saw = match patch.saw_wave {
-            1 => ramp - 0.5,
-            2 | 3 => {
-                let w = if patch.saw_wave == 2 { 0.5 } else { width };
-                (if gate(1, w) { ramp } else { 0.0 }) - w * (3.0 - w) * 0.25
-            }
-            4 => (if gate(3, 0.5) { ramp } else { 0.0 }) - 0.265625,
-            5 => {
-                (if gate(1, 0.5) && gate(3, 0.5) {
-                    ramp
-                } else {
-                    0.0
-                }) - 0.1640625
-            }
-            _ => 0.0,
-        };
-        let sub_phase = if patch.sub_wave < 4 {
-            self.phase.wrapping_shl(1)
-        } else {
-            self.phase
-        };
-        let (on, mean) = match patch.sub_wave {
-            1 | 5 => (sub_phase >> 30 == 3, 0.25),
-            2 => (sub_phase & 0xa000_0000 == 0xa000_0000, 0.25),
-            3 => (sub_phase & 0x9000_0000 == 0x9000_0000, 0.25),
-            _ => (sub_phase >> 31 != 0, 0.5),
-        };
-        let sub = (if on { 1.0 } else { 0.0 }) - mean;
-        let mut x =
-            pulse * 0.30 + saw * 0.43 + sub * (f32::from(patch.sub_level.min(3)) / 6.0) + noise;
-        let hp = patch.hpf.min(3);
-        let pole = if hp == 3 { 3500.0 } else { 850.0 };
-        self.low += (pole * period).min(1.0) * (x - self.low);
-        x += match hp {
-            0 => 0.50 * self.low,
-            1 => 0.0,
-            _ => -self.low,
-        };
-        let feedback = f32::from(patch.resonance.min(127)) * (2.0 / 127.0);
-        x -= feedback * self.filter[3];
-        let env_amount = f32::from(patch.filter_env.min(127)) / 127.0;
-        let g = (cutoff * (0.30 + 1.18 * env_amount * level) * period)
-            .clamp(0.001, 0.94 - 0.15 * feedback);
-        for state in &mut self.filter {
-            *state += g * (x - *state);
-            x = *state;
-        }
-        x * level * self.gain
-    }
-}
-
 /// Four DCO voices and a shared stereo chorus.
 #[derive(Debug)]
 pub struct Hoover<'a> {
     tuning: &'a Tuning,
     keyboard: Keyboard,
     voices: [Voice; POLYPHONY],
-    patch: Patch,
     timing: Timing,
-    pwm_phase: u32,
-    pwm_step: u32,
+    modulation: Modulation,
+    tone: Tone,
     chorus: Chorus,
-    noise: u32,
-    cutoff: f32,
-    sweep: f32,
-    pwm: f32,
 }
 impl<'a> Hoover<'a> {
-    /// Start silent with the playable Hoover patch selected.
+    /// Start silent with the Dominator patch selected.
     #[must_use]
     pub fn new(tuning: &'a Tuning) -> Self {
-        let patch = Patch::HOOVER;
+        let patch = Patch::DOMINATOR;
         let period = tuning.sample_period();
-        let mut synth = Self {
+        let mut chorus = Chorus::mks50(period);
+        chorus.set_controls(patch.chorus_controls());
+        Self {
             tuning,
             keyboard: Keyboard::EMPTY,
             voices: [Voice::EMPTY; POLYPHONY],
-            patch,
             timing: Timing::new(patch.times, patch.levels, period),
-            pwm_phase: 0,
-            pwm_step: 0,
-            chorus: Chorus::new(period),
-            noise: 1,
-            cutoff: 0.0,
-            sweep: 0.0,
-            pwm: 0.0,
-        };
-        synth.set_patch(patch);
-        synth
-    }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    fn rate(hz: f32, period: f32) -> u32 {
-        (hz * period * 4294967296.0) as u32
+            modulation: Modulation::RESET,
+            tone: Tone::new(patch, period),
+            chorus,
+        }
     }
     fn set_patch(&mut self, p: Patch) {
-        self.patch = p;
         let period = self.tuning.sample_period();
         self.timing = Timing::new(p.times, p.levels, period);
-        let cutoff = f32::from(p.cutoff.min(127)) / 127.0;
-        self.cutoff = 700.0 + 90_000.0 * cutoff * cutoff;
-        self.sweep = 0.75 * f32::from(p.sweep.min(127)) / 127.0;
-        self.pwm_step = Self::rate(
-            0.02 + 0.000355 * f32::from(p.pwm_rate.min(127)) * f32::from(p.pwm_rate.min(127)),
-            period,
-        );
-        self.pwm = 0.94 * f32::from(p.pwm.min(127)) / 127.0;
-        self.chorus.set_controls(ChorusControls {
-            rate: p.chorus,
-            enabled: p.chorus != 0,
-            ..ChorusControls::INITIAL
-        });
+        self.tone = Tone::new(p, period);
+        self.chorus.set_controls(p.chorus_controls());
     }
     fn strike(&mut self, i: usize, note: Note, step: u32) {
-        let v = &mut self.voices[i];
-        *v = Voice {
-            note,
-            step,
-            gain: f32::from(note.velocity) / (127.0 * 4.0),
-            ..Voice::EMPTY
-        };
-        v.env.strike(&self.timing);
+        self.voices[i] = Voice::strike(note, step, &self.timing, self.keyboard.mode);
     }
     fn revoice(&mut self) {
         for i in 0..POLYPHONY {
@@ -369,35 +242,88 @@ impl<'a> Hoover<'a> {
 
     /// Render one stereo frame, including chorus tails after all keys are up.
     pub fn stereo_frame(&mut self) -> [f32; 2] {
-        let motion = if self.patch.pwm_rate == 0 {
-            1.0
-        } else {
-            0.5 + 0.5 * triangle(self.pwm_phase)
-        };
-        let width = 1.0 - self.pwm * motion;
-        self.pwm_phase = self.pwm_phase.wrapping_add(self.pwm_step);
-        self.noise = self.noise.wrapping_mul(1664525).wrapping_add(1013904223);
-        let noise = f32::from((self.noise >> 16) as u16) * (0.018 / 65536.0) - 0.009;
-        let mut sum = 0.0;
+        let frame = self.modulation.frame(&self.tone);
+        let mut dry = 0.0;
         for v in &mut self.voices {
-            if !v.env.idle() {
-                sum += v.sample(
-                    &self.timing,
-                    width,
-                    self.sweep,
-                    self.cutoff,
-                    self.tuning.sample_period(),
-                    noise * f32::from(self.patch.noise.min(3)),
-                    &self.patch,
-                );
-            }
+            v.mix(
+                core::slice::from_ref(&frame),
+                core::slice::from_mut(&mut dry),
+                &self.tone,
+                &self.timing,
+            );
         }
-        self.chorus.stereo_frame(sum)
+        self.chorus.stereo_frame(dry)
     }
-    fn render<S: FromSample<f32>>(&mut self, out: &mut [S]) {
-        for frame in out {
-            let [l, r] = self.stereo_frame();
-            *frame = S::from_sample_((l + r) * 0.5);
+
+    /// Render the mono-compatible sum and the stereo difference of the ensemble.
+    /// Add the side to the mid for the left return and subtract it for the right.
+    ///
+    /// # Panics
+    /// The two outputs must have equal lengths. Events must be ordered by frame
+    /// and fall within the block (including its end).
+    pub fn process_mid_side<S: FromSample<f32>>(
+        &mut self,
+        mid: &mut [S],
+        side: &mut [S],
+        events: &[Event<Message>],
+    ) {
+        assert_eq!(mid.len(), side.len());
+        self.render_events(mid, Some(side), events);
+    }
+
+    fn render_events<S: FromSample<f32>>(
+        &mut self,
+        mid: &mut [S],
+        mut side: Option<&mut [S]>,
+        events: &[Event<Message>],
+    ) {
+        let mut start = 0;
+        for event in events {
+            let range = start..event.frame;
+            self.render(
+                &mut mid[range.clone()],
+                side.as_deref_mut().map(|s| &mut s[range]),
+            );
+            self.apply(event.message);
+            start = event.frame;
+        }
+        self.render(&mut mid[start..], side.map(|s| &mut s[start..]));
+    }
+
+    fn render<S: FromSample<f32>>(&mut self, out: &mut [S], side: Option<&mut [S]>) {
+        if out.is_empty() {
+            return;
+        }
+        if self.voices.iter().all(|v| v.env.idle()) {
+            self.modulation.advance(out.len(), &self.tone);
+            if let Some(side) = side {
+                self.chorus.mid_side_silence(out, side);
+            } else {
+                self.chorus.mono_silence(out);
+            }
+            return;
+        }
+        // Render each voice across a short span with its DCO and filter state hot.
+        // All four voices see exactly the same free-running PWM and noise.
+        const SPAN: usize = 32;
+        let mut frames = [Frame::ZERO; SPAN];
+        let mut dry = [0.0; SPAN];
+        let mut side_chunks = side.map(|s| s.chunks_mut(SPAN));
+        for dst in out.chunks_mut(SPAN) {
+            let frames = &mut frames[..dst.len()];
+            let dry = &mut dry[..dst.len()];
+            for frame in &mut *frames {
+                *frame = self.modulation.frame(&self.tone);
+            }
+            dry.fill(0.0);
+            for v in &mut self.voices {
+                v.mix(frames, dry, &self.tone, &self.timing);
+            }
+            if let Some(side) = side_chunks.as_mut().and_then(Iterator::next) {
+                self.chorus.mid_side_block(dry, dst, side);
+            } else {
+                self.chorus.mono_block(dry, dst);
+            }
         }
     }
 }
@@ -409,14 +335,7 @@ impl<S: FromSample<f32>> Process<Message, S> for Hoover<'_> {
         &[Port::Signal]
     }
     fn process(&mut self, cx: &mut ProcessContext<'_, '_, Message, S>) {
-        let output = &mut cx.outputs[0];
-        let mut start = 0;
-        for event in cx.events {
-            self.render(&mut output[start..event.frame]);
-            self.apply(event.message);
-            start = event.frame;
-        }
-        self.render(&mut output[start..]);
+        self.render_events(cx.outputs[0], None, cx.events);
     }
 }
 
@@ -477,6 +396,83 @@ mod tests {
     }
 
     #[test]
+    fn mid_side_returns_follow_the_same_stereo_patch_and_events() {
+        let tuning = Tuning::new(24_000_000, 544).expect("FM-1 sample clock");
+        let mut block = Hoover::new(&tuning);
+        let mut scalar = Hoover::new(&tuning);
+        let at = |frame, message| Event {
+            frame,
+            port: 0,
+            message,
+        };
+        let events = [
+            at(
+                0,
+                Message::NoteOn {
+                    note: 62,
+                    velocity: 120,
+                },
+            ),
+            at(301, Message::NoteOff(62)),
+            at(
+                523,
+                Message::Patch(Patch {
+                    chorus: 0,
+                    ..Patch::DOMINATOR
+                }),
+            ),
+            at(587, Message::Patch(Patch::DOMINATOR)),
+        ];
+        let mut mid = [0.0; 800];
+        let mut side = [0.0; 800];
+        block.process_mid_side(&mut mid, &mut side, &events);
+        for i in 0..mid.len() {
+            for event in events.iter().filter(|e| e.frame == i) {
+                scalar.apply(event.message);
+            }
+            let [l, r] = scalar.stereo_frame();
+            assert_eq!(mid[i], (l + r) * 0.5);
+            assert_eq!(side[i], (l - r) * 0.5);
+        }
+        assert!(side[300..523].iter().any(|&x| x != 0.0));
+        assert!(side[523..587].iter().all(|&x| x == 0.0));
+    }
+
+    #[test]
+    fn silent_spans_preserve_free_running_pwm_noise_and_chorus_on_restrike() {
+        let tuning = Tuning::new(24_000_000, 544).expect("FM-1 sample clock");
+        let mut block = Hoover::new(&tuning);
+        let mut scalar = Hoover::new(&tuning);
+        let note = Message::NoteOn {
+            note: 58,
+            velocity: 117,
+        };
+        let mut compare = |event: Option<Message>, n: usize| {
+            if let Some(message) = event {
+                block.apply(message);
+                scalar.apply(message);
+            }
+            let mut pcm = [0.0_f32; 257];
+            block.render(&mut pcm[..n], None);
+            for &sample in &pcm[..n] {
+                let [l, r] = scalar.stereo_frame();
+                assert_eq!(sample, (l + r) * 0.5);
+            }
+        };
+        let patch = Patch {
+            times: [3, 7, 11, 4],
+            ..Patch::HOOVER
+        };
+        compare(Some(Message::Patch(patch)), 73);
+        compare(Some(note), 255);
+        compare(Some(Message::NoteOff(58)), 7);
+        for n in [31, 32, 33, 127, 128, 129, 256, 257, 0] {
+            compare(None, n);
+        }
+        compare(Some(note), 257);
+    }
+
+    #[test]
     fn four_note_chord_has_stereo_motion_and_releases_to_silence() {
         let tuning = Tuning::new(44_118, 1).expect("valid clock");
         let mut synth = Hoover::new(&tuning);
@@ -497,6 +493,10 @@ mod tests {
             synth.apply(Message::NoteOff(note));
         }
         for _ in 0..4096 {
+            synth.stereo_frame();
+        }
+        assert!((0..128).any(|_| synth.stereo_frame() != [0.0; 2]));
+        for _ in 0..8192 {
             synth.stereo_frame();
         }
         assert_eq!(synth.stereo_frame(), [0.0; 2]);

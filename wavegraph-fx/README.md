@@ -13,9 +13,11 @@ two-input send-only node.
   `Message::TimeMs` sets echo spacing and `Message::Feedback` sets the fraction
   fed back (0–95%). Zero feedback gives a single echo. Changes to the time
   crossfade the live taps over 64 frames.
-- `Chorus` shares the Fast Hoover stereo ensemble. Two opposing triangle-modulated
-  taps read one filtered delay line. Set rate, depth, wet-path tone and mix with
-  `Message::Chorus`. Use `stereo_frame` for stereo or `Process` for a mono strip.
+- `Chorus::new(period)` provides the channel insert's two moving delay taps.
+  `Chorus::mks50(period)` voices the Hoover's built-in ensemble with the Alpha
+  Juno rate curve and filtered bucket-brigade returns. Use `stereo_frame` for
+  left/right, `mid_side_block` for a stereo mix with a mono-compatible center,
+  or `Process` for a mono insert. [Hoover chorus circuit and references](../instruments/wavegraph-hoover/README.md#modeling-the-chorus)
 - `Flanger::new(rate_hz)` mixes the dry signal with a fractionally delayed
   copy. A 0.10–3.94 Hz triangle LFO sweeps a 64-sample PCM16 line. At full
   depth the delay runs from one sample to 2 ms, up to 63 samples. Send

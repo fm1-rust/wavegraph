@@ -50,7 +50,7 @@ impl Channel {
         ["CH 1", "CH 2", "CH 3", "CH 4"][self.index()]
     }
 
-    /// Each channel produces its source signal followed by an isolated kick.
+    /// Each channel produces a mono source followed by its instrument-specific auxiliary signal.
     pub(super) const fn source_bus(self) -> usize {
         self.index() << 1
     }

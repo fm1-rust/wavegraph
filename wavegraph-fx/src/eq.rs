@@ -31,7 +31,7 @@ pub(super) fn band_gain(db: i8) -> f32 {
     GAINS[usize::from(db.clamp(-12, 12).saturating_add(12).cast_unsigned())]
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Bands {
     poles: [f32; 2],
     lowpass: [f32; 2],
@@ -59,7 +59,7 @@ impl Bands {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct GainRamp<const N: usize> {
     pub(super) current: [f32; N],
     pub(super) target: [f32; N],
